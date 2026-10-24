@@ -107,7 +107,61 @@ const RULES: Rule[] = [
     resources: ["Blood pressure check", "Urgent referral to maternity unit"],
     test: (f) => (f.pregnant && f.severe_headache ? "pregnant + severe headache/blurred vision" : null),
   },
+  {
+    id: "suicide_risk",
+    label: "Thoughts of suicide or self-harm",
+    urgency: "red",
+    source: "words",
+    resources: ["Health worker stays with the patient now", "Same-day mental health referral"],
+    test: (f) => (f.self_harm_thoughts ? "said they have had thoughts of ending their life" : null),
+  },
+  {
+    id: "stroke_balance",
+    label: "Possible stroke: sudden loss of balance",
+    urgency: "red",
+    source: "words",
+    resources: ["Emergency transport to hospital with CT", "Blood glucose check"],
+    test: (f) => (f.balance_problem && f.sudden_onset ? "sudden unsteadiness" : null),
+  },
+  {
+    id: "spinal_cord",
+    label: "Back pain with leg weakness or loss of bladder control",
+    urgency: "red",
+    source: "words",
+    resources: ["Emergency transport", "Urgent referral"],
+    test: (f) =>
+      f.back_pain && (f.leg_weakness || f.bladder_control)
+        ? ["back pain", f.leg_weakness && "leg weakness", f.bladder_control && "bladder/bowel control lost"].filter(Boolean).join(" + ")
+        : null,
+  },
+  {
+    id: "child_malnutrition_oedema",
+    label: "Swelling of both feet in a child (severe malnutrition sign)",
+    urgency: "red",
+    source: "words",
+    resources: ["Urgent referral", "Therapeutic food (RUTF)"],
+    test: (f) => (isChild(f) && f.swollen_feet ? "both feet swollen" : null),
+  },
   // Yellow: needs treatment or a doctor today
+  {
+    id: "kidney_infection",
+    label: "Back pain with fever (possible kidney infection)",
+    urgency: "yellow",
+    source: "words",
+    resources: ["Urine dipstick", "Antibiotic (doctor to choose)"],
+    test: (f) => (f.back_pain && f.fever ? "back pain + fever" : null),
+  },
+  {
+    id: "low_mood_screen",
+    label: "Positive depression or anxiety screen (PHQ-2 / GAD-2)",
+    urgency: "yellow",
+    source: "words",
+    resources: ["Problem-solving sessions (Friendship Bench model)", "Peer support group (opt-in)"],
+    test: (f) =>
+      f.low_mood || f.little_interest || (f.anxious && f.cant_stop_worrying)
+        ? [f.low_mood && "low mood", f.little_interest && "little interest", f.anxious && f.cant_stop_worrying && "constant worry"].filter(Boolean).join(", ")
+        : null,
+  },
   {
     id: "pneumonia",
     label: "Possible pneumonia: cough with fast breathing",

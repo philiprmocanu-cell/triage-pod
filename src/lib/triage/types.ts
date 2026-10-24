@@ -1,4 +1,4 @@
-import type { FindingKey, Lang } from "./tree";
+import type { FindingKey, IntakeField, Lang, Step } from "./tree";
 
 export type Urgency = "green" | "yellow" | "red";
 
@@ -8,7 +8,7 @@ export type Turn = {
   role: "patient" | "pod";
   text: string; // what was said, in the patient's language
   english?: string; // translation for the doctor
-  asks?: FindingKey; // for pod questions: which finding the question checks
+  asks?: Step; // for pod turns: which finding, test or intake field this turn covers
 };
 
 export type CameraSignals = {
@@ -58,6 +58,12 @@ export type PathwayState = {
   subtypes: { name: string; probability: number; urgency: Urgency }[];
 };
 
+export type Frame = { secondsAgo: number; b64: string }; // camera pictures, oldest first
+
+export type TestResults = Partial<Record<string, Partial<Record<FindingKey, number>>>>;
+
+export type Intake = Partial<Record<IntakeField, string>>;
+
 export type TriageResult = {
   language: Lang;
   locale: string;
@@ -75,6 +81,9 @@ export type TriageResult = {
   rule_hits: RuleHit[];
   speech_confused: number;
   done: boolean;
-  next: { asks: FindingKey | null; text: string; english: string } | null;
+  answered: Step | null; // which step the patient's latest words answered
+  next: { asks: Step | null; text: string; english: string; test?: { id: string; label: string; seconds: number } } | null;
+  consent: number | null; // probability the patient agreed to be saved (null = not asked yet)
+  peer_group: { wants: boolean; category: string | null };
   jev_ms: number;
 };

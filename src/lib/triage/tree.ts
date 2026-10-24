@@ -65,6 +65,34 @@ export const FINDINGS = {
   pale: { label: "Very pale", ask: { en: "Have you been very pale or tired lately?", es: "¿Ha estado muy pálido o cansado últimamente?" }, seen: "Does the person look unusually pale (very pale lips or face)?" },
   blue_lips: { label: "Blue lips", ask: { en: "Are the lips or fingertips turning blue?", es: "¿Se le ponen morados los labios o las uñas?" }, seen: "Are the person's lips bluish or grey?" },
   very_thin: { label: "Very thin / wasting", ask: { en: "Has there been a lot of weight loss?", es: "¿Ha bajado mucho de peso?" }, seen: "Does the person look severely underweight or wasted?" },
+  balance_problem: { label: "Unsteady / loss of balance", ask: { en: "Do you feel dizzy or unsteady when you walk?", es: "¿Se siente mareado o inestable al caminar?" } },
+  leg_weakness: { label: "Leg weakness / hard to stand", ask: { en: "Are your legs weak, or is it hard to stand up?", es: "¿Siente las piernas débiles o le cuesta levantarse?" } },
+  back_pain: { label: "Back pain", ask: { en: "Do you have pain in your back?", es: "¿Le duele la espalda?" } },
+  pain_on_bending: { label: "Pain when bending", ask: { en: "Did that hurt when you bent over?", es: "¿Le dolió cuando se agachó?" } },
+  bladder_control: { label: "Lost bladder or bowel control", ask: { en: "Have you lost control of your bladder or bowels?", es: "¿Ha perdido el control para orinar o hacer popó?" } },
+  swollen_feet: { label: "Swelling of both feet", ask: { en: "Are both feet swollen?", es: "¿Tiene los dos pies hinchados?" } },
+  // Mental health: PHQ-2 (low mood, little interest), GAD-2 (anxious, can't stop worrying),
+  // and the WHO mhGAP question about thoughts of ending one's life.
+  low_mood: {
+    label: "Feeling down or hopeless",
+    ask: { en: "In the last two weeks, have you felt down, sad or hopeless on most days?", es: "En las últimas dos semanas, ¿se ha sentido triste, decaído o sin esperanza casi todos los días?" },
+    seen: "Is the person visibly crying or tearful?",
+  },
+  little_interest: { label: "Little interest or pleasure", ask: { en: "In the last two weeks, have you had little interest or pleasure in doing things?", es: "En las últimas dos semanas, ¿ha tenido poco interés o gusto en hacer las cosas?" } },
+  anxious: { label: "Nervous or on edge", ask: { en: "Have you felt nervous, anxious or on edge on most days?", es: "¿Se ha sentido nervioso, ansioso o con los nervios de punta casi todos los días?" } },
+  cant_stop_worrying: { label: "Can't stop worrying", ask: { en: "Have you been unable to stop or control worrying?", es: "¿No ha podido dejar de preocuparse?" } },
+  self_harm_thoughts: {
+    label: "Thoughts of ending their life",
+    ask: { en: "Sometimes when people feel this way, they think about ending their life. Have you had thoughts like that?", es: "A veces, cuando uno se siente así, piensa en quitarse la vida. ¿Ha tenido pensamientos así?" },
+  },
+  trauma_or_loss: { label: "Recent loss, violence or hardship", ask: { en: "Has something very hard happened recently, like a loss or violence?", es: "¿Le ha pasado algo muy difícil últimamente, como una pérdida o violencia?" } },
+  wants_peer_group: {
+    label: "Wants a peer support group",
+    ask: {
+      en: "There is a group of people near you who meet with a trained counselor to support each other. Would you like the health worker to connect you with them?",
+      es: "Cerca de usted hay un grupo de personas que se reúnen con un consejero para apoyarse entre sí. ¿Le gustaría que el promotor de salud le conecte con ellos?",
+    },
+  },
 } as const satisfies Record<string, { label: string; ask: Text; seen?: string }>;
 
 export type FindingKey = keyof typeof FINDINGS;
@@ -77,7 +105,7 @@ export type Pathway = {
   label: string;
   description: string; // for Jev's chief-complaint choice
   triggers: FindingKey[]; // any of these opens the pathway
-  questions: FindingKey[]; // asked in this order: danger signs first
+  questions: Step[]; // questions and physical tests, in this order: danger signs first
   subtypes: Subtype[];
 };
 
@@ -86,8 +114,8 @@ export const PATHWAYS: Pathway[] = [
     id: "stroke",
     label: "Stroke / brain",
     description: "Face drooping, one-sided weakness or numbness, slurred speech, sudden confusion",
-    triggers: ["face_or_arm_weakness", "confused_speech"],
-    questions: ["face_or_arm_weakness", "confused_speech", "sudden_onset", "severe_headache"],
+    triggers: ["face_or_arm_weakness", "confused_speech", "balance_problem"],
+    questions: ["test:smile", "face_or_arm_weakness", "test:arm_drift", "confused_speech", "sudden_onset", "test:walk_line", "severe_headache"],
     subtypes: [
       { name: "Stroke", description: "Sudden face droop, arm weakness or speech trouble", urgency: "red", resources: ["Emergency transport to hospital with CT", "Blood glucose check"] },
       { name: "Low blood sugar", description: "Confusion or weakness in a diabetic or someone who has not eaten", urgency: "red", resources: ["Blood glucose check", "Oral glucose"] },
@@ -113,7 +141,7 @@ export const PATHWAYS: Pathway[] = [
     label: "Breathing / cough",
     description: "Cough, fast or difficult breathing, wheezing",
     triggers: ["cough", "short_of_breath", "fast_breathing", "wheeze"],
-    questions: ["chest_indrawing", "unable_to_drink", "fast_breathing", "short_of_breath", "fever", "wheeze", "long_cough"],
+    questions: ["test:chest_show", "chest_indrawing", "unable_to_drink", "fast_breathing", "short_of_breath", "fever", "wheeze", "long_cough"],
     subtypes: [
       { name: "Severe pneumonia", description: "Chest indrawing, cannot drink, very sleepy, or blue lips with cough or fast breathing", urgency: "red", resources: ["Pulse oximeter check", "Oxygen", "Pre-referral antibiotic dose", "Urgent referral"] },
       { name: "Pneumonia", description: "Cough with fast breathing, often fever, no danger signs", urgency: "yellow", resources: ["Amoxicillin", "Pulse oximeter check"] },
@@ -127,7 +155,7 @@ export const PATHWAYS: Pathway[] = [
     label: "Fever",
     description: "Fever, feeling hot, chills",
     triggers: ["fever"],
-    questions: ["very_sleepy", "seizure", "unable_to_drink", "stiff_neck", "rash", "yellow_eyes", "vomits_everything"],
+    questions: ["very_sleepy", "seizure", "unable_to_drink", "stiff_neck", "rash", "yellow_eyes", "test:palms", "vomits_everything"],
     subtypes: [
       { name: "Severe malaria", description: "Fever with convulsions, very sleepy, cannot drink, yellow eyes or very pale", urgency: "red", resources: ["Malaria rapid test", "Rectal artesunate (pre-referral)", "Urgent referral"] },
       { name: "Meningitis", description: "Fever with stiff neck, severe headache, rash or confusion", urgency: "red", resources: ["Pre-referral antibiotic dose", "Urgent referral"] },
@@ -141,7 +169,7 @@ export const PATHWAYS: Pathway[] = [
     label: "Diarrhea / vomiting",
     description: "Diarrhea, vomiting, stomach upset",
     triggers: ["diarrhea", "vomits_everything"],
-    questions: ["unable_to_drink", "very_sleepy", "sunken_eyes", "blood_in_stool", "vomits_everything"],
+    questions: ["unable_to_drink", "very_sleepy", "sunken_eyes", "blood_in_stool", "vomits_everything", "test:feet"],
     subtypes: [
       { name: "Severe dehydration", description: "Very sleepy, cannot drink, sunken eyes", urgency: "red", resources: ["IV fluids (referral)", "Oral rehydration salts", "Urgent referral"] },
       { name: "Some dehydration", description: "Sunken eyes or very thirsty, still drinking", urgency: "yellow", resources: ["Oral rehydration salts", "Zinc"] },
@@ -154,7 +182,7 @@ export const PATHWAYS: Pathway[] = [
     label: "Pregnancy",
     description: "Pregnant woman with a problem",
     triggers: ["pregnant"],
-    questions: ["severe_bleeding", "severe_headache", "seizure", "fever"],
+    questions: ["severe_bleeding", "severe_headache", "seizure", "test:feet", "fever"],
     subtypes: [
       { name: "Bleeding in pregnancy", description: "Heavy vaginal bleeding", urgency: "red", resources: ["Emergency transport", "Blood (drone)", "Urgent referral to maternity unit"] },
       { name: "Pre-eclampsia", description: "Severe headache, blurred vision, swelling or fits in pregnancy", urgency: "red", resources: ["Blood pressure check", "Urgent referral to maternity unit"] },
@@ -175,17 +203,143 @@ export const PATHWAYS: Pathway[] = [
       { name: "Minor injury", description: "Small cut or bruise", urgency: "green", resources: ["Wound dressing kit"] },
     ],
   },
+  {
+    id: "pain",
+    label: "Back / joint pain",
+    description: "Back pain, joint pain, pain when moving or bending, weak legs",
+    triggers: ["back_pain", "pain_on_bending", "leg_weakness"],
+    questions: ["bladder_control", "leg_weakness", "test:squat", "test:bend", "pain_on_bending", "fever", "injury"],
+    subtypes: [
+      { name: "Spinal cord compression", description: "Back pain with leg weakness or loss of bladder/bowel control", urgency: "red", resources: ["Emergency transport", "Urgent referral"] },
+      { name: "Kidney infection", description: "Back or side pain with fever", urgency: "yellow", resources: ["Urine dipstick", "Antibiotic (doctor to choose)", "Doctor review"] },
+      { name: "Sciatica / nerve pain", description: "Pain shooting down one leg, worse on bending", urgency: "yellow", resources: ["Paracetamol", "Doctor review"] },
+      { name: "Possible fracture", description: "Pain after a fall, cannot bear weight", urgency: "yellow", resources: ["Splint", "Doctor review"] },
+      { name: "Muscle strain", description: "Back pain after lifting or work, moves normally", urgency: "green", resources: ["Paracetamol", "Home care advice"] },
+    ],
+  },
+  {
+    id: "mental",
+    label: "Mental health",
+    description: "Sadness, worry, stress, trouble sleeping, grief, feeling alone, thoughts of self-harm",
+    triggers: ["low_mood", "little_interest", "anxious", "cant_stop_worrying", "self_harm_thoughts", "trauma_or_loss"],
+    questions: ["low_mood", "little_interest", "self_harm_thoughts", "anxious", "cant_stop_worrying", "trauma_or_loss", "wants_peer_group"],
+    subtypes: [
+      { name: "Suicide risk", description: "Thoughts of ending their life or self-harm", urgency: "red", resources: ["Health worker stays with the patient now", "Same-day mental health referral"] },
+      { name: "Depression", description: "Low mood or loss of interest on most days for two weeks or more", urgency: "yellow", resources: ["Problem-solving sessions (Friendship Bench model)", "Peer support group (opt-in)", "Doctor review"] },
+      { name: "Anxiety", description: "Nervous, on edge, cannot stop worrying on most days", urgency: "yellow", resources: ["Problem-solving sessions (Friendship Bench model)", "Peer support group (opt-in)"] },
+      { name: "Stress or grief reaction", description: "Distress after a recent loss, violence or hardship", urgency: "green", resources: ["Peer support group (opt-in)", "Follow-up visit"] },
+    ],
+  },
 ];
 
+// Physical tests, adapted from standard bedside exams so a camera can watch them:
+// smile + arm drift (Cincinnati Prehospital Stroke Scale), heel-to-toe walk (balance, the "B" in
+// BE-FAST), crouch and forward bend (back/leg pain), and the WHO IMCI "look" signs (chest
+// indrawing, palm pallor, pitting swelling of both feet). Jev watches a sequence of pictures.
+export type Test = {
+  id: string;
+  label: string;
+  say: Text;
+  seconds: number;
+  childOnly?: boolean;
+  checks: { finding: FindingKey; question: string }[]; // Jev yes/no over the picture sequence
+};
+
+export const TESTS: Test[] = [
+  {
+    id: "smile",
+    label: "Smile test",
+    say: { en: "Please give me a big smile, showing your teeth.", es: "Por favor, sonría grande, enseñando los dientes." },
+    seconds: 3,
+    checks: [{ finding: "face_or_arm_weakness", question: "When the person smiles, does one side of the mouth lift clearly less than the other side?" }],
+  },
+  {
+    id: "arm_drift",
+    label: "Arm drift test",
+    say: { en: "Close your eyes and hold both arms straight out in front of you, palms up, until I say stop.", es: "Cierre los ojos y estire los dos brazos al frente, con las palmas hacia arriba, hasta que le diga." },
+    seconds: 8,
+    checks: [{ finding: "face_or_arm_weakness", question: "Does one arm drift downward or turn over compared with the other arm?" }],
+  },
+  {
+    id: "walk_line",
+    label: "Heel-to-toe walk",
+    say: { en: "Please stand up and walk toward me in a straight line, heel to toe.", es: "Por favor, levántese y camine hacia mí en línea recta, poniendo un pie delante del otro." },
+    seconds: 8,
+    checks: [
+      { finding: "balance_problem", question: "Does the person lose balance, stagger, step off the line, or reach out for support?" },
+      { finding: "leg_weakness", question: "Does the person limp or drag or favour one leg?" },
+    ],
+  },
+  {
+    id: "squat",
+    label: "Crouch and stand",
+    say: { en: "Please crouch down slowly, then stand back up.", es: "Por favor, agáchese despacio y luego levántese." },
+    seconds: 6,
+    checks: [
+      { finding: "leg_weakness", question: "Does the person struggle to get up, need to hold on to something, or fail to crouch?" },
+      { finding: "pain_on_bending", question: "Does the person's face show pain (grimace, wince) while crouching or standing up?" },
+    ],
+  },
+  {
+    id: "bend",
+    label: "Forward bend",
+    say: { en: "Please bend forward slowly, as if to touch your toes, then stand up.", es: "Por favor, dóblese hacia adelante despacio, como para tocarse los pies, y luego enderécese." },
+    seconds: 6,
+    checks: [{ finding: "pain_on_bending", question: "Does the person stop early, grimace in pain, or hold their back while bending?" }],
+  },
+  {
+    id: "chest_show",
+    label: "Chest check (child)",
+    say: { en: "Please lift the child's shirt so I can see the chest and belly while they breathe calmly.", es: "Por favor, levántele la camisa al niño para ver el pecho y la panza mientras respira tranquilo." },
+    seconds: 8,
+    childOnly: true,
+    checks: [
+      { finding: "chest_indrawing", question: "Does the skin below the child's ribs pull inward when the child breathes in (chest indrawing)?" },
+      { finding: "fast_breathing", question: "Is the child's chest or belly moving up and down very fast?" },
+    ],
+  },
+  {
+    id: "palms",
+    label: "Palm check",
+    say: { en: "Please hold both hands open toward the camera, palms facing me.", es: "Por favor, muestre las dos manos abiertas hacia la cámara, con las palmas hacia mí." },
+    seconds: 3,
+    checks: [{ finding: "pale", question: "Are the palms of the hands very pale, almost white, compared with normal skin?" }],
+  },
+  {
+    id: "feet",
+    label: "Foot swelling check",
+    say: { en: "Please press your thumb on the top of each foot for three seconds, then show the feet to the camera.", es: "Por favor, apriete con el dedo encima de cada pie por tres segundos y luego muestre los pies a la cámara." },
+    seconds: 8,
+    checks: [{ finding: "swollen_feet", question: "Are both feet swollen, or does a dent stay in the skin after pressing (pitting)?" }],
+  },
+];
+export type TestId = (typeof TESTS)[number]["id"];
+
+// Before any medical question: who the patient is. Saved only with consent.
+export const INTAKE = {
+  name: { en: "Hello, I'm the health pod. What is your name?", es: "Hola, soy el asistente de salud. ¿Cómo se llama?" },
+  community: { en: "Which community or village are you from?", es: "¿De qué comunidad o aldea viene?" },
+  who: { en: "Is this visit for you or for someone else, like a child? How old are they?", es: "¿La consulta es para usted o para otra persona, como un niño? ¿Qué edad tiene?" },
+  consent: {
+    en: "May we save your name and what you need, so the health team can help you? Only the health team will see it.",
+    es: "¿Está de acuerdo en que guardemos su nombre y lo que necesita, para que el equipo de salud le pueda ayudar? Solo el equipo de salud lo verá.",
+  },
+} as const;
+export type IntakeField = keyof typeof INTAKE;
+export const INTAKE_FIELDS = Object.keys(INTAKE) as IntakeField[];
+
+// One step of the visit: a finding question, a physical test, or an intake question.
+export type Step = FindingKey | `test:${string}` | `intake:${IntakeField}` | "open";
+
 export const OPENING: Text = {
-  en: "Hello, I'm here to help. What is bothering you today?",
-  es: "Hola, estoy aquí para ayudarle. ¿Qué le pasa hoy?",
+  en: "Thank you. Now, what is bothering you today?",
+  es: "Gracias. Ahora, ¿qué le pasa hoy?",
 };
 
 export const CLOSING: Record<Urgency, Text> = {
   red: {
-    en: "Stay calm. We are calling the doctor and arranging transport right now. Please stay seated.",
-    es: "Tranquilo. Ya estamos llamando al doctor y consiguiendo transporte. Quédese sentado, por favor.",
+    en: "Stay calm. We are calling the doctor and getting you help right now. Please stay here with the health worker.",
+    es: "Mantenga la calma. Ya estamos llamando al doctor y consiguiendo ayuda. Quédese aquí con el promotor de salud, por favor.",
   },
   yellow: {
     en: "Thank you. The health worker will start treatment, and a doctor will review your case today.",
@@ -197,6 +351,12 @@ export const CLOSING: Record<Urgency, Text> = {
   },
 };
 
+// Closing when someone has said they have thought about ending their life: warm, not alarming.
+export const CLOSING_SUICIDE_RISK: Text = {
+  en: "Thank you for trusting me with this. You are not alone. The health worker will stay with you right now, and we will get you support today.",
+  es: "Gracias por contarme esto. No está solo ni sola. El promotor de salud se va a quedar con usted ahorita, y hoy mismo le vamos a conseguir apoyo.",
+};
+
 // Opening line when the camera already saw something worrying.
 export const SEEN_OPENERS: Partial<Record<FindingKey, Text>> = {
   face_or_arm_weakness: { en: "I can see one side of your face looks different. Is one side of your face or an arm weak or numb?", es: "Veo que un lado de su cara se ve diferente. ¿Tiene un lado de la cara o un brazo débil o dormido?" },
@@ -204,14 +364,16 @@ export const SEEN_OPENERS: Partial<Record<FindingKey, Text>> = {
   short_of_breath: { en: "It looks hard for you to breathe. Is it hard to breathe right now?", es: "Parece que le cuesta respirar. ¿Le cuesta respirar ahorita?" },
   severe_bleeding: { en: "I can see bleeding. Is it heavy and not stopping?", es: "Veo sangre. ¿Está sangrando mucho y no para?" },
   yellow_eyes: { en: "Your eyes look a little yellow. Have you had a fever?", es: "Sus ojos se ven un poco amarillos. ¿Ha tenido calentura?" },
+  low_mood: { en: "You seem upset, and that's okay. In the last two weeks, have you felt down, sad or hopeless on most days?", es: "Le veo afligido, y está bien. En las últimas dos semanas, ¿se ha sentido triste, decaído o sin esperanza casi todos los días?" },
 };
 // Which finding an opener asks about (so it is not asked twice).
-export const SEEN_OPENER_ASKS: Partial<Record<FindingKey, FindingKey>> = {
+export const SEEN_OPENER_ASKS: Partial<Record<FindingKey, Step>> = {
   face_or_arm_weakness: "face_or_arm_weakness",
   sweating: "chest_pain",
   short_of_breath: "short_of_breath",
   severe_bleeding: "severe_bleeding",
   yellow_eyes: "fever",
+  low_mood: "low_mood",
 };
 
 export const LOCALES = {

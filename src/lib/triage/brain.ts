@@ -2,7 +2,7 @@
 // doctor's handover note. Jev makes the triage decisions (engine.ts); these calls never block them.
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { TriageResult, Turn } from "./types";
+import type { Intake, TriageResult, Turn } from "./types";
 
 let client: Anthropic | null = null;
 const anthropic = () => (client ??= new Anthropic());
@@ -43,4 +43,17 @@ export function handover(turns: Turn[], result: TriageResult): Promise<string> {
     "Write a 3-sentence handover note for a remote doctor about a patient triaged at a village health post. Plain English, no headings. Sentence 1: who and what. Sentence 2: key findings including camera signs. Sentence 3: urgency and what is needed now. Say 'possible', never a firm diagnosis.",
     `Conversation:\n${conversation}\n\nTriage facts:\n${JSON.stringify(facts, null, 2)}`,
   );
+}
+
+// Pull a clean name, community and patient description out of the intake answers.
+export async function readIntake(intake: Intake): Promise<{ name: string | null; community: string | null; patient: string | null }> {
+  const text = await ask(
+    'Extract from these answers given at a health post. Reply with exactly three lines: "name: ...", "community: ...", "patient: ..." (patient = who the visit is for and their age, in English, e.g. "self, 34" or "son, 3 years"). Use "unknown" when not given.',
+    JSON.stringify({ name_answer: intake.name, community_answer: intake.community, who_answer: intake.who }),
+  );
+  const field = (k: string) => {
+    const v = text.match(new RegExp(`^${k}:\\s*(.+)$`, "mi"))?.[1]?.trim();
+    return v && v.toLowerCase() !== "unknown" ? v : null;
+  };
+  return { name: field("name"), community: field("community"), patient: field("patient") };
 }
