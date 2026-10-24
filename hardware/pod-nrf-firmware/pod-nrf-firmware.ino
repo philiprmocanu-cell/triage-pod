@@ -44,12 +44,25 @@ static int medianOf(int *a, int n) {
   return b[n / 2];
 }
 
+uint32_t lastRetry = 0, lastGood = 0;
+
+void startSensor() {
+  sensorOk = finger.begin(Wire, I2C_SPEED_FAST);
+  if (sensorOk) {
+    finger.setup(50, 1, 2, 100, 411, 16384); // brightness, no averaging (raw 100 Hz for beats), red+IR, 411 us, wide range (no clipping)
+    lastGood = millis();
+  }
+}
+
 void readFinger() {
-  if (!sensorOk) return;
+  if (!sensorOk) {                           // keep looking: a re-plugged sensor comes alive without a reboot
+    if (millis() - lastRetry > 2000) { lastRetry = millis(); startSensor(); }
+    return;
+  }
   finger.check();
   int budget = 64;                           // never spin here for ever
   while (finger.available() && budget-- > 0) {
-    samples++;
+    samples++; lastGood = millis();
     uint32_t ir = finger.getFIFOIR(), red = finger.getFIFORed();
     finger.nextSample();
     lastIR = ir;
@@ -58,7 +71,9 @@ void readFinger() {
       uint32_t now = millis();
       if (lastBeat) {
         int bpm = 60000 / (int)(now - lastBeat);
-        if (bpm >= 35 && bpm <= 200) { beats[beatIdx] = bpm; beatIdx = (beatIdx + 1) % 8; if (nBeats < 8) nBeats++; }
+        bool plausible = bpm >= 35 && bpm <= 200;
+        if (plausible && nBeats >= 3) { int m = medianOf(beats, nBeats); if (bpm > m * 16 / 10 || bpm < m * 6 / 10) plausible = false; }   // a beat twice as fast or slow as the rest is noise
+        if (plausible) { beats[beatIdx] = bpm; beatIdx = (beatIdx + 1) % 8; if (nBeats < 8) nBeats++; }
       }
       lastBeat = now;
     }
@@ -74,6 +89,7 @@ void readFinger() {
       sinceCalc++;
     }
   }
+  if (millis() - lastGood > 3000) { sensorOk = false; fingerOn = false; lastIR = 0; return; }   // no samples for 3 s: the sensor is gone
   fingerOn = lastIR > FINGER_IR;             // a fingertip reflects far more infrared than open air (see FINGER_IR)
   if (!fingerOn) { filled = 0; spo2Ok = 0; nBeats = 0; nSpo2 = 0; nHr = 0; lastBeat = 0; heartRate = 0; return; }
   if (filled == N && sinceCalc >= 25) {     // recompute oxygen once a second
@@ -88,12 +104,18 @@ void readFinger() {
 
 void setup() {
   Serial.begin(115200);
+  for (int i = 0; i < 8; i++) { delay(500); Serial.println("boot"); }   // 4 s of hellos so the laptop catches one
   pinMode(TALK_PIN, INPUT_PULLUP);
+  // Unstick the I2C bus if a sensor is holding the data line low: clock SCL 9 times, then a STOP.
+  pinMode(D4, INPUT_PULLUP); pinMode(D5, OUTPUT);
+  for (int i = 0; i < 9 && digitalRead(D4) == LOW; i++) { digitalWrite(D5, LOW); delayMicroseconds(5); digitalWrite(D5, HIGH); delayMicroseconds(5); }
+  pinMode(D4, OUTPUT); digitalWrite(D4, LOW); delayMicroseconds(5); digitalWrite(D5, HIGH); delayMicroseconds(5); digitalWrite(D4, HIGH);
+  Serial.println(digitalRead(D4) == HIGH ? "sda high (bus free)" : "sda LOW (bus stuck: check the white wire)");
+  Serial.println(digitalRead(D5) == HIGH ? "scl high" : "scl LOW (check the yellow wire)");
   Wire.begin();                              // SDA D4, SCL D5
-  sensorOk = finger.begin(Wire, I2C_SPEED_FAST);
-  if (sensorOk) {
-    finger.setup(50, 1, 2, 100, 411, 16384); // brightness, no averaging (raw 100 Hz for beats), red+IR, 411 us, wide range (no clipping)
-  }
+  Serial.println("i2c up");
+  startSensor();
+  Serial.println(sensorOk ? "sensor found" : "sensor MISSING (will keep looking)");
 }
 
 void loop() {
