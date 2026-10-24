@@ -282,7 +282,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const intakeOpen = !redRule && !emergencySeen && !asked.has("open");
   const medicalSteps = input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && t.asks !== "open").length;
   const testDone = (id: string) => id in input.tests || asked.has(`test:${id}`);
-  const moodish = (["low_mood", "little_interest", "anxious", "trauma_or_loss"] as FindingKey[]).some((k) => yes[k] >= YES);
+  const moodish = (["low_mood", "little_interest", "anxious", "trauma_or_loss", "lonely"] as FindingKey[]).some((k) => yes[k] >= YES);
 
   let next: TriageResult["next"] = null;
   const seenOpener = () => {
@@ -301,7 +301,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const order: Step[] = [];
     if (isChild && open.length) order.push("unable_to_drink", "vomits_everything", "seizure", "very_sleepy");
     for (const p of open) order.push(...PATHWAYS.find((d) => d.id === p.id)!.questions);
-    if (!open.length) order.push("low_mood", "little_interest"); // nothing physical found: screen mood
+    if (!open.length) order.push("low_mood", "little_interest", "lonely"); // nothing physical found: screen mood and loneliness
+    else if (age === "older_adult") order.push("lonely"); // older adults are the loneliest group: always ask
     const pick = order.find((s) => {
       if (s.startsWith("test:")) {
         const t = TESTS.find((x) => `test:${x.id}` === s)!;
@@ -399,6 +400,6 @@ function sameItem(a: string, b: string): boolean {
 function deliveryFor(item: string): Resource["delivery"] {
   const s = item.toLowerCase();
   if (/(transport|oxygen|referral|hospital|\bct\b|maternity|iv fluids|ecg|sputum)/.test(s)) return "road";
-  if (/(amoxicillin|rehydration|zinc|rapid test|pulse|glucose|blood pressure|check|paracetamol|dressing|bandage|splint|advice|antacid|review|visit|dipstick|sessions|group|stays with)/.test(s)) return "on_site";
+  if (/(amoxicillin|rehydration|zinc|rapid test|pulse|glucose|blood pressure|check|paracetamol|dressing|bandage|splint|advice|antacid|review|visit|dipstick|sessions|group|circle|stays with)/.test(s)) return "on_site";
   return "drone";
 }

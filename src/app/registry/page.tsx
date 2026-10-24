@@ -78,7 +78,7 @@ export default async function RegistryPage() {
           </section>
 
           <section className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-            <p className="mb-1 text-xs uppercase tracking-wide text-slate-400">Peer support groups</p>
+            <p className="mb-1 text-xs uppercase tracking-wide text-slate-400">Peer groups &amp; community circles</p>
             <p className="mb-3 text-xs text-slate-500">
               Opt-in only, led by a trained lay counselor (Friendship Bench model). People at risk of suicide get urgent
               one-to-one care instead.

@@ -62,8 +62,9 @@ export function needsByCommunity(records: VisitRecord[]) {
   return out;
 }
 
-// Peer support groups: people in the same community with a similar mental-health need who asked
-// to be connected. Never includes anyone at risk of suicide (they get urgent one-to-one care).
+// Peer support groups and community circles: people in the same community with a similar need
+// (depression, anxiety, grief, loneliness) who asked to be introduced. Never includes anyone at
+// risk of suicide (they get urgent one-to-one care).
 export function peerGroups(records: VisitRecord[]) {
   const groups = new Map<string, VisitRecord[]>();
   for (const r of records) {

@@ -86,11 +86,16 @@ export const FINDINGS = {
     ask: { en: "Sometimes when people feel this way, they think about ending their life. Have you had thoughts like that?", es: "A veces, cuando uno se siente así, piensa en quitarse la vida. ¿Ha tenido pensamientos así?" },
   },
   trauma_or_loss: { label: "Recent loss, violence or hardship", ask: { en: "Has something very hard happened recently, like a loss or violence?", es: "¿Le ha pasado algo muy difícil últimamente, como una pérdida o violencia?" } },
+  // Loneliness: the short UCLA loneliness questions, asked plainly.
+  lonely: {
+    label: "Lonely or isolated",
+    ask: { en: "How often do you feel alone, left out, or without people to talk to?", es: "¿Qué tan seguido se siente solo, apartado o sin con quién platicar?" },
+  },
   wants_peer_group: {
     label: "Wants a peer support group",
     ask: {
-      en: "There is a group of people near you who meet with a trained counselor to support each other. Would you like the health worker to connect you with them?",
-      es: "Cerca de usted hay un grupo de personas que se reúnen con un consejero para apoyarse entre sí. ¿Le gustaría que el promotor de salud le conecte con ellos?",
+      en: "There are people near you who meet regularly to talk and support each other, with a trained counselor. Would you like the health worker to introduce you?",
+      es: "Cerca de usted hay personas que se juntan seguido para platicar y apoyarse, con un consejero. ¿Le gustaría que el promotor de salud le presente con ellos?",
     },
   },
 } as const satisfies Record<string, { label: string; ask: Text; seen?: string }>;
@@ -220,14 +225,15 @@ export const PATHWAYS: Pathway[] = [
   {
     id: "mental",
     label: "Mental health",
-    description: "Sadness, worry, stress, trouble sleeping, grief, feeling alone, thoughts of self-harm",
-    triggers: ["low_mood", "little_interest", "anxious", "cant_stop_worrying", "self_harm_thoughts", "trauma_or_loss"],
-    questions: ["low_mood", "little_interest", "self_harm_thoughts", "anxious", "cant_stop_worrying", "trauma_or_loss", "wants_peer_group"],
+    description: "Sadness, worry, stress, trouble sleeping, grief, loneliness or feeling alone, thoughts of self-harm",
+    triggers: ["low_mood", "little_interest", "anxious", "cant_stop_worrying", "self_harm_thoughts", "trauma_or_loss", "lonely"],
+    questions: ["low_mood", "little_interest", "self_harm_thoughts", "anxious", "cant_stop_worrying", "trauma_or_loss", "lonely", "wants_peer_group"],
     subtypes: [
       { name: "Suicide risk", description: "Thoughts of ending their life or self-harm", urgency: "red", resources: ["Health worker stays with the patient now", "Same-day mental health referral"] },
       { name: "Depression", description: "Low mood or loss of interest on most days for two weeks or more", urgency: "yellow", resources: ["Problem-solving sessions (Friendship Bench model)", "Peer support group (opt-in)", "Doctor review"] },
       { name: "Anxiety", description: "Nervous, on edge, cannot stop worrying on most days", urgency: "yellow", resources: ["Problem-solving sessions (Friendship Bench model)", "Peer support group (opt-in)"] },
       { name: "Stress or grief reaction", description: "Distress after a recent loss, violence or hardship", urgency: "green", resources: ["Peer support group (opt-in)", "Follow-up visit"] },
+      { name: "Loneliness", description: "Feels alone or cut off from people, without low mood most days", urgency: "green", resources: ["Community circle (opt-in)", "Follow-up visit"] },
     ],
   },
 ];
