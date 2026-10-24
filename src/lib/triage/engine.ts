@@ -760,7 +760,15 @@ export async function step(input: StepInput): Promise<TriageResult> {
       }).catch(() => null),
       new Promise<null>((r) => setTimeout(() => r(null), 7000)), // last message of the visit: worth the wait
     ]);
-    const tip = advice ?? { text: SAFETY_NET[language], english: SAFETY_NET.en };
+    // Without Claude (no credit, no network) the closing still says what it most likely is and
+    // what is being sent, from fixed wording.
+    const likelyName = causes.find((c) => c.confident)?.name;
+    const sending = orders.map((o) => `${o.qty} ${o.item}`).join(", ");
+    const plain = {
+      en: `${likelyName ? `It is most likely ${likelyName.toLowerCase()}. ` : ""}${sending ? `We are sending ${sending} to your home. ` : ""}${SAFETY_NET.en}`,
+      es: `${likelyName ? `Lo más probable es ${likelyName.toLowerCase()}. ` : ""}${sending ? `Estamos enviando ${sending} a su casa. ` : ""}${SAFETY_NET.es}`,
+    };
+    const tip = advice ?? { text: plain[language], english: plain.en };
     next = { ...next, text: `${next.text} ${tip.text}`, english: `${next.english} ${tip.english}` };
   }
 
