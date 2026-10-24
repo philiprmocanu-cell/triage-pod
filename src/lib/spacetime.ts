@@ -98,6 +98,41 @@ export async function saveVisitRecord(r: VisitRecord) {
   ]);
 }
 
+// ---- Reading tables from the server ----
+
+// One SQL query against the database, rows as objects keyed by column name (snake_case, as the
+// table declares them). Timestamps come back as [micros] and options as [0,[v]] / [1,[]]; the
+// caller unwraps what it needs.
+export async function sqlRows<T = Record<string, unknown>>(query: string): Promise<T[]> {
+  const res = await fetch(`${URL_BASE}/v1/database/${DB}/sql`, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: query,
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!res.ok) throw new Error(`SpacetimeDB sql ${res.status}: ${await res.text()}`);
+  const [result] = (await res.json()) as { schema: { elements: { name: { some: string } }[] }; rows: unknown[][] }[];
+  const names = result?.schema.elements.map((e) => e.name.some) ?? [];
+  return (result?.rows ?? []).map((r) => Object.fromEntries(r.map((v, i) => [names[i], v])) as T);
+}
+
+// ---- Routes and carriers ----
+
+export type FloodRisk = "low" | "medium" | "high";
+
+// The route planner decided how an order travels: which carrier, the road it follows (a list
+// of [lat, lng] points), how far, how long, and the flood risk on the way. Planning the same
+// order again replaces the old plan; a reason starting with "Rerouted" marks it re-routed.
+export async function planRoute(p: { orderId: bigint | number; carrierId: number; waypoints: [number, number][]; km: number; minutes: number; floodRisk: FloodRisk; reason: string }) {
+  await call("plan_route", [Number(p.orderId), p.carrierId, JSON.stringify(p.waypoints), p.km, Math.max(1, Math.round(p.minutes)), p.floodRisk, p.reason]);
+}
+
+// One line in the agent log the government view and the live map read. `village` is matched
+// loosely like everywhere else ("Katete", "mfuwe"); "" means the whole province.
+export async function logAgent(agent: string, village: string, text: string) {
+  await call("log_agent", [agent, village, text]);
+}
+
 // ---- Community lexicon ----
 
 export type LiveLexicon = Partial<Record<string, string>>; // concept -> the community's word

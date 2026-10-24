@@ -19,6 +19,19 @@ export const AgentLog = __t.object("AgentLog", {
 });
 export type AgentLog = __Infer<typeof AgentLog>;
 
+export const Carrier = __t.object("Carrier", {
+  id: __t.u32(),
+  name: __t.string(),
+  kind: __t.string(),
+  operator: __t.string(),
+  baseVillageId: __t.u32(),
+  capacityKg: __t.f64(),
+  speedKmh: __t.u32(),
+  costPerKm: __t.f64(),
+  status: __t.string(),
+});
+export type Carrier = __Infer<typeof Carrier>;
+
 export const CommunityMember = __t.object("CommunityMember", {
   id: __t.u64(),
   villageId: __t.u32(),
@@ -95,6 +108,20 @@ export const Pop = __t.object("Pop", {
   kind: __t.string(),
 });
 export type Pop = __Infer<typeof Pop>;
+
+export const RoutePlan = __t.object("RoutePlan", {
+  id: __t.u64(),
+  orderId: __t.u64(),
+  carrierId: __t.u32(),
+  waypoints: __t.string(),
+  km: __t.f64(),
+  minutes: __t.u32(),
+  floodRisk: __t.string(),
+  status: __t.string(),
+  reason: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type RoutePlan = __Infer<typeof RoutePlan>;
 
 export const Settings = __t.object("Settings", {
   id: __t.u32(),

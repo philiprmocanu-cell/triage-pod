@@ -12,6 +12,7 @@ const TABS = [
   { href: "/kiosk?village=Katete", label: "Pod", match: "/kiosk" },
   { href: "/staff", label: "Health worker" },
   { href: "/globe", label: "Live map" },
+  { href: "/routes", label: "Routes" },
   { href: "/government", label: "Government" },
   { href: "/patients", label: "Patients" },
   { href: "/community", label: "Community", tone: "text-pink-300" },

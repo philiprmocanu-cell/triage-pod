@@ -8,7 +8,9 @@ import { type Infer as __Infer } from "spacetimedb";
 // Import all reducer arg schemas
 import AllocateReducer from "../allocate_reducer";
 import JoinCommunityReducer from "../join_community_reducer";
+import LogAgentReducer from "../log_agent_reducer";
 import OrderVaccinesReducer from "../order_vaccines_reducer";
+import PlanRouteReducer from "../plan_route_reducer";
 import PodHeartbeatReducer from "../pod_heartbeat_reducer";
 import RecordDoseReducer from "../record_dose_reducer";
 import RememberWordsReducer from "../remember_words_reducer";
@@ -20,7 +22,9 @@ import SetSimulationReducer from "../set_simulation_reducer";
 
 export type AllocateParams = __Infer<typeof AllocateReducer>;
 export type JoinCommunityParams = __Infer<typeof JoinCommunityReducer>;
+export type LogAgentParams = __Infer<typeof LogAgentReducer>;
 export type OrderVaccinesParams = __Infer<typeof OrderVaccinesReducer>;
+export type PlanRouteParams = __Infer<typeof PlanRouteReducer>;
 export type PodHeartbeatParams = __Infer<typeof PodHeartbeatReducer>;
 export type RecordDoseParams = __Infer<typeof RecordDoseReducer>;
 export type RememberWordsParams = __Infer<typeof RememberWordsReducer>;

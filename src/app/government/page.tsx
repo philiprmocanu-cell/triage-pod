@@ -33,8 +33,11 @@ const SHORT: Record<string, string> = {
   "Malaria vaccine (R21)": "R21 vx", "Measles-rubella vaccine": "MR vx", "Pentavalent vaccine": "Penta vx", "PCV vaccine": "PCV vx", "Rotavirus vaccine": "Rota vx", "Polio vaccine (OPV)": "OPV", "BCG vaccine": "BCG", "HPV vaccine": "HPV",
 };
 // How each agent shows up in the decisions feed.
-const AGENT_TAG: Record<string, string> = { "Supply allocator": "ALLOC", "Outbreak sentinel": "SENTINEL", "Immunisation planner": "VACCINE", "Community connector": "CIRCLE", Pod: "POD" };
-const AGENT_TONE: Record<string, string> = { "Outbreak sentinel": "t-alert", "Immunisation planner": "t-vax", "Community connector": "t-conn", Pod: "t-live" };
+const AGENT_TAG: Record<string, string> = { "Supply allocator": "ALLOC", "Outbreak sentinel": "SENTINEL", "Immunisation planner": "VACCINE", "Community connector": "CIRCLE", "Dispatch planner": "DISPATCH", "Route planner": "ROUTE", Pod: "POD" };
+const AGENT_TONE: Record<string, string> = { "Outbreak sentinel": "t-alert", "Immunisation planner": "t-vax", "Community connector": "t-conn", "Dispatch planner": "t-dispatch", Pod: "t-live" };
+// The dispatch brain's priorities, in the order they are sent.
+const PRIORITY_LABEL: Record<string, string> = { emergency: "Emergency", urgent: "Urgent", "pre-position": "Pre-position", routine: "Routine" };
+const CARRIER_LABEL: Record<string, string> = { truck: "truck", pickup: "pickup", motorbike: "motorbike", bicycle: "bicycle", boat: "boat", drone: "drone", none: "no carrier" };
 
 type Village = { id: number; name: string; population: number; hub: boolean };
 type Cell = { have: number; used: number; incoming: number; min: number };
@@ -47,6 +50,23 @@ type Zambia = { stats: { population?: Stat; ruralPct?: Stat; u5mr?: Stat; doctor
 type DueRow = { villageId: number; people: { id: number; name: string; doses: string[] }[] };
 type Pod = { villageId: number; status: string; step: string; language: string; online: boolean; lastSeenMs: number };
 type Word = { id: bigint; villageId: number; community: string; concept: string; word: string; times: number };
+// What the dispatch brain (src/lib/dispatch/plan.ts) returns.
+type Shipment = {
+  id: string; rank: number; toVillageId: number; toVillage: string; fromVillage: string;
+  items: { item: string; qty: number; from?: string; why: string }[];
+  kg: number; km: number; carrierKind: string; carrierName: string; etaMinutes: number | null;
+  priority: "emergency" | "urgent" | "pre-position" | "routine"; sendBy: string; why: string[]; run: string | null; droneAlternative: string | null;
+};
+type DispatchPlan = {
+  plannedAt: string; shipments: Shipment[];
+  runs: { id: string; label: string; carrierName: string; posts: string[]; kg: number; km: number; minutes: number }[];
+  emergency: { active: boolean; reasons: string[]; cutOffPosts: string[]; redVisitPosts: string[] };
+  posts: { villageId: number; name: string; cutOffRisk: number; daysUntilCutOff: number | null; cutOffDate: string | null; cutOffReason: string | null; cutOffNow: boolean; malariaOutlook6w: "low" | "medium" | "high"; floodTodayLevel: string; flood14dLevel: string; rainNext14Mm: number; redVisitsOpen: number; outlookSource: string }[];
+  counts: { emergency: number; urgent: number; "pre-position": number; routine: number; items: number; kg: number; posts: number };
+  notes: string[]; weatherSource: string; carrierSource: "table" | "fallback";
+};
+type SendResult = { executed?: number; orders?: { id: number; item: string; qty: number; mode: string }[]; routed?: number; logged?: string; notes?: string[]; error?: string; failed?: { id: string; error: string }[] };
+type PlannerLog = { lines: { id: number; at: string; village: string; text: string; where: "agent_log" | "file" }[] };
 
 const short = (name: string) => name.replace(/ \(.*\)$/, "");
 const POD_STATUS: Record<string, string> = { idle: "waiting for a patient", listening: "listening", thinking: "deciding", speaking: "speaking", offline: "offline" };
@@ -68,6 +88,62 @@ export default function GovernmentPage() {
   const [sky, setSky] = useState<Sky | null>(null);
   const [skyAll, setSkyAll] = useState(false);
   const [zambia, setZambia] = useState<Zambia | null>(null);
+  // The dispatch brain: its latest plan, the explanation, what the office ticked, what was sent.
+  const [plan, setPlan] = useState<DispatchPlan | null>(null);
+  const [planBusy, setPlanBusy] = useState<"" | "plan" | "claude">("");
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [explanation, setExplanation] = useState<{ text: string; by: string } | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<SendResult | null>(null);
+  const [showAllShipments, setShowAllShipments] = useState(false);
+  const [plannerLog, setPlannerLog] = useState<PlannerLog["lines"]>([]);
+
+  const planNow = async (explain: "planner" | "claude" = "planner") => {
+    setPlanBusy(explain === "claude" ? "claude" : "plan");
+    setPlanError(null);
+    try {
+      const r = await fetch("/api/dispatch/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ explain }) });
+      const d = (await r.json()) as { plan?: DispatchPlan; explanation?: string; explainedBy?: string; error?: string };
+      if (!r.ok || !d.plan) throw new Error(d.error ?? `planner ${r.status}`);
+      setPlan(d.plan);
+      setExplanation({ text: d.explanation ?? "", by: d.explainedBy ?? "planner" });
+      setPicked(new Set());
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : "Planning failed");
+    } finally {
+      setPlanBusy("");
+    }
+  };
+  const send = async (body: { shipmentIds?: string[]; which?: "urgent" | "all" }) => {
+    setSending(true);
+    setSent(null);
+    try {
+      const r = await fetch("/api/dispatch/execute", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      setSent((await r.json()) as SendResult);
+      await planNow(); // the plan after the sends: what is now on its way drops out
+    } catch (err) {
+      setSent({ error: err instanceof Error ? err.message : "Send failed" });
+    } finally {
+      setSending(false);
+    }
+  };
+  const togglePick = (id: string) => setPicked((s) => {
+    const n = new Set(s);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    return n;
+  });
+
+  // The brain plans as soon as the page opens, and its own log lines are read every few seconds.
+  useEffect(() => {
+    planNow();
+    const readLog = () => fetch("/api/dispatch/log").then((r) => r.json()).then((d: PlannerLog) => setPlannerLog(d.lines ?? [])).catch(() => {});
+    readLog();
+    const id = setInterval(readLog, 4000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Context from outside the database: satellite weather (NASA POWER) and country facts (World Bank).
   useEffect(() => {
@@ -280,6 +356,168 @@ export default function GovernmentPage() {
       </header>
 
       <main className="grid gap-4 p-6 xl:grid-cols-[1fr_26rem]">
+        <section className="rounded-2xl border border-orange-900/60 bg-orange-950/10 p-4 xl:col-span-2">
+          {plan?.emergency.active && (
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-red-500/70 bg-red-950/60 px-4 py-3">
+              <span className="blink inline-block h-2.5 w-2.5 rounded-full bg-red-400" />
+              <p className="text-sm font-bold uppercase tracking-wide text-red-200">Emergency mode</p>
+              <p className="text-sm text-red-100">{plan.emergency.reasons.join("; ")}. Emergency shipments go first, by the fastest carrier that can reach the post; road carriers are not sent where the road is under water.</p>
+            </div>
+          )}
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-orange-300">Dispatch · Chipata distribution centre</p>
+              <p className="mt-1 max-w-3xl text-xs text-slate-400">
+                A deterministic planner reads every post&apos;s shelf, the open visits, the six-week malaria outlook, the flood and cut-off forecast and the fleet, then ranks what to send: emergencies now, pre-positioning before roads close, routine top-ups batched into one run per area. Nothing moves until the office presses send.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <button onClick={() => planNow()} disabled={!!planBusy || sending} className="rounded-lg border border-orange-500 bg-orange-900/50 px-3 py-1.5 text-orange-100 hover:bg-orange-800/60 disabled:opacity-50">
+                {planBusy === "plan" ? "Planning…" : "Plan now"}
+              </button>
+              <button onClick={() => send({ which: "urgent" })} disabled={!plan || sending || !!planBusy || !(plan.counts.emergency + plan.counts.urgent)} className="rounded-lg border border-red-500 bg-red-900/50 px-3 py-1.5 text-red-100 hover:bg-red-800/60 disabled:opacity-50">
+                {sending ? "Sending…" : `Send all urgent${plan ? ` (${plan.counts.emergency + plan.counts.urgent})` : ""}`}
+              </button>
+              <button onClick={() => send({ shipmentIds: [...picked] })} disabled={!picked.size || sending || !!planBusy} className="rounded-lg border border-sky-500 bg-sky-900/50 px-3 py-1.5 text-sky-100 hover:bg-sky-800/60 disabled:opacity-50">
+                Send selected{picked.size ? ` (${picked.size})` : ""}
+              </button>
+              <button onClick={() => planNow("claude")} disabled={!!planBusy || sending || !plan} className="rounded-lg border border-emerald-600 bg-emerald-900/40 px-3 py-1.5 text-emerald-100 hover:bg-emerald-800/50 disabled:opacity-50">
+                {planBusy === "claude" ? "Wording…" : "Explain in words (Claude)"}
+              </button>
+            </div>
+          </div>
+          {planError && <p className="mt-2 text-xs text-red-300">The planner could not run: {planError}</p>}
+          {plan && (
+            <>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+                <Kpi label="emergency" value={plan.counts.emergency} tone={plan.counts.emergency ? "text-red-300" : "text-slate-500"} />
+                <Kpi label="urgent" value={plan.counts.urgent} tone={plan.counts.urgent ? "text-amber-300" : "text-slate-500"} />
+                <Kpi label="pre-position" value={plan.counts["pre-position"]} tone={plan.counts["pre-position"] ? "text-sky-300" : "text-slate-500"} />
+                <Kpi label="routine" value={plan.counts.routine} tone="text-slate-300" />
+                <Kpi label="posts served" value={plan.counts.posts} />
+                <Kpi label="units" value={plan.counts.items} />
+                <Kpi label="kg" value={plan.counts.kg} />
+                <Kpi label="batched runs" value={plan.runs.length} tone="text-teal-300" />
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-slate-200">
+                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-500">{explanation?.by === "claude" ? "In words · Claude" : "In words · the planner"} · </span>
+                {explanation?.text}
+              </p>
+
+              <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_20rem]">
+                <div className="overflow-auto rounded-xl border border-slate-800 bg-slate-950/70">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="sticky top-0 bg-slate-950 text-[10px] uppercase tracking-wider text-slate-400">
+                        <th className="px-2 py-2 text-left" title="Tick the shipments to send">
+                          <input type="checkbox" aria-label="select every shipment shown" checked={picked.size > 0 && (showAllShipments ? plan.shipments : plan.shipments.slice(0, 12)).every((s) => picked.has(s.id))} onChange={(e) => setPicked(e.target.checked ? new Set((showAllShipments ? plan.shipments : plan.shipments.slice(0, 12)).map((s) => s.id)) : new Set())} />
+                        </th>
+                        <th className="px-2 py-2 text-left">#</th>
+                        <th className="px-2 py-2 text-left">priority</th>
+                        <th className="px-2 py-2 text-left">post</th>
+                        <th className="px-2 py-2 text-left">what</th>
+                        <th className="px-2 py-2 text-left">carrier</th>
+                        <th className="px-2 py-2 text-left">send by</th>
+                        <th className="px-2 py-2 text-right">time</th>
+                        <th className="px-2 py-2 text-left">why</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(showAllShipments ? plan.shipments : plan.shipments.slice(0, 12)).map((s) => (
+                        <tr key={s.id} className={`border-t border-slate-800/80 align-top ${picked.has(s.id) ? "bg-sky-950/40" : ""}`}>
+                          <td className="px-2 py-1.5"><input type="checkbox" aria-label={`send to ${s.toVillage}`} checked={picked.has(s.id)} onChange={() => togglePick(s.id)} /></td>
+                          <td className="px-2 py-1.5 tabular-nums text-slate-400">{s.rank}</td>
+                          <td className="px-2 py-1.5"><span className={`pr ${s.priority}`}>{PRIORITY_LABEL[s.priority]}</span></td>
+                          <td className="whitespace-nowrap px-2 py-1.5 font-medium text-slate-100">
+                            {s.toVillage}
+                            {s.fromVillage !== "Chipata" && <span className="block text-[10px] text-teal-300">from {s.fromVillage}</span>}
+                          </td>
+                          <td className="px-2 py-1.5 text-slate-200">
+                            {s.items.map((i) => (
+                              <span key={i.item} className="mr-1.5 inline-block whitespace-nowrap" title={i.why}>
+                                {i.qty} {SHORT[i.item] ?? i.item}{i.from ? <span className="text-teal-300"> ({i.from})</span> : null}
+                              </span>
+                            ))}
+                            <span className="block text-[10px] text-slate-500">{s.kg} kg</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-slate-200">
+                            <span className={`car ${s.carrierKind}`}>{CARRIER_LABEL[s.carrierKind] ?? s.carrierKind}</span>
+                            <span className="block text-[10px] text-slate-400">{s.carrierName}{s.run ? ` · ${s.run.replace("run-", "run ")}` : ""}</span>
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-200">{s.priority === "emergency" || s.priority === "urgent" ? <span className="text-red-200">now</span> : s.sendBy}</td>
+                          <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-slate-300">{s.etaMinutes == null ? "–" : s.etaMinutes >= 90 ? `${Math.round(s.etaMinutes / 6) / 10} h` : `${s.etaMinutes} min`}</td>
+                          <td className="min-w-[16rem] px-2 py-1.5 text-slate-400">
+                            {s.why.map((w, i) => (
+                              <span key={i} className="block">{w}</span>
+                            ))}
+                            {s.droneAlternative && <span className="block text-sky-300/80">{s.droneAlternative}</span>}
+                          </td>
+                        </tr>
+                      ))}
+                      {!plan.shipments.length && (
+                        <tr><td colSpan={9} className="px-3 py-4 text-emerald-300">Nothing to send: every post holds its minimum, no roads are closing and no pod is waiting.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                  {plan.shipments.length > 12 && (
+                    <button onClick={() => setShowAllShipments(!showAllShipments)} className="w-full border-t border-slate-800 px-3 py-1.5 text-left text-[11px] text-orange-300 hover:bg-slate-900">
+                      {showAllShipments ? "show the top 12 only" : `show all ${plan.shipments.length} shipments`}
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Roads: cut-off countdown</p>
+                    <p className="mt-1 text-[11px] text-slate-500">From the weather outlook: the day the forecast rain or river may close each post&apos;s road, and the malaria outlook six weeks out.</p>
+                    <div className="mt-2 max-h-56 space-y-1 overflow-auto">
+                      {plan.posts.filter((p) => p.cutOffNow || p.daysUntilCutOff !== null).map((p) => (
+                        <div key={p.villageId} className="flex items-baseline justify-between gap-2 text-xs" title={p.cutOffReason ?? ""}>
+                          <span className="text-slate-200">{p.name}<span className="text-slate-500"> · malaria {p.malariaOutlook6w}</span></span>
+                          <span className={`shrink-0 tabular-nums ${p.cutOffNow ? "text-red-300" : (p.daysUntilCutOff ?? 99) <= 3 ? "text-amber-300" : "text-sky-300"}`}>
+                            {p.cutOffNow ? "cut off now" : `${p.daysUntilCutOff} d${p.cutOffDate ? ` · ${p.cutOffDate.slice(5)}` : ""}`}
+                          </span>
+                        </div>
+                      ))}
+                      {!plan.posts.some((p) => p.cutOffNow || p.daysUntilCutOff !== null) && (
+                        <p className="text-xs text-emerald-300">No road closures in the forecast at any post. {plan.posts.filter((p) => p.malariaOutlook6w !== "low").length} posts have a raised malaria outlook, so their test and treatment targets are higher.</p>
+                      )}
+                    </div>
+                  </div>
+                  {plan.runs.length > 0 && (
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                      <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Batched runs</p>
+                      <div className="mt-2 max-h-40 space-y-1 overflow-auto text-xs">
+                        {plan.runs.map((r) => (
+                          <p key={r.id} className="text-slate-300"><span className="text-slate-100">{r.label}</span> · {r.carrierName} · {r.posts.length} posts · {r.kg} kg · {r.km} km</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {sent && (
+                    <div className={`rounded-xl border p-3 text-xs ${sent.error ? "border-red-700 bg-red-950/40 text-red-200" : "border-emerald-800 bg-emerald-950/30 text-emerald-100"}`}>
+                      <p className="font-mono text-[10px] uppercase tracking-[0.2em]">Sent</p>
+                      {sent.error ? <p className="mt-1">{sent.error}</p> : <p className="mt-1">{sent.executed} shipment{sent.executed === 1 ? "" : "s"} placed: {sent.orders?.length ?? 0} orders{sent.routed ? `, ${sent.routed} routed` : ""}; logged to {sent.logged === "agent_log" ? "the agents' log" : "data/dispatch.json"}.</p>}
+                      {sent.notes?.map((n, i) => <p key={i} className="mt-1 text-slate-400">{n}</p>)}
+                    </div>
+                  )}
+                  {(plan.notes.length > 0 || plannerLog.some((l) => l.where === "file")) && (
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-[11px] text-slate-400">
+                      {plan.notes.slice(0, 5).map((n, i) => <p key={i}>{n}</p>)}
+                      {plan.notes.length > 5 && <p>and {plan.notes.length - 5} more.</p>}
+                      {plannerLog.filter((l) => l.where === "file").slice(0, 5).map((l) => <p key={l.id} className="text-orange-200/80">{l.village}: {l.text}</p>)}
+                    </div>
+                  )}
+                  <p className="text-[10px] leading-relaxed text-slate-500">
+                    Weather: {plan.weatherSource}. Carriers: {plan.carrierSource === "table" ? "the carrier table (ZAMMSA trucks, district pickups, CHA motorbikes, bicycles, Luangwa boats; drones are a proposed partner and never relied on)" : "the planner's own list of the real fleet until the carrier table is published"}. Planned {new Date(plan.plannedAt).toLocaleTimeString([], { hour12: false })}.
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
+          {!plan && !planError && <p className="mt-3 font-mono text-xs text-slate-500">{planBusy ? "reading the shelves, the visits, the weather outlook and the fleet…" : "no plan yet"}</p>}
+        </section>
+
         <section className="overflow-auto rounded-2xl border border-slate-800 bg-slate-950/60">
           <table className="w-full border-collapse text-xs">
             <thead>
@@ -533,7 +771,15 @@ const CSS = `
 .feed{display:grid;grid-template-columns:4.2rem 1fr;gap:.5rem;align-items:start;padding:.4rem .6rem .4rem .7rem;border-left:2px solid var(--c);background:linear-gradient(90deg,color-mix(in srgb,var(--c) 14%,transparent),transparent 70%);font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#e2e8f0}
 .feed .stamp{color:color-mix(in srgb,var(--c) 85%,white);font-size:10px;letter-spacing:.04em;padding-top:1px}
 .feed .msg{text-shadow:0 0 12px color-mix(in srgb,var(--c) 45%,transparent)}
-.t-need{--c:#fbbf24}.t-alert{--c:#ef4444}.t-live{--c:#c084fc}.t-agent{--c:#2dd4bf}.t-vax{--c:#60a5fa}.t-conn{--c:#f472b6}
+.t-need{--c:#fbbf24}.t-alert{--c:#ef4444}.t-live{--c:#c084fc}.t-agent{--c:#2dd4bf}.t-vax{--c:#60a5fa}.t-conn{--c:#f472b6}.t-dispatch{--c:#fb923c}
+.pr{display:inline-block;white-space:nowrap;border-radius:6px;padding:2px 7px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border:1px solid}
+.pr.emergency{color:#fecaca;border-color:rgba(239,68,68,.7);background:rgba(239,68,68,.22)}
+.pr.urgent{color:#fde68a;border-color:rgba(251,191,36,.6);background:rgba(251,191,36,.16)}
+.pr.pre-position{color:#bae6fd;border-color:rgba(56,189,248,.6);background:rgba(56,189,248,.14)}
+.pr.routine{color:#cbd5e1;border-color:rgba(148,163,184,.4);background:rgba(148,163,184,.1)}
+.car{display:inline-block;white-space:nowrap;border-radius:999px;padding:1px 7px;font-size:10px;border:1px solid rgba(148,163,184,.35);color:#e2e8f0}
+.car.truck{border-color:rgba(251,146,60,.6);color:#fed7aa}.car.pickup{border-color:rgba(251,191,36,.5);color:#fde68a}.car.motorbike{border-color:rgba(45,212,191,.5);color:#99f6e4}
+.car.bicycle{border-color:rgba(134,239,172,.5);color:#bbf7d0}.car.boat{border-color:rgba(96,165,250,.6);color:#bfdbfe}.car.drone{border-color:rgba(192,132,252,.6);color:#e9d5ff}.car.none{border-color:rgba(239,68,68,.6);color:#fecaca}
 .blink{animation:blink 1.2s steps(2,start) infinite}
 @keyframes blink{to{visibility:hidden}}
 `;

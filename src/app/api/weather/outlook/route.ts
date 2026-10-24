@@ -1,0 +1,41 @@
+import { NextResponse } from "next/server";
+import { getWeather, outlookFor } from "@/lib/weather";
+
+export const runtime = "nodejs";
+
+// The government / dispatch summary: for every health post, is it flooded now, will it be in the
+// next two weeks, how much rain is coming, the malaria outlook six weeks out, and the day the
+// roads may close. Sources and a caveat ride along so the page can print them. See docs/WEATHER.md.
+
+export async function GET() {
+  try {
+    const w = await getWeather();
+    const posts = w.sites.flatMap((s) => {
+      const o = outlookFor(s, w);
+      if (!o) return [];
+      return [{
+        villageId: o.villageId, id: o.id, name: o.name, lat: o.lat, lng: o.lng, hub: o.hub,
+        floodRiskToday: o.floodRiskToday, floodRiskTodayReasons: o.floodRiskTodayReasons,
+        floodRisk14d: o.floodRisk14d, floodRisk14dReasons: o.floodRisk14dReasons,
+        cutOffRisk: o.cutOffRisk, cutOffDays: o.cutOffDays, cutOffDate: o.cutOffDate,
+        rainNext14Mm: o.rainNext14Mm, wettestForecastDayMm: o.wettestForecastDayMm, wettestForecastDate: o.wettestForecastDate,
+        rain72hMm: o.rain72hMm, rain7Mm: o.rain7Mm, rain30Mm: o.rain30Mm, meanTempC: o.meanTempC,
+        malariaOutlook6w: o.malariaOutlook6w, malariaReason: o.malariaReason,
+        rainNext14Days: o.rainNext14Days,
+        river: o.river, floodNow: o.floodNow,
+      }];
+    });
+    const missing = w.sites.length - posts.length;
+    return NextResponse.json({
+      posts,
+      sources: w.sources,
+      preliminary: w.preliminary,
+      errors: w.errors,
+      note: missing ? `${missing} posts have no forecast cell yet` : undefined,
+      fetchedAt: w.fetchedAt,
+      cached: true,
+    });
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : String(e), posts: [], sources: [], preliminary: "" }, { status: 502 });
+  }
+}

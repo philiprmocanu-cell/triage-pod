@@ -31,10 +31,15 @@ const COLOR: Record<string, string> = {
   Coordinator: "bg-emerald-600",
 };
 
+// The dispatch brain's own lines from the live network (agent_log in SpacetimeDB, or its file
+// until the module has `log_agent`), shown beside the simulator so both planners are visible.
+type DispatchLine = { id: number; at: string; village: string; text: string; where: "agent_log" | "file" };
+
 // Live view of the agents coordinating the pod network: who said what to whom, and what changed.
 export default function AgentsPage() {
   const [data, setData] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState("");
+  const [dispatch, setDispatch] = useState<DispatchLine[]>([]);
 
   const load = useCallback(async () => {
     const r = await fetch("/api/agents", { cache: "no-store" });
@@ -45,6 +50,12 @@ export default function AgentsPage() {
     const id = setInterval(load, 1500);
     return () => clearInterval(id);
   }, [load]);
+  useEffect(() => {
+    const read = () => fetch("/api/dispatch/log", { cache: "no-store" }).then((r) => r.json()).then((d: { lines?: DispatchLine[] }) => setDispatch(d.lines ?? [])).catch(() => {});
+    read();
+    const id = setInterval(read, 4000);
+    return () => clearInterval(id);
+  }, []);
 
   const act = async (body: object, label: string) => {
     setBusy(label);
@@ -118,6 +129,22 @@ export default function AgentsPage() {
         </section>
 
         <section className="space-y-4">
+          <Card title="Dispatch planner (live network, not the simulator)">
+            {dispatch.length ? (
+              <div className="max-h-64 space-y-1 overflow-y-auto">
+                {dispatch.slice(0, 12).map((l) => (
+                  <p key={`${l.where}-${l.id}`} className="py-1 text-sm">
+                    <span className="mr-1.5 inline-block rounded bg-orange-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">Dispatch</span>
+                    <span className="font-semibold">{l.village}</span>
+                    <span className="block text-xs text-slate-400">{l.text}</span>
+                    <span className="block text-[10px] text-slate-500">{new Date(l.at).toLocaleTimeString()} · {l.where === "agent_log" ? "agent_log" : "data/dispatch.json"}</span>
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">No shipments sent yet. On the government view, press Plan now, then Send all urgent or Send selected.</p>
+            )}
+          </Card>
           <Card title="Pods on watch (outbreak advisories)">
             {data?.advisories.length ? (
               data.advisories.map((a, i) => (

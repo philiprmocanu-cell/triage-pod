@@ -36,7 +36,9 @@ import {
 // Import all reducer arg schemas
 import AllocateReducer from "./allocate_reducer";
 import JoinCommunityReducer from "./join_community_reducer";
+import LogAgentReducer from "./log_agent_reducer";
 import OrderVaccinesReducer from "./order_vaccines_reducer";
+import PlanRouteReducer from "./plan_route_reducer";
 import PodHeartbeatReducer from "./pod_heartbeat_reducer";
 import RecordDoseReducer from "./record_dose_reducer";
 import RememberWordsReducer from "./remember_words_reducer";
@@ -50,12 +52,14 @@ import SetSimulationReducer from "./set_simulation_reducer";
 
 // Import all table schema definitions
 import AgentLogRow from "./agent_log_table";
+import CarrierRow from "./carrier_table";
 import CommunityMemberRow from "./community_member_table";
 import DeliveryOrderRow from "./delivery_order_table";
 import DialectWordRow from "./dialect_word_table";
 import PatientRow from "./patient_table";
 import PodRow from "./pod_table";
 import PopRow from "./pop_table";
+import RoutePlanRow from "./route_plan_table";
 import SettingsRow from "./settings_table";
 import StockRow from "./stock_table";
 import VillageRow from "./village_table";
@@ -77,6 +81,17 @@ const tablesSchema = __schema({
       { name: 'agent_log_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, AgentLogRow),
+  carrier: __table({
+    name: 'carrier',
+    indexes: [
+      { accessor: 'id', name: 'carrier_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'carrier_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, CarrierRow),
   communityMember: __table({
     name: 'community_member',
     indexes: [
@@ -149,6 +164,20 @@ const tablesSchema = __schema({
     ],
     event: true,
   }, PopRow),
+  routePlan: __table({
+    name: 'route_plan',
+    indexes: [
+      { accessor: 'id', name: 'route_plan_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'orderId', name: 'route_plan_order_id_idx_btree', algorithm: 'btree', columns: [
+        'orderId',
+      ] },
+    ],
+    constraints: [
+      { name: 'route_plan_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, RoutePlanRow),
   settings: __table({
     name: 'settings',
     indexes: [
@@ -216,7 +245,9 @@ const tablesSchema = __schema({
 const reducersSchema = __reducers(
   __reducerSchema("allocate", AllocateReducer),
   __reducerSchema("join_community", JoinCommunityReducer),
+  __reducerSchema("log_agent", LogAgentReducer),
   __reducerSchema("order_vaccines", OrderVaccinesReducer),
+  __reducerSchema("plan_route", PlanRouteReducer),
   __reducerSchema("pod_heartbeat", PodHeartbeatReducer),
   __reducerSchema("record_dose", RecordDoseReducer),
   __reducerSchema("remember_words", RememberWordsReducer),

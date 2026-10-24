@@ -197,6 +197,45 @@ const dialectWord = table(
   }
 );
 
+// The vehicles that actually move medicine in Eastern Province: ZAMMSA's hub trucks out of
+// Chipata, the district health offices' pickups, Community Health Assistants' motorbikes,
+// community health workers' bicycles, banana boats where the Luangwa cuts a post off, and
+// drones (seeded as a proposed partner: no drone fleet operates in Zambia today). Seeded by
+// `seed`, re-seeded by `resetDemo`; status flips out/idle as orders depart and arrive.
+const carrier = table(
+  { name: 'carrier', public: true },
+  {
+    id: t.u32().primaryKey(),
+    name: t.string(),
+    kind: t.string(), // truck | pickup | motorbike | bicycle | boat | drone
+    operator: t.string(), // ZAMMSA | District Health Office Katete | CHA ... | proposed partner
+    baseVillageId: t.u32(),
+    capacityKg: t.f64(),
+    speedKmh: t.u32(),
+    costPerKm: t.f64(), // ZMW per km, rough
+    status: t.string(), // idle | out | down
+  }
+);
+
+// A planned pathway for one delivery order: which carrier, the road it follows (JSON list of
+// [lat, lng]), how far and how long, the flood risk the weather check gave the legs, and why
+// it was chosen or re-routed. One plan per order; planning again replaces it.
+const routePlan = table(
+  { name: 'route_plan', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    orderId: t.u64().index('btree'),
+    carrierId: t.u32(),
+    waypoints: t.string(), // JSON [[lat,lng],...]
+    km: t.f64(),
+    minutes: t.u32(),
+    floodRisk: t.string(), // low | medium | high
+    status: t.string(), // planned | moving | done | rerouted
+    reason: t.string(),
+    createdAt: t.timestamp(),
+  }
+);
+
 const tickTimer = table(
   { name: 'tick_timer' },
   {
@@ -205,7 +244,7 @@ const tickTimer = table(
   }
 );
 
-const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, patient, communityMember, agentLog, settings, pod, visitRecord, dialectWord, tickTimer });
+const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, patient, communityMember, agentLog, settings, pod, visitRecord, dialectWord, carrier, routePlan, tickTimer });
 export default spacetimedb;
 
 const Need = t.object('Need', { item: t.string(), qty: t.u32() });
@@ -335,6 +374,52 @@ const PATIENTS = [
   { id: 24, name: 'Violet Kunda', villageId: 9, ageMonths: 228, sex: 'f', pregnant: true, notes: '1st pregnancy, 36 weeks', vaccinesGiven: 'TT1', lastVisit: 'Antenatal visit' },
 ];
 
+// Zambia's real last-mile fleet, by operator (sources in docs/ROUTES.md):
+// - ZAMMSA (Zambia Medicines and Medical Supplies Agency) runs regional hubs, Chipata among them,
+//   and trucks stock from the hub to district health offices and facilities; its last-mile
+//   distribution has been contracted through the USAID PASCO programme (Chemonics tenders).
+// - District Health Offices run the pickups (Land Cruiser / Hilux class) that reach rural posts.
+// - Community Health Assistants ride motorbikes; Riders for Health ran the Eastern Province fleet
+//   and its maintenance 2009-2016, the Ministry of Health keeps the model.
+// - Community health workers ride bicycles (World Bicycle Relief's Buffalo bicycle programmes).
+// - Banana boats cross the Luangwa where the rains cut posts off (Mambwe, Chama, Nyimba valley).
+// - Drones: no drone fleet operates in Zambia today (a 2017 Ministry trial never went live), so
+//   they are seeded as a proposed partner and only picked when nothing on the ground can go.
+const CARRIERS = [
+  { id: 1, name: 'ZAMMSA hub truck 1', kind: 'truck', operator: 'ZAMMSA', baseVillageId: 1, capacityKg: 3000, speedKmh: 50, costPerKm: 18 },
+  { id: 2, name: 'ZAMMSA hub truck 2', kind: 'truck', operator: 'ZAMMSA', baseVillageId: 1, capacityKg: 3000, speedKmh: 50, costPerKm: 18 },
+  { id: 3, name: 'ZAMMSA cold-chain van', kind: 'truck', operator: 'ZAMMSA', baseVillageId: 1, capacityKg: 1200, speedKmh: 55, costPerKm: 14 },
+  { id: 10, name: 'DHO pickup Chipata', kind: 'pickup', operator: 'District Health Office Chipata', baseVillageId: 1, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 11, name: 'DHO pickup Katete', kind: 'pickup', operator: 'District Health Office Katete', baseVillageId: 2, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 12, name: 'DHO pickup Petauke', kind: 'pickup', operator: 'District Health Office Petauke', baseVillageId: 3, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 13, name: 'DHO pickup Sinda', kind: 'pickup', operator: 'District Health Office Sinda', baseVillageId: 4, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 14, name: 'DHO pickup Nyimba', kind: 'pickup', operator: 'District Health Office Nyimba', baseVillageId: 5, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 15, name: 'DHO pickup Lundazi', kind: 'pickup', operator: 'District Health Office Lundazi', baseVillageId: 6, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 16, name: 'DHO pickup Chadiza', kind: 'pickup', operator: 'District Health Office Chadiza', baseVillageId: 7, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 17, name: 'DHO pickup Mambwe', kind: 'pickup', operator: 'District Health Office Mambwe', baseVillageId: 8, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 18, name: 'DHO pickup Vubwi', kind: 'pickup', operator: 'District Health Office Vubwi', baseVillageId: 9, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 19, name: 'DHO pickup Chama', kind: 'pickup', operator: 'District Health Office Chama', baseVillageId: 10, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 20, name: 'DHO pickup Lumezi', kind: 'pickup', operator: 'District Health Office Lumezi', baseVillageId: 11, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 21, name: 'DHO pickup Kasenengwa', kind: 'pickup', operator: 'District Health Office Kasenengwa', baseVillageId: 12, capacityKg: 800, speedKmh: 60, costPerKm: 9 },
+  { id: 30, name: 'CHA motorbike Katete', kind: 'motorbike', operator: 'CHA', baseVillageId: 2, capacityKg: 25, speedKmh: 45, costPerKm: 2.5 },
+  { id: 31, name: 'CHA motorbike Petauke', kind: 'motorbike', operator: 'CHA', baseVillageId: 3, capacityKg: 25, speedKmh: 45, costPerKm: 2.5 },
+  { id: 32, name: 'CHA motorbike Nyimba', kind: 'motorbike', operator: 'CHA', baseVillageId: 5, capacityKg: 25, speedKmh: 45, costPerKm: 2.5 },
+  { id: 33, name: 'CHA motorbike Lundazi', kind: 'motorbike', operator: 'CHA', baseVillageId: 6, capacityKg: 25, speedKmh: 45, costPerKm: 2.5 },
+  { id: 34, name: 'CHA motorbike Mfuwe', kind: 'motorbike', operator: 'CHA', baseVillageId: 8, capacityKg: 25, speedKmh: 45, costPerKm: 2.5 },
+  { id: 35, name: 'CHA motorbike Chama', kind: 'motorbike', operator: 'CHA', baseVillageId: 10, capacityKg: 25, speedKmh: 45, costPerKm: 2.5 },
+  { id: 36, name: 'CHA motorbike Chadiza', kind: 'motorbike', operator: 'CHA', baseVillageId: 7, capacityKg: 25, speedKmh: 45, costPerKm: 2.5 },
+  { id: 40, name: 'CHW bicycle Mphangwe', kind: 'bicycle', operator: 'Community health worker (Buffalo bicycle)', baseVillageId: 13, capacityKg: 10, speedKmh: 12, costPerKm: 0.2 },
+  { id: 41, name: 'CHW bicycle Minga', kind: 'bicycle', operator: 'Community health worker (Buffalo bicycle)', baseVillageId: 16, capacityKg: 10, speedKmh: 12, costPerKm: 0.2 },
+  { id: 42, name: 'CHW bicycle Egichikeni', kind: 'bicycle', operator: 'Community health worker (Buffalo bicycle)', baseVillageId: 23, capacityKg: 10, speedKmh: 12, costPerKm: 0.2 },
+  { id: 43, name: 'CHW bicycle Kakumbi', kind: 'bicycle', operator: 'Community health worker (Buffalo bicycle)', baseVillageId: 28, capacityKg: 10, speedKmh: 12, costPerKm: 0.2 },
+  { id: 44, name: 'CHW bicycle Mwami', kind: 'bicycle', operator: 'Community health worker (Buffalo bicycle)', baseVillageId: 32, capacityKg: 10, speedKmh: 12, costPerKm: 0.2 },
+  { id: 45, name: 'CHW bicycle Chikwa', kind: 'bicycle', operator: 'Community health worker (Buffalo bicycle)', baseVillageId: 35, capacityKg: 10, speedKmh: 12, costPerKm: 0.2 },
+  { id: 50, name: 'Banana boat Mfuwe (Luangwa)', kind: 'boat', operator: 'District Health Office Mambwe', baseVillageId: 8, capacityKg: 300, speedKmh: 15, costPerKm: 6 },
+  { id: 51, name: 'Banana boat Chama (Luangwa)', kind: 'boat', operator: 'District Health Office Chama', baseVillageId: 10, capacityKg: 300, speedKmh: 15, costPerKm: 6 },
+  { id: 60, name: 'Drone 1 (proposed)', kind: 'drone', operator: 'proposed partner', baseVillageId: 1, capacityKg: 1.8, speedKmh: 100, costPerKm: 3 },
+  { id: 61, name: 'Drone 2 (proposed)', kind: 'drone', operator: 'proposed partner', baseVillageId: 1, capacityKg: 1.8, speedKmh: 100, costPerKm: 3 },
+];
+
 // Doses are given one at a time per vaccine (four weeks apart): the earliest due dose of each.
 function nextDoses(due: { code: string; label: string; months: number; item: string }[]) {
   const seen = new Set<string>();
@@ -396,6 +481,7 @@ function seed(ctx: any) {
     }
   }
   for (const p of PATIENTS) ctx.db.patient.insert(p);
+  for (const c of CARRIERS) ctx.db.carrier.insert({ ...c, status: 'idle' });
   for (const m of SEED_COMMUNITY) ctx.db.communityMember.insert({ id: 0n, ...m, matchedWith: '', joinedAt: ctx.timestamp });
   ctx.db.settings.insert({ id: 1, simulate: false, simEverySeconds: 6, agents: false, lastAgentsRun: ctx.timestamp }); // nothing moves until a real pod visit, or the presenter switches the simulation / agents on
   ctx.db.tickTimer.insert({ scheduledId: 0n, scheduledAt: ScheduleAt.interval(1_000_000n) });
@@ -422,6 +508,14 @@ function findVillage(ctx: any, villageName: string) {
   const key = villageName.trim().toLowerCase();
   const hit = key && [...ctx.db.village.iter()].find((x: any) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0]));
   return hit ?? ctx.db.village.id.find(2);
+}
+
+// Same match, but 0 (the whole province) when the name is empty or matches nothing.
+function villageIdOrNone(ctx: any, villageName: string): number {
+  const key = villageName.trim().toLowerCase();
+  if (!key) return 0;
+  const hit = [...ctx.db.village.iter()].find((x: any) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0]));
+  return hit?.id ?? 0;
 }
 
 function placeOrder(ctx: any, o: { visitId: bigint; kind: string; patientName: string; to: any; from: any; item: string; qty: number }) {
@@ -647,6 +741,41 @@ export const joinCommunity = spacetimedb.reducer(
   }
 );
 
+// The route planner (src/app/api/routes/plan) decided how an order travels. One plan per order:
+// planning the same order again replaces the old plan, and counts as a re-route when the new
+// reason says so (it starts with "Rerouted"). Marks the carrier out from the moment the order is
+// already moving; otherwise `tick` does it when the order departs.
+export const planRoute = spacetimedb.reducer(
+  { orderId: t.u64(), carrierId: t.u32(), waypoints: t.string(), km: t.f64(), minutes: t.u32(), floodRisk: t.string(), reason: t.string() },
+  (ctx, { orderId, carrierId, waypoints, km, minutes, floodRisk, reason }) => {
+    const order = ctx.db.deliveryOrder.id.find(orderId);
+    if (!order) throw new Error(`Unknown order ${orderId}`);
+    if (!ctx.db.carrier.id.find(carrierId)) throw new Error(`Unknown carrier ${carrierId}`);
+    const old = [...ctx.db.routePlan.orderId.filter(orderId)];
+    for (const p of old) ctx.db.routePlan.id.delete(p.id);
+    // A carrier the order no longer uses goes back to idle unless something else of theirs is moving.
+    for (const p of old) {
+      if (p.carrierId === carrierId) continue;
+      const c = ctx.db.carrier.id.find(p.carrierId);
+      const busy = [...ctx.db.routePlan.iter()].some((q) => q.carrierId === p.carrierId && q.status === 'moving');
+      if (c && c.status === 'out' && !busy) ctx.db.carrier.id.update({ ...c, status: 'idle' });
+    }
+    const rerouted = /^rerouted/i.test(reason.trim()) || (old.length > 0 && old.some((p) => p.carrierId !== carrierId || p.waypoints !== waypoints));
+    const status = order.status === 'delivered' ? 'done' : order.status === 'on_the_way' ? 'moving' : rerouted ? 'rerouted' : 'planned';
+    ctx.db.routePlan.insert({ id: 0n, orderId, carrierId, waypoints, km, minutes, floodRisk, status, reason, createdAt: ctx.timestamp });
+    if (order.status === 'on_the_way') {
+      const c = ctx.db.carrier.id.find(carrierId);
+      if (c && c.status !== 'down') ctx.db.carrier.id.update({ ...c, status: 'out' });
+    }
+  }
+);
+
+// Any agent outside the module (dispatcher, route planner, weather) writes a line to the same log
+// the government view reads. Village 0 = the whole province.
+export const logAgent = spacetimedb.reducer({ agent: t.string(), villageName: t.string(), text: t.string() }, (ctx, { agent, villageName, text }) => {
+  log(ctx, agent || 'Agent', villageIdOrNone(ctx, villageName), text);
+});
+
 export const setSimulation = spacetimedb.reducer({ on: t.bool() }, (ctx, { on }) => {
   const s = ctx.db.settings.id.find(1);
   if (s) ctx.db.settings.id.update({ ...s, simulate: on });
@@ -676,6 +805,8 @@ export const resetDemo = spacetimedb.reducer((ctx) => {
   for (const s of [...ctx.db.settings.iter()]) ctx.db.settings.id.delete(s.id);
   for (const r of [...ctx.db.visitRecord.iter()]) ctx.db.visitRecord.id.delete(r.id);
   for (const p of [...ctx.db.pod.iter()]) ctx.db.pod.villageId.delete(p.villageId); // open pods come back on their next heartbeat
+  for (const r of [...ctx.db.routePlan.iter()]) ctx.db.routePlan.id.delete(r.id);
+  for (const c of [...ctx.db.carrier.iter()]) ctx.db.carrier.id.delete(c.id); // re-seeded idle at their bases
   for (const tm of [...ctx.db.tickTimer.iter()]) ctx.db.tickTimer.scheduledId.delete(tm.scheduledId);
   seed(ctx); // `dialect_word` stays: what a community calls things is knowledge, not demo state
 });
@@ -696,8 +827,21 @@ export const tick = spacetimedb.reducer({ onSchedule: tickTimer }, { timer: tick
       const src = stockRow(ctx, o.fromVillageId, o.item);
       if (src) ctx.db.stock.id.update({ ...src, qty: src.qty - o.qty });
       ctx.db.deliveryOrder.id.update({ ...o, status: 'on_the_way', departedAt: ctx.timestamp });
+      // The planned pathway (if the route planner made one) starts moving with its carrier.
+      for (const p of ctx.db.routePlan.orderId.filter(o.id)) {
+        ctx.db.routePlan.id.update({ ...p, status: 'moving' });
+        const c = ctx.db.carrier.id.find(p.carrierId);
+        if (c && c.status === 'idle') ctx.db.carrier.id.update({ ...c, status: 'out' });
+      }
     } else if (o.status === 'on_the_way' && o.departedAt && now - o.departedAt.microsSinceUnixEpoch > BigInt(o.travelSeconds) * 1_000_000n) {
       ctx.db.deliveryOrder.id.update({ ...o, status: 'delivered', deliveredAt: ctx.timestamp });
+      for (const p of ctx.db.routePlan.orderId.filter(o.id)) {
+        ctx.db.routePlan.id.update({ ...p, status: 'done' });
+        const c = ctx.db.carrier.id.find(p.carrierId);
+        // Back to idle once no other order of theirs is still moving.
+        const busy = [...ctx.db.routePlan.iter()].some((q) => q.id !== p.id && q.carrierId === p.carrierId && q.status === 'moving');
+        if (c && c.status === 'out' && !busy) ctx.db.carrier.id.update({ ...c, status: 'idle' });
+      }
       if (o.kind === 'restock') {
         const dst = stockRow(ctx, o.toVillageId, o.item);
         if (dst) ctx.db.stock.id.update({ ...dst, qty: dst.qty + o.qty });

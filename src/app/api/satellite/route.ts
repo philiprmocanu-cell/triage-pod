@@ -1,7 +1,8 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
-import { POSTS } from "@/lib/network";
+import { sites, type Site } from "@/lib/weather/sites";
+import { getWeather, outlookFor, type PostOutlook } from "@/lib/weather";
 
 export const runtime = "nodejs";
 
@@ -21,14 +22,19 @@ export const runtime = "nodejs";
 // finished record. Single day-values above SUSPECT_MM are left out of the totals and counted in
 // the source line, so a risk flag never rests on one bad pixel.
 
+// Forecast overlay (added 24 Oct 2026): every post also carries the next 16 days from Open-Meteo,
+// the last 7 days at same-day latency, the GloFAS river outlook and what NASA's flood map sees
+// right now, plus the six-week malaria outlook — see src/lib/weather and docs/WEATHER.md. Those
+// fields are merged in at answer time from their own 3-hour cache, so this route's POWER fields
+// are untouched and the page still gets them when the forecast services are down.
+
 type Day = { date: string; rainMm: number; tempC: number; suspect?: boolean };
-type Site = { villageId: number; id: string; name: string; lat: number; lng: number; hub: boolean };
 type CellWeather = { days: Day[]; rain30Mm: number; wettestDayMm: number; meanTempC: number; suspectDays: number; lastYearRain30Mm: number | null };
 export type PostWeather = Site & CellWeather & { malariaRisk: "low" | "medium" | "high"; floodRisk: boolean };
+export type PostForecast = Pick<PostOutlook, "rain7Mm" | "rain72hMm" | "rainNext14Mm" | "wettestForecastDayMm" | "wettestForecastDate" | "rainNext14Days" | "floodRiskToday" | "floodRisk14d" | "floodRisk14dReasons" | "cutOffRisk" | "cutOffDays" | "malariaOutlook6w" | "malariaReason"> & { floodNowPct: number | null; riverRiseRatio: number | null };
+export type PostSky = PostWeather & Partial<PostForecast>;
 
 const SUSPECT_MM = 150; // Zambia's wettest recorded days are around 200 mm; the grid average never gets near it
-const SPACETIME_HTTP = process.env.SPACETIME_HTTP ?? "http://127.0.0.1:3000";
-const SPACETIME_DB = process.env.SPACETIME_DB ?? "podnet";
 const DISK = () => path.join(process.env.DATA_DIR ?? "data", "satellite.json");
 
 let cache: { at: number; data: PostWeather[]; source: string } | null = null;
@@ -36,22 +42,25 @@ let cache: { at: number; data: PostWeather[]; source: string } | null = null;
 function ymd(d: Date) {
   return d.toISOString().slice(0, 10).replace(/-/g, "");
 }
-const short = (name: string) => name.replace(/ \(.*\)$/, "");
-const slug = (name: string) => short(name).toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
-// The 40 sites from the live database; the simulator's list if it does not answer.
-async function sites(): Promise<Site[]> {
+function forecastFields(o: PostOutlook): PostForecast {
+  return {
+    rain7Mm: o.rain7Mm, rain72hMm: o.rain72hMm, rainNext14Mm: o.rainNext14Mm, wettestForecastDayMm: o.wettestForecastDayMm, wettestForecastDate: o.wettestForecastDate, rainNext14Days: o.rainNext14Days,
+    floodRiskToday: o.floodRiskToday, floodRisk14d: o.floodRisk14d, floodRisk14dReasons: o.floodRisk14dReasons, cutOffRisk: o.cutOffRisk, cutOffDays: o.cutOffDays,
+    malariaOutlook6w: o.malariaOutlook6w, malariaReason: o.malariaReason,
+    floodNowPct: o.floodNow?.inside ? o.floodNow.floodPct : null, riverRiseRatio: o.river?.ratio ?? null,
+  };
+}
+
+// The POWER answer plus the forecast fields; the POWER answer alone if the forecast cache is empty.
+async function withForecast(posts: PostWeather[]): Promise<{ posts: PostSky[]; forecastSource: string[]; forecastNote: string; forecastErrors: Record<string, string> }> {
   try {
-    const res = await fetch(`${SPACETIME_HTTP}/v1/database/${SPACETIME_DB}/sql`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: "SELECT * FROM village", signal: AbortSignal.timeout(2500) });
-    if (!res.ok) throw new Error(`SpacetimeDB ${res.status}`);
-    const [table] = (await res.json()) as { schema: { elements: { name: { some: string } }[] }; rows: unknown[][] }[];
-    const col = table.schema.elements.map((e) => e.name.some);
-    const rows = table.rows.map((r) => Object.fromEntries(r.map((v, i) => [col[i], v])) as { id: number; name: string; lat: number; lng: number; hub: boolean });
-    if (rows.length) return rows.map((v) => ({ villageId: v.id, id: slug(v.name), name: v.name, lat: v.lat, lng: v.lng, hub: v.hub }));
-  } catch {
-    // fall through to the simulator's list
+    const w = await getWeather();
+    const posts2 = posts.map((p) => { const o = outlookFor(p, w); return o ? { ...p, ...forecastFields(o) } : p; });
+    return { posts: posts2, forecastSource: w.sources, forecastNote: w.preliminary, forecastErrors: w.errors };
+  } catch (e) {
+    return { posts, forecastSource: [], forecastNote: "", forecastErrors: { weather: e instanceof Error ? e.message : String(e) } };
   }
-  return POSTS.map((p, i) => ({ villageId: i + 1, id: p.id, name: p.name, lat: p.lat, lng: p.lng, hub: !!p.hub }));
 }
 
 // One POWER request per grid cell.
@@ -111,7 +120,7 @@ async function fromDisk(): Promise<{ at: number; data: PostWeather[]; source: st
 }
 
 export async function GET() {
-  if (cache && Date.now() - cache.at < 6 * 3600_000) return NextResponse.json({ posts: cache.data, source: cache.source, cached: true, fetchedAt: new Date(cache.at).toISOString() });
+  if (cache && Date.now() - cache.at < 6 * 3600_000) return NextResponse.json({ ...(await withForecast(cache.data)), source: cache.source, cached: true, fetchedAt: new Date(cache.at).toISOString() });
   const end = new Date();
   end.setUTCDate(end.getUTCDate() - 2); // POWER lags about two days
   const start = new Date(end);
@@ -131,7 +140,7 @@ export async function GET() {
   });
   if (!data.length) {
     const saved = cache ?? (await fromDisk());
-    if (saved) return NextResponse.json({ posts: saved.data, source: `${saved.source} (saved copy; NASA POWER is unreachable right now)`, cached: true, fetchedAt: new Date(saved.at).toISOString() });
+    if (saved) return NextResponse.json({ ...(await withForecast(saved.data)), source: `${saved.source} (saved copy; NASA POWER is unreachable right now)`, cached: true, fetchedAt: new Date(saved.at).toISOString() });
     return NextResponse.json({ error: "NASA POWER unreachable", posts: [], source: "" }, { status: 502 });
   }
   const failed = list.length - data.length;
@@ -145,5 +154,5 @@ export async function GET() {
   fs.mkdir(path.dirname(DISK()), { recursive: true })
     .then(() => fs.writeFile(DISK(), JSON.stringify(cache)))
     .catch(() => {});
-  return NextResponse.json({ posts: data, source, cached: false, fetchedAt: new Date(cache.at).toISOString() });
+  return NextResponse.json({ ...(await withForecast(data)), source, cached: false, fetchedAt: new Date(cache.at).toISOString() });
 }
