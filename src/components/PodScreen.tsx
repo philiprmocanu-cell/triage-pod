@@ -206,8 +206,7 @@ export default function PodScreen() {
         setLocale(r.locale);
       }
 
-      const nextIntake = { ...cur.intake };
-      if (r.answered?.startsWith("intake:") && r.patient_text) nextIntake[r.answered.slice(7) as keyof Intake] = r.patient_text;
+      const nextIntake = r.intake;
       setIntake(nextIntake);
 
       const nextTurns: Turn[] = [...cur.turns];

@@ -184,6 +184,16 @@ export async function step(input: StepInput): Promise<TriageResult> {
       };
     }
   }
+  // Skip intake questions the patient already answered on their own ("Rosa, from Cobán").
+  const ALREADY: Partial<Record<keyof Intake, string>> = {
+    community: "Has the patient already said which community, village or town they are from?",
+    who: "Has the patient already said who the visit is for and that person's age?",
+  };
+  if (conversation.length) {
+    for (const [f, question] of Object.entries(ALREADY)) {
+      if (!intake[f as keyof Intake]) q[`already_${f}`] = { type: "noul", instructions: `From the \`conversation\`: ${question}` };
+    }
+  }
   if (intake.consent) {
     q.consent = { type: "noul", instructions: "In `consent_answer`, did the person agree to have their name and health needs saved?" };
   }
@@ -203,6 +213,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
   }
 
   const asked = new Set(input.turns.filter((t) => t.role === "pod" && t.asks).map((t) => t.asks!));
+  for (const f of ["community", "who"] as const) {
+    if (noulOf(a[`already_${f}`]) >= 0.8) {
+      asked.add(`intake:${f}`);
+      intake[f] ??= patientText ?? [...input.turns].reverse().find((t) => t.role === "patient")?.text;
+    }
+  }
   const speechConfused = noulOf(a.speech_confused);
 
   const yes = {} as Record<FindingKey, number>;
@@ -346,6 +362,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     answered,
     next,
     consent: intake.consent ? noulOf(a.consent) : null,
+    intake,
     peer_group: {
       wants: yes.wants_peer_group >= YES && !facts.self_harm_thoughts,
       category: mental && mental.probability >= OPEN ? (mental.subtypes[0]?.name ?? null) : null,

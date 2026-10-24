@@ -84,6 +84,7 @@ export type TriageResult = {
   answered: Step | null; // which step the patient's latest words answered
   next: { asks: Step | null; text: string; english: string; test?: { id: string; label: string; seconds: number } } | null;
   consent: number | null; // probability the patient agreed to be saved (null = not asked yet)
+  intake: Intake; // intake answers so far, including ones given before they were asked
   peer_group: { wants: boolean; category: string | null };
   jev_ms: number;
 };
