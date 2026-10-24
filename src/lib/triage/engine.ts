@@ -224,7 +224,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // Skip intake questions the patient already answered on their own ("Rosa, from Cobán").
   const ALREADY: Partial<Record<keyof Intake, string>> = {
     community: "Has the patient already said which community, village or town they are from?",
-    who: "Has the patient already said who the visit is for and that person's age?",
+    who: "Is it already clear who the visit is for: the speaker themselves (\"I have...\" counts), or a child or other person they brought? Age is not required.",
   };
   const ALREADY_HISTORY: Record<string, string> = {
     onset: "Has the patient already said since when or for how long they have felt this way?",
@@ -475,7 +475,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const say = (asks: Step | null, t: { en: string; es: string }): TriageResult["next"] => ({ asks, text: t[language], english: t.en });
   const emergencySeen = EMERGENCY_SEEN.some((k) => (seen[k] ?? 0) >= YES);
   // Like a nurse: the complaint comes first; name, village and consent are taken at the end.
-  const intakeLater = !redRule && complaintKnown && INTAKE_FIELDS.some((f) => !asked.has(`intake:${f}`));
+  const intakeLater = !redRule && complaintKnown && INTAKE_FIELDS.some((f) => f !== "who" && !asked.has(`intake:${f}`));
+  const whoUnclear = !redRule && complaintKnown && !asked.has("intake:who");
   const podTurns = input.turns.filter((t) => t.role === "pod").length;
   const outOfTime = podTurns >= MAX_POD_TURNS; // the visit ends no matter what
   const medicalSteps = outOfTime ? MAX_STEPS : input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && !t.asks.startsWith("history:") && t.asks !== "open").length;
@@ -595,6 +596,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
     next = c === "UNCLEAR" ? say("open", RETELL) : { asks: "history:confirm", text: c.text, english: c.english };
   } else if (!redRule && confirmedWrong && retells < 2) {
     next = say("open", RETELL);
+  } else if (whoUnclear) {
+    // Who is this about? Needed now, not at the end: it decides the child questions.
+    next = say("intake:who", INTAKE.who);
   } else if (!redRule && historyWanted.some((f) => !asked.has(`history:${f}`))) {
     const f = historyWanted.find((x) => !asked.has(`history:${x}`))!;
     next = say(`history:${f}`, HISTORY[f]);
@@ -646,7 +650,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   if (!next && input.stage === "answer" && !redRule && complaintKnown && !asked.has("history:else") && !outOfTime) next = say("history:else", HISTORY.else);
   // Intake at the end: name, village, who it was for (if still unclear), consent to save.
   if (!next && input.stage === "answer" && intakeLater) {
-    const f = INTAKE_FIELDS.find((x) => !asked.has(`intake:${x}`))!;
+    const f = INTAKE_FIELDS.find((x) => x !== "who" && !asked.has(`intake:${x}`))!;
     next = say(`intake:${f}`, INTAKE[f]);
   }
   // Every adult who consented is invited to volunteer for others in their village, once, at the end.
