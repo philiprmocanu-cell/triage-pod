@@ -127,6 +127,12 @@ export async function planRoute(p: { orderId: bigint | number; carrierId: number
   await call("plan_route", [Number(p.orderId), p.carrierId, JSON.stringify(p.waypoints), p.km, Math.max(1, Math.round(p.minutes)), p.floodRisk, p.reason]);
 }
 
+// The dispatch planner sends stock to a post: one restock order, no visit. fromVillageId 0 lets
+// the module pick the source (idle surplus nearby, else the hub). The reason goes in the agent log.
+export async function restock(r: { toVillageId: number; fromVillageId?: number; item: string; qty: number; reason: string }) {
+  await call("restock", [r.toVillageId, r.fromVillageId ?? 0, r.item, Math.max(1, Math.round(r.qty)), r.reason]);
+}
+
 // One line in the agent log the government view and the live map read. `village` is matched
 // loosely like everywhere else ("Katete", "mfuwe"); "" means the whole province.
 export async function logAgent(agent: string, village: string, text: string) {

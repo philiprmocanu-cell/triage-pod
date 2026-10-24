@@ -504,18 +504,24 @@ function short(name: string) {
 }
 
 // The post a pod or patient names, loosely ("katete", "Chipata", "Mfuwe"). Katete when nothing matches.
-function findVillage(ctx: any, villageName: string) {
+// Exact name first (with or without the " (hub)" suffix, any case), so "Lumezi Mission" is
+// Lumezi Mission and not Lumezi; the loose includes-match only when nothing is exact.
+function matchVillage(ctx: any, villageName: string) {
   const key = villageName.trim().toLowerCase();
-  const hit = key && [...ctx.db.village.iter()].find((x: any) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0]));
-  return hit ?? ctx.db.village.id.find(2);
+  if (!key) return undefined;
+  const all = [...ctx.db.village.iter()];
+  const exact = all.find((x: any) => x.name.toLowerCase() === key || short(x.name).toLowerCase() === key);
+  if (exact) return exact;
+  return all.find((x: any) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0]));
+}
+
+function findVillage(ctx: any, villageName: string) {
+  return matchVillage(ctx, villageName) ?? ctx.db.village.id.find(2);
 }
 
 // Same match, but 0 (the whole province) when the name is empty or matches nothing.
 function villageIdOrNone(ctx: any, villageName: string): number {
-  const key = villageName.trim().toLowerCase();
-  if (!key) return 0;
-  const hit = [...ctx.db.village.iter()].find((x: any) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0]));
-  return hit?.id ?? 0;
+  return matchVillage(ctx, villageName)?.id ?? 0;
 }
 
 function placeOrder(ctx: any, o: { visitId: bigint; kind: string; patientName: string; to: any; from: any; item: string; qty: number }) {
@@ -767,6 +773,38 @@ export const planRoute = spacetimedb.reducer(
       const c = ctx.db.carrier.id.find(carrierId);
       if (c && c.status !== 'down') ctx.db.carrier.id.update({ ...c, status: 'out' });
     }
+  }
+);
+
+// The dispatch planner sends stock to a post: one restock order, no visit row. fromVillageId 0
+// lets the module pick the source the allocator would: a post holding idle surplus that is
+// nearer than the hub, else the hub. The stock leaves the source when the order departs (tick).
+export const restock = spacetimedb.reducer(
+  { toVillageId: t.u32(), fromVillageId: t.u32(), item: t.string(), qty: t.u32(), reason: t.string() },
+  (ctx, { toVillageId, fromVillageId, item, qty, reason }) => {
+    const to = ctx.db.village.id.find(toVillageId);
+    if (!to) throw new Error(`Unknown village ${toVillageId}`);
+    if (qty < 1) throw new Error('qty must be at least 1');
+    let from: any;
+    if (fromVillageId) {
+      from = ctx.db.village.id.find(fromVillageId);
+      if (!from) throw new Error(`Unknown village ${fromVillageId}`);
+      if (from.id === to.id) throw new Error('source and destination are the same post');
+    } else {
+      const hub = [...ctx.db.village.iter()].find((v: any) => v.hub);
+      if (!hub) throw new Error('No hub village');
+      const idle = [...ctx.db.village.iter()]
+        .filter((x: any) => !x.hub && x.id !== to.id && (stockRow(ctx, x.id, item)?.qty ?? 0) >= 2 * (MIN_STOCK[item] ?? 3) + qty && distanceKm(x, to) < distanceKm(hub, to))
+        .sort((a: any, b: any) => distanceKm(a, to) - distanceKm(b, to))[0];
+      from = idle ?? ((stockRow(ctx, hub.id, item)?.qty ?? 0) >= qty ? hub : undefined);
+      if (!from) {
+        log(ctx, 'Dispatch planner', to.id, `⚠ ${short(to.name)} needs ${qty} ${item} and nobody in the province has it. ${reason}`.trim());
+        return;
+      }
+    }
+    const { mode, etaMinutes } = placeOrder(ctx, { visitId: 0n, kind: 'restock', patientName: `${short(to.name)} health post`, to, from, item, qty });
+    ctx.db.pop.insert({ villageId: to.id, text: `+${qty} ${item} (restock)`, kind: 'restock' });
+    log(ctx, 'Dispatch planner', to.id, `${short(to.name)}: ${qty} ${item} by ${mode} from ${short(from.name)}, ~${etaMinutes} min. ${reason}`.trim());
   }
 );
 

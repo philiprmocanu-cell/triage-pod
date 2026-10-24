@@ -44,6 +44,7 @@ import RecordDoseReducer from "./record_dose_reducer";
 import RememberWordsReducer from "./remember_words_reducer";
 import ReportVisitReducer from "./report_visit_reducer";
 import ResetDemoReducer from "./reset_demo_reducer";
+import RestockReducer from "./restock_reducer";
 import SaveVisitRecordReducer from "./save_visit_record_reducer";
 import SetAgentsReducer from "./set_agents_reducer";
 import SetSimulationReducer from "./set_simulation_reducer";
@@ -253,6 +254,7 @@ const reducersSchema = __reducers(
   __reducerSchema("remember_words", RememberWordsReducer),
   __reducerSchema("report_visit", ReportVisitReducer),
   __reducerSchema("reset_demo", ResetDemoReducer),
+  __reducerSchema("restock", RestockReducer),
   __reducerSchema("save_visit_record", SaveVisitRecordReducer),
   __reducerSchema("set_agents", SetAgentsReducer),
   __reducerSchema("set_simulation", SetSimulationReducer),
