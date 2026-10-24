@@ -11,7 +11,10 @@ export const runtime = "nodejs";
 // asking about problems that aren't there.
 const CALIBRATE =
   "Look at the `frames` (a few seconds of camera pictures of a person at a health post, oldest first; each has the whole picture and, when present, a `face_closeup` of the same moment: use the close-up for anything about the face, eyes, lips or skin, the whole picture for posture, hands and who is there). Most people here are healthy, and a calm, neutral, tired or bored face is normal: answer no unless the sign is clearly there.";
-const FACE_CLEAR = 0.6; // below this the pictures aren't judged at all
+const LOOK_ONLY = "Look at the `frames` (camera pictures of a person at a health post, oldest first; each may have a `face_closeup` of the same moment: use it for the face).";
+const FACE_CLEAR = 0.6; // below this, face, eye and skin traits aren't judged
+const BODY_CLEAR = 0.6; // below this, posture and "who is here" traits aren't judged
+const BODY_GROUPS = new Set(["Pain & posture", "Who is here"]); // judged from the whole picture, face or not
 
 // Live physical scan: Jev checks every trait over the last few seconds of camera pictures, in one
 // request. Runs every few seconds while someone is in front of the pod.
@@ -32,24 +35,31 @@ export async function POST(req: Request) {
       type: "noul",
       instructions: "In the `frames`, is one person's face close to the camera and facing it: the face fills a good part of the picture (at least a fifth of its height), both eyes are visible, and it is lit well enough to judge skin colour? Someone far away, at the edge, side-on or in the background counts as no.",
     },
+    body_clear: {
+      type: "noul",
+      instructions: "In the `frames`, is the main person close enough that their posture, hands and upper body are clearly visible (they fill at least a third of the picture's height)? A small figure far away counts as no.",
+    },
   };
   for (const t of TRAITS) {
-    q[t.id] = { type: "noul", instructions: `${CALIBRATE} ${t.look}` };
+    // A drooping face is the one sign worth a false alarm (the smile test settles it next): no "assume healthy" lead-in.
+    q[t.id] = { type: "noul", instructions: `${t.id === "face_droop" ? LOOK_ONLY : CALIBRATE} ${t.look}` };
   }
   try {
     const a = await jev({ setting: "Patient sitting in front of a health pod camera.", frames: seq }, q, images);
     const person = noulOf(a.person_visible);
     const face = noulOf(a.face_clear);
+    const body = noulOf(a.body_clear);
     // Testing aid: keep the newest picture Jev judged and its answers (this computer only, overwritten each time).
     if (process.env.SCAN_DEBUG !== "0") {
       const dir = process.env.DATA_DIR ?? "data";
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(path.join(dir, "last-scan.jpg"), Buffer.from(frames[frames.length - 1].b64, "base64"));
-      await fs.writeFile(path.join(dir, "last-scan.json"), JSON.stringify({ at: new Date().toISOString(), person, face, answers: Object.fromEntries(TRAITS.map((t) => [t.id, noulOf(a[t.id])])) }, null, 1));
+      await fs.writeFile(path.join(dir, "last-scan.json"), JSON.stringify({ at: new Date().toISOString(), person, face, body, answers: Object.fromEntries(TRAITS.map((t) => [t.id, noulOf(a[t.id])])) }, null, 1));
     }
     const judged = person >= 0.5 && face >= FACE_CLEAR;
-    const traits = Object.fromEntries(TRAITS.map((t) => [t.id, judged ? noulOf(a[t.id]) : 0]));
-    return NextResponse.json({ person, face, judged, traits, ms: Date.now() - t0 });
+    const bodyJudged = person >= 0.5 && body >= BODY_CLEAR;
+    const traits = Object.fromEntries(TRAITS.map((t) => [t.id, (BODY_GROUPS.has(t.group) ? bodyJudged : judged) ? noulOf(a[t.id]) : 0]));
+    return NextResponse.json({ person, face, body, judged, bodyJudged, traits, ms: Date.now() - t0 });
   } catch (err) {
     console.error("scan failed", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Scan failed" }, { status: 500 });

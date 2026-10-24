@@ -107,6 +107,14 @@ const RULES: Rule[] = [
     test: (f) => (f.severe_bleeding ? "severe bleeding reported" : null),
   },
   {
+    id: "pregnancy_bleeding",
+    label: "Heavy bleeding in pregnancy",
+    urgency: "red",
+    source: "words",
+    resources: ["Emergency transport", "Blood (drone)", "Urgent referral to maternity unit"],
+    test: (f) => (f.pregnant && f.severe_bleeding ? "pregnant + heavy bleeding" : null),
+  },
+  {
     id: "pregnancy_danger",
     label: "Pregnancy danger sign (possible pre-eclampsia)",
     urgency: "red",
@@ -216,6 +224,14 @@ const RULES: Rule[] = [
     source: "words",
     resources: ["Antibiotic (doctor to choose)", "Oral rehydration salts"],
     test: (f) => (f.blood_in_stool ? "blood in stool" : null),
+  },
+  {
+    id: "wound_care",
+    label: "Wound that needs cleaning, closing and tetanus cover",
+    urgency: "yellow",
+    source: "words",
+    resources: ["Wound dressing kit", "Tetanus vaccine"],
+    test: (f) => (f.injury && !f.severe_bleeding && (f.deep_wound || f.dirty_wound || !f.tetanus_recent) ? [f.deep_wound && "deep or gaping", f.dirty_wound && "dirty or bite", !f.tetanus_recent && "no recent tetanus shot"].filter(Boolean).join(" + ") : null),
   },
   {
     id: "heart_rate_abnormal",

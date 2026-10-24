@@ -11,7 +11,7 @@ export type Trait = { id: string; group: string; label: string; look: string; fi
 
 export const TRAITS: Trait[] = [
   // Face and brain
-  { id: "face_droop", group: "Face & brain", label: "One side of face drooping", look: "Is one side of the face drooping (mouth corner or eyelid lower on one side)?", finding: "face_or_arm_weakness" },
+  { id: "face_droop", group: "Face & brain", label: "One side of face drooping", look: "Compare the two sides of the face: is one mouth corner, cheek or eyelid clearly lower, flatter or not moving like the other side, as in Bell's palsy or a stroke?", finding: "face_or_arm_weakness" },
   { id: "eyelid_droop", group: "Face & brain", label: "Drooping eyelid", look: "Is one eyelid clearly lower than the other?" },
   { id: "gaze_off", group: "Face & brain", label: "Eyes looking to one side", look: "Are both eyes fixed hard to one side in every picture, as if they cannot look the other way (not just glancing away or looking at a screen)?", hint: "stroke" },
   { id: "confused_look", group: "Face & brain", label: "Looks confused or disoriented", look: "Does the person look confused or disoriented?", hint: "stroke" },

@@ -272,7 +272,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const p = input.traits?.[t.id] ?? 0;
     if (t.finding) seen[t.finding] = Math.max(seen[t.finding] ?? 0, p);
     if (t.hint && p >= 0.6 && p > (hints[t.hint]?.p ?? 0)) hints[t.hint] = { p, why: t.label.toLowerCase() };
-    if (p >= 0.6 && NOTICED[t.id]) hunches.push({ trait: t.id, pathway: t.hint ?? null, finding: t.finding ?? null, p });
+    if (p >= (t.id === "face_droop" ? 0.45 : 0.6) && NOTICED[t.id]) hunches.push({ trait: t.id, pathway: t.hint ?? null, finding: t.finding ?? null, p });
   }
   if (input.camera.droop?.flagged) hunches.push({ trait: "face_droop", pathway: "stroke", finding: "face_or_arm_weakness", p: 0.8 });
   if (input.camera.smileTest === "asymmetric") seen.face_or_arm_weakness = Math.max(seen.face_or_arm_weakness ?? 0, 0.95);
@@ -414,6 +414,14 @@ export async function step(input: StepInput): Promise<TriageResult> {
       causes.push({ name, pathway: path.label, probability: p, urgency: sub.urgency, why: sub.description, evidence: [`safety rule: ${hit.evidence}`], against: [], early: false, confident: true });
     }
   }
+  // The same condition can live in two pathways (meningitis: fever and headache): keep one line.
+  for (let i = causes.length - 1; i >= 0; i--) {
+    const twin = causes.findIndex((c, j) => j < i && c.name === causes[i].name);
+    if (twin >= 0) {
+      if (causes[i].probability > causes[twin].probability) causes[twin] = { ...causes[i], evidence: [...new Set([...causes[twin].evidence, ...causes[i].evidence])] };
+      causes.splice(i, 1);
+    }
+  }
   causes.sort((x, y) => y.probability - x.probability);
 
   // A condition is only named when the evidence strongly supports it: a safety rule fired, or
@@ -525,6 +533,22 @@ export async function step(input: StepInput): Promise<TriageResult> {
         test: { id: def.id, label: def.label, seconds: def.seconds, prep: def.prep },
       };
     }
+  } else if (redRule && !strokeRed && !ruleHits.some((h) => h.id === "suicide_risk") && medicalSteps < 3) {
+    // Another emergency: help is called, and up to three danger-sign questions from the
+    // pathway the rule belongs to still get asked (fits, bleeding, can they drink), so the
+    // doctor arrives informed and the right pre-referral treatment is ordered.
+    const ids = new Set<string>(open.map((p) => p.id));
+    for (const h of ruleHits) if (RULE_PATHWAY[h.id]) ids.add(RULE_PATHWAY[h.id]);
+    const order: Step[] = [];
+    if (isChild) order.push("fever", "unable_to_drink", "seizure", "very_sleepy");
+    for (const id of ids) order.push(...stepsFor(id));
+    const pick = order.find((st) => !st.startsWith("test:") && !asked.has(st) && !known[st as FindingKey] && !(st === "pregnant" && !pregnancyPossible));
+    if (pick) {
+      const f = FINDINGS[pick as FindingKey];
+      const q = isChild && "askChild" in f ? f.askChild : f.ask;
+      const helpSaid = input.turns.some((t) => t.role === "pod" && (t.text.startsWith(HELP_NOW.en) || t.text.startsWith(HELP_NOW.es)));
+      next = { asks: pick, text: `${helpSaid ? "" : HELP_NOW[language] + " "}${q[language]}`, english: `${helpSaid ? "" : HELP_NOW.en + " "}${q.en}` };
+    }
   } else if (!redRule && needConfirm) {
     // Say back what we heard before reasoning on it.
     const said = patientText ?? [...input.turns].reverse().find((t) => t.role === "patient")?.text ?? "";
@@ -596,7 +620,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     if (noulOf(a.repeat_request) >= 0.6 && !repeatedAlready) {
       // Say it again once, in whatever language the patient is speaking now (they may have
       // just told us they don't understand the other one).
-      const canon = lastAsked ? textFor(lastAsked) : null;
+      const canon = lastAsked && lastAsked !== "history:confirm" ? textFor(lastAsked) : null; // the restatement is specific to this patient: say it again as it was
       next = { asks: lastAsked ?? null, text: `${CLARO[language]} ${canon ? canon[language] : stripPrefix(lastPod.text, language)}`, english: canon ? canon.en : (lastPod.english ?? lastPod.text) };
     } else if (speechTest && noulOf(a.speech_attempted) < 0.7 && !reAsked) {
       next = {
@@ -802,6 +826,23 @@ const RULE_CAUSE: Record<string, string> = {
   dehydration: "Some dehydration",
   dysentery: "Dysentery",
   kidney_infection: "Kidney infection",
+  wound_care: "Wound needing care",
+  pregnancy_bleeding: "Bleeding in pregnancy",
+};
+
+// Which pathway's danger-sign questions to keep asking once a safety rule has gone red.
+const RULE_PATHWAY: Record<string, string> = {
+  child_danger_sign: "fever",
+  seizure_any_age: "fever",
+  meningitis_signs: "fever",
+  severe_pneumonia: "breathing",
+  low_oxygen: "breathing",
+  severe_bleeding: "injury",
+  pregnancy_bleeding: "pregnancy",
+  pregnancy_danger: "pregnancy",
+  thunderclap_headache: "headache",
+  cardiac_chest_pain: "cardiac",
+  spinal_cord: "pain",
 };
 
 const UNSURE = "Not sure yet";

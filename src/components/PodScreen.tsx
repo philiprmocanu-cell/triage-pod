@@ -355,7 +355,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
         if (res.ok) {
           const d = await res.json();
           setTooFar(!d.judged && d.person >= 0.5);
-          if (d.judged) {
+          if (d.judged || d.bodyJudged) {
             setScanNow(d.traits);
             // Smoothed over scans: one flicker (a single 80% reading) only reaches 40%.
             setScanMax((m) => Object.fromEntries(TRAITS.map((x) => [x.id, 0.5 * (m[x.id] ?? 0) + 0.5 * (d.traits[x.id] ?? 0)])));

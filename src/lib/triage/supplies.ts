@@ -115,4 +115,7 @@ export const RULE_SUPPLIES: Record<string, Supply[]> = {
   dehydration: [{ item: "Oral rehydration salts", qty: 2 }, { item: "Zinc", qty: 1 }],
   dysentery: [{ item: "Oral rehydration salts", qty: 2 }],
   pneumonia: [{ item: "Amoxicillin", qty: 1 }],
+  child_danger_sign: [{ item: "Rectal artesunate", qty: 1 }, { item: "Ceftriaxone (pre-referral)", qty: 1 }],
+  wound_care: [{ item: "Wound dressing kit", qty: 1 }, { item: "Tetanus vaccine", qty: 1 }],
+  pregnancy_bleeding: [{ item: "Blood (O negative)", qty: 1 }],
 };
