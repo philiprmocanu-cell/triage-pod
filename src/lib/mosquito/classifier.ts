@@ -32,7 +32,10 @@ export type Classification = {
   error?: string;
 };
 
-const TOOLS = path.join(process.cwd(), "tools", "mosquito");
+// The dev server's cwd is not always the checkout (the rest of the app uses DATA_DIR for the same
+// reason), so: MOSQUITO_TOOLS, else next to DATA_DIR, else cwd.
+const ROOT = process.env.MOSQUITO_TOOLS ? path.dirname(path.dirname(process.env.MOSQUITO_TOOLS)) : process.env.DATA_DIR ? path.dirname(process.env.DATA_DIR) : process.cwd();
+const TOOLS = process.env.MOSQUITO_TOOLS ?? path.join(ROOT, "tools", "mosquito");
 const PYTHON = path.join(TOOLS, ".venv", "bin", "python");
 const SCRIPT = path.join(TOOLS, "classify.py");
 const TIMEOUT_MS = 90_000;

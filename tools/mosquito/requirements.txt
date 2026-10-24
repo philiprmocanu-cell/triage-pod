@@ -1,0 +1,8 @@
+# Python 3.9, macOS arm64. TensorFlow 2.15 is the last line with Keras 2, which the HumBug
+# .hdf5 models (saved by Keras 2.3.1) need; Keras 3 cannot read them.
+tensorflow==2.15.1
+librosa<0.11
+soundfile
+scipy
+numpy<2
+h5py

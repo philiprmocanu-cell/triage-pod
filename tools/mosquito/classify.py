@@ -149,19 +149,22 @@ def bnn_predict(model, X):
 
 
 def wingbeat_fft(y):
-    """Welch-averaged power spectrum; fundamental = strongest harmonic-product peak in 250–1000 Hz."""
+    """Welch-averaged power spectrum (2048-point FFT, ~3.9 Hz bins). The spectrum is whitened by a
+    running median so recorder rumble and room hum do not win; the fundamental is the strongest
+    harmonic-product peak in 300–1000 Hz (where mosquito wingbeats sit) and the harmonics are the
+    peaks near 2x, 3x, 4x of it, in dB relative to the fundamental."""
+    from scipy.ndimage import median_filter
     from scipy.signal import welch
 
     f, P = welch(y, fs=SR, nperseg=2048, noverlap=1536)
     P = P + 1e-12
-    band = (f >= 250) & (f <= 1000)
-    # harmonic product spectrum over 3 harmonics, interpolating the higher ones onto the base grid
-    hps = np.log(P[band])
+    floor = median_filter(P, size=51, mode="nearest")  # ~200 Hz wide running median
+    W = P / floor  # peakiness: how far each bin stands above its surroundings
+    band = (f >= 300) & (f <= 1000)
+    hps = np.log(W[band])
     for k in (2, 3):
-        hps = hps + np.log(np.interp(f[band] * k, f, P))
-    i = int(np.argmax(hps))
-    f0 = float(f[band][i])
-    # refine to the local peak of the raw spectrum within ±12 Hz
+        hps = hps + 0.5 * np.log(np.interp(f[band] * k, f, W))
+    f0 = float(f[band][int(np.argmax(hps))])
     near = (f >= f0 - 12) & (f <= f0 + 12)
     f0 = float(f[near][np.argmax(P[near])])
     p0 = float(P[near].max())
@@ -173,11 +176,11 @@ def wingbeat_fft(y):
         win = (f >= fk - 25) & (f <= fk + 25)
         pk = float(P[win].max())
         harmonics.append({"hz": round(float(f[win][np.argmax(P[win])])), "relativeDb": round(10 * np.log10(pk / p0), 1)})
-    total = float(P[f >= 50].sum())
-    ratio = float(P[band].sum() / total) if total > 0 else 0.0
+    audible = (f >= 150) & (f <= 3000)
+    ratio = float(P[band].sum() / P[audible].sum())
     return {
         "fundamentalHz": round(f0),
-        "fundamentalDbAboveMedian": round(10 * np.log10(p0 / float(np.median(P[f >= 50]))), 1),
+        "fundamentalDbAboveMedian": round(10 * np.log10(p0 / float(floor[near].max())), 1),
         "harmonics": harmonics,
         "bandEnergyRatio": round(ratio, 3),
     }

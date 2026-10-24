@@ -1,0 +1,5 @@
+# Recreate with ./setup.sh — the venv is ~1 GB and the MozzBNN clone ~530 MB (its demo WAVs).
+.venv/
+MozzBNN/
+HumBugDB/
+__pycache__/
