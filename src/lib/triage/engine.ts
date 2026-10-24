@@ -435,7 +435,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // calls for. Nothing is ordered for a guess.
   const orders: TriageResult["orders"] = [];
   for (const c of causes.filter((x) => x.confident)) for (const s of ordersFor([c.name])) addOrder(orders, { ...s, for: c.name });
-  for (const hit of ruleHits) for (const s of RULE_SUPPLIES[hit.id] ?? []) addOrder(orders, { ...s, for: hit.label });
+  const obstetric = ruleHits.some((h) => h.id === "pregnancy_bleeding");
+  for (const hit of ruleHits) {
+    if (obstetric && hit.id === "severe_bleeding") continue; // vaginal bleeding: blood and a maternity unit, not a dressing kit
+    for (const s of RULE_SUPPLIES[hit.id] ?? []) addOrder(orders, { ...s, for: hit.label });
+  }
 
   // Urgency comes from safety rules and strongly supported conditions only, never from guesses.
   const causeUrgency = causes.filter((c) => c.confident).map((c) => c.urgency);
