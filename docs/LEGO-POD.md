@@ -1,16 +1,14 @@
 # Triage Pod — the finger unit, built from the watch, no soldering
 
-What the pod is now (Philip, 2026-10-24): **the watch's parts, rebuilt at the venue from stock boards.** No camera on the pod: the laptop's own camera does the looking. The finger unit is the watch's XIAO nRF52840 Sense on a breadboard with the red MAX30101 sensor, on a USB cable to the laptop. The old Zoron camera pod stays whole and in its case; the spare brain board and the small OV3660 camera stay in the drawer.
+What the pod is now (Philip, 2026-10-24, 12:30): **the spare vision board with the watch's XIAO in its back, built at the venue from stock boards.** The spare Grove Vision AI V2 with its ribbon camera gives the pictures over its own USB cable; the watch's XIAO nRF52840 Sense sits in the vision board's back sockets, reads the red MAX30101 sensor, and sends the numbers over its own USB cable. The old Zoron camera pod stays whole and in its case; the small OV3660 camera board stays in the drawer (it does not fit the vision board).
 
 Rule check (Cal Hacks 13.0 Hacker Guide): "All projects must be started during the event." No soldering inside the venue. So: scissors at home, plugs at the table.
 
-The link: the XIAO nRF52840 has no Wi-Fi. It talks over the **USB cable** to the laptop. A small bridge program on the laptop (`hardware/pod-serial-bridge.py`) reads it and feeds the app; the kiosk URL stays `http://localhost:3418/kiosk?village=Katete` with the laptop webcam.
+The link: two USB cables. The vision board's cable carries pictures (`hardware/pod-camera-bridge.py` serves them at `localhost:3419/frame`); the XIAO's cable carries the numbers (`hardware/pod-serial-bridge.py` posts them to the app). No Wi-Fi, no hotspot. Kiosk: `http://localhost:3418/kiosk?village=Katete&pod=localhost:3419`.
 
 Picture booklet of every step below (Lego style, one action per page): `hardware/booklet/Triage Pod — From the Watch.pdf`, 23 pages, also on the Desktop. Pages 1–12 take the watch apart at home, 13–18 plug together at the table, 19–23 power up.
 
 Decisions taken 2026-10-24 (Philip: "that's it"): no screen on the pod, USB power only, the breadboard Philip owns (half-size), and **the sensor stays plugged into the DRV board: the DRV's four wires are cut off the XIAO's pin tops and pushed into the breadboard rows** (red 3V3, black GND, white D4, yellow D5). No new cable needed. The DRV just passes the sensor through.
-
-Open questions (answers change the pages, not the plan): is the sensor's four-colour cable soldered into its holes or plugged into its black socket; screen on the pod or not; battery or USB only. Below assumes: cable to be checked, no screen, USB only.
 
 ## What you take from the watch (at home, scissors only)
 
