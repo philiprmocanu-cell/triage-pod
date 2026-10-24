@@ -350,7 +350,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
       const evidence = keys.filter((k) => yes[k] >= YES).map((k) => `${FINDINGS[k].label} (${src(k)})`);
       if (hints[p.id]) evidence.push(`camera: ${hints[p.id].why}`);
       const against = keys.filter((k) => known[k] && yes[k] < 0.3 && asked.has(k)).map((k) => `no ${FINDINGS[k].label.toLowerCase()}`);
-      causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description, evidence, against, early: confidence < 0.8 });
+      causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description, evidence, against, early: confidence < 0.8, confident: false });
       for (const item of sdef.resources) need.set(item, 1 - (1 - (need.get(item) ?? 0)) * (1 - prob));
     }
   }
@@ -386,13 +386,20 @@ export async function step(input: StepInput): Promise<TriageResult> {
     } else {
       const path = PATHWAYS.find((d) => d.subtypes.some((x) => x.name === name))!;
       const sub = path.subtypes.find((x) => x.name === name)!;
-      causes.push({ name, pathway: path.label, probability: p, urgency: sub.urgency, why: sub.description, evidence: [`safety rule: ${hit.evidence}`], against: [], early: false });
+      causes.push({ name, pathway: path.label, probability: p, urgency: sub.urgency, why: sub.description, evidence: [`safety rule: ${hit.evidence}`], against: [], early: false, confident: true });
     }
   }
   causes.sort((x, y) => y.probability - x.probability);
 
-  // Urgency: any rule, or any red/yellow condition that is reasonably likely, can't be ruled out.
-  const causeUrgency = causes.filter((c) => c.probability >= 0.3).map((c) => c.urgency);
+  // A condition is only named when the evidence strongly supports it: a safety rule fired, or
+  // it is past the early stage, at least 70% likely, and backed by two separate findings.
+  for (const c of causes) {
+    const ruleBacked = c.evidence.some((e) => e.startsWith("safety rule"));
+    c.confident = ruleBacked || (!c.early && c.probability >= CONFIDENT && c.evidence.length >= 2);
+  }
+
+  // Urgency comes from safety rules and strongly supported conditions only, never from guesses.
+  const causeUrgency = causes.filter((c) => c.confident).map((c) => c.urgency);
   const urgency: Urgency = maxUrgency(...ruleHits.map((h) => h.urgency), ...causeUrgency);
   const redRule = ruleHits.some((h) => h.urgency === "red");
   const strokeRed = redRule && ruleHits.filter((h) => h.urgency === "red").every((h) => h.id.startsWith("stroke"));
@@ -527,7 +534,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         language,
         locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
         urgency,
-        likely: causes.slice(0, 3).map((c) => c.name),
+        likely: causes.filter((c) => c.confident).slice(0, 3).map((c) => c.name),
       });
     } catch {
       reply = HELP_COMING[language];
@@ -589,7 +596,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
             : "Nothing specific found yet → screening";
 
   const redHit = ruleHits.find((h) => h.urgency === "red");
-  const top = redHit?.label ?? (causes[0] ? `Most likely: ${causes[0].name} (${Math.round(causes[0].probability * 100)}%)` : ruleHits[0]?.label ?? "No danger signs found so far");
+  const sure = causes.find((c) => c.confident);
+  const top = redHit?.label ?? (sure ? `Most likely: ${sure.name}` : ruleHits[0]?.label ?? (complaintKnown ? "Still gathering information" : "No danger signs found so far"));
   const mental = pathways.find((p) => p.id === "mental");
 
   return {
@@ -645,6 +653,7 @@ const RULE_CAUSE: Record<string, string> = {
 };
 
 const UNSURE = "Not sure yet";
+const CONFIDENT = 0.7;
 
 const HELP_NOW = { en: "We are calling for help now. While it comes, let's do a few quick checks.", es: "Ya estamos pidiendo ayuda. Mientras llega, hagamos unas pruebas rápidas." };
 const SPEECH_AGAIN = { en: "This is just a quick speech check: please say these exact words back to me:", es: "Es solo una prueba rápida del habla: por favor repita exactamente estas palabras:" };

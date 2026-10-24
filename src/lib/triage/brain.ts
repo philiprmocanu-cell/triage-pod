@@ -35,7 +35,8 @@ export function handover(turns: Turn[], result: TriageResult): Promise<string> {
     age_group: result.age_group,
     seen_by_camera: Object.fromEntries(Object.entries(result.seen).filter(([, v]) => (v ?? 0) >= 0.6)),
     findings: result.findings.map((f) => `${f.label}: ${Math.round(f.yes * 100)}%`),
-    likely: result.causes.slice(0, 4).map((c) => `${c.name} ${Math.round(c.probability * 100)}%`),
+    likely: result.causes.filter((c) => c.confident).slice(0, 3).map((c) => c.name),
+    still_open: result.tree.map((p) => p.label),
     safety_rules: result.rule_hits.map((h) => `${h.label} (${h.evidence})`),
     supplies: result.resources.slice(0, 6).map((r) => r.item),
   };

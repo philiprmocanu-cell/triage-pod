@@ -576,8 +576,7 @@ function ResultPanel({
         seenTraits.slice(0, 6).map((t) => (
           <div key={t.id} className="flex flex-wrap items-center gap-2 py-1.5 text-sm">
             <span className="font-medium">{t.label}</span>
-            <span className="text-xs tabular-nums text-amber-300">{Math.round((scan[t.id] ?? 0) * 100)}%</span>
-            <span className="text-slate-500">→</span>
+            <span className="text-slate-500">→ ask about</span>
             {linkedConditions(t.id).map((c) => (
               <span key={c} className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-200">
                 {c}
@@ -604,7 +603,9 @@ function ResultPanel({
   }
 
   const u = URGENCY_STYLE[result.urgency];
-  const top = result.causes.slice(0, 3);
+  const top = result.causes.filter((c) => c.confident).slice(0, 3);
+  const exploring = result.tree.map((p) => p.label);
+  const stepsDone = result.tree.reduce((n, p) => n + p.steps.filter((s) => s.status === "yes" || s.status === "no").length, 0);
   const nextPath = result.tree.find((p) => p.steps.some((s) => s.status === "next"));
   return (
     <div className="space-y-4">
@@ -623,13 +624,20 @@ function ResultPanel({
         )}
       </div>
 
-      <Card title="Most likely conditions">
+      <Card title={top.length ? "Strongly supported" : "No conclusion yet"}>
         {top.length === 0 && (
-          <p className="text-sm text-slate-400">
-            {result.complaint_known
-              ? "Not enough information yet — the pod is asking more questions."
-              : "No assumptions yet. The pod first asks what brought the patient in."}
-          </p>
+          <div className="text-sm text-slate-400">
+            <p>
+              {result.complaint_known
+                ? "Still gathering information. Nothing is named until the evidence clearly points to it."
+                : "No assumptions yet. The pod first asks what brought the patient in."}
+            </p>
+            {exploring.length > 0 && (
+              <p className="mt-2">
+                Exploring: <span className="text-slate-200">{exploring.join(" · ")}</span> · {stepsDone} answers so far
+              </p>
+            )}
+          </div>
         )}
         {top.map((c, i) => (
           <div key={c.name} className={`rounded-xl p-3 ${i === 0 ? "bg-slate-800" : "mt-2 bg-slate-800/50"}`}>
@@ -665,7 +673,6 @@ function ResultPanel({
             <div key={p.id} className="mb-3 last:mb-0">
               <div className="flex items-baseline justify-between">
                 <p className="font-semibold">{p.label}</p>
-                <span className="text-xs tabular-nums text-slate-400">{Math.round(p.probability * 100)}%</span>
               </div>
               <p className="text-xs text-slate-400">IF {p.openedBy.join(" + ") || "complaint"}</p>
               <ol className="mt-1 space-y-0.5 border-l border-slate-700 pl-3">
@@ -681,14 +688,17 @@ function ResultPanel({
         </Card>
       )}
 
-      {result.resources.length > 0 && (
+      {(top.length > 0 || result.rule_hits.length > 0) && result.resources.some((r) => r.probability >= 0.6) && (
         <Card title="Have ready for this patient">
           <div className="flex flex-wrap gap-2">
-            {result.resources.slice(0, 8).map((r) => (
-              <span key={r.item} className="rounded-lg bg-slate-800 px-2.5 py-1 text-sm">
-                {r.item} <span className="text-xs text-slate-400">{Math.round(r.probability * 100)}% · {DELIVERY[r.delivery]}</span>
-              </span>
-            ))}
+            {result.resources
+              .filter((r) => r.probability >= 0.6)
+              .slice(0, 8)
+              .map((r) => (
+                <span key={r.item} className="rounded-lg bg-slate-800 px-2.5 py-1 text-sm">
+                  {r.item} <span className="text-xs text-slate-400">· {DELIVERY[r.delivery]}</span>
+                </span>
+              ))}
           </div>
         </Card>
       )}
@@ -739,7 +749,7 @@ function ResultPanel({
             <div className="mt-1 flex flex-wrap gap-2">
               {result.findings.map((f) => (
                 <span key={f.key} className={`rounded-full px-2.5 py-1 text-xs ${f.yes >= 0.6 ? "bg-sky-800 text-sky-100" : "bg-slate-800 text-slate-400"}`}>
-                  {f.label} {Math.round(f.yes * 100)}% · {f.source}
+                  {f.label} · {f.yes >= 0.6 ? "yes" : f.known ? "no" : "unclear"} · {f.source}
                 </span>
               ))}
             </div>

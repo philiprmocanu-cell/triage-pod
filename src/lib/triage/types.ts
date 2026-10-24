@@ -36,7 +36,7 @@ export type RuleHit = {
   resources: string[];
 };
 
-export type Cause = { name: string; pathway: string; probability: number; urgency: Urgency; why: string; evidence: string[]; against: string[]; early: boolean };
+export type Cause = { name: string; pathway: string; probability: number; urgency: Urgency; why: string; evidence: string[]; against: string[]; early: boolean; confident: boolean };
 
 export type Resource = {
   item: string;

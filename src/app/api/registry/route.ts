@@ -28,7 +28,7 @@ export async function POST(req: Request) {
     locale: result.locale,
     urgency: result.urgency,
     reason: result.reason,
-    causes: result.causes.slice(0, 3).map((c) => ({ name: c.name, probability: c.probability })),
+    causes: result.causes.filter((c) => c.confident).slice(0, 3).map((c) => ({ name: c.name, probability: c.probability })),
     resources: result.resources,
     mentalHealth: { category: result.peer_group.category, wantsPeerGroup: result.peer_group.wants },
     handover: null,
