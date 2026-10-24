@@ -60,6 +60,24 @@ Pin map of the XIAO nRF52840 Sense, USB-C pointing up, component side up: left c
 3. Optional Talk button: one jumper wire in the D0 row; touching its free end to a GND-row hole counts as a press. (Or a push button from the Arduino kit between D0 and GND.)
 4. Look before power: the red pin is in the 3V3 row, not 5V; no two pins share a row.
 
+## Camera (Philip, 12:30): the spare vision board, on its own USB cable
+
+The pod gets its eyes back: the **spare Grove Vision AI V2** with the ribbon camera from its box latched in. The laptop reads its pictures straight over the vision board's own USB-C (`hardware/pod-camera-bridge.py` asks it for a picture over and over and serves them at `http://localhost:3419/frame`). The watch's XIAO nRF52840 plugs into the vision board's back sockets, so the pod is one stack; the XIAO still reads the finger sensor and sends the numbers over ITS USB-C. Two USB cables to the laptop. The small OV3660 camera board does not fit the vision board's socket.
+
+With the XIAO seated, the breadboard is not needed. The sensor reaches the XIAO's D4/D5 through the vision board's white **Grove port** on its back: plug the Grove cable from the vision board's box into it, cut the other plug off, twist its four wires to the DRV's four wires colour to colour (red–red, black–black, white–white, yellow–yellow), tape each twist. Before power, one meter check: Grove white pin to the XIAO's D4 pin top beeps; Grove red pin to the XIAO's 3V3 pin top beeps. (The pages for this build are not drawn yet; the breadboard booklet still shows the finger side correctly: same four wires, same four XIAO pins.)
+
+Run, before the demo, two terminals:
+
+```bash
+python3 hardware/pod-camera-bridge.py
+```
+
+```bash
+python3 hardware/pod-serial-bridge.py
+```
+
+Kiosk: `http://localhost:3418/kiosk?village=Katete&pod=localhost:3419` (the software side confirms the exact address).
+
 ## Program, bridge, test
 
 1. USB-C cable from the laptop into the XIAO. Claude loads the program (`hardware/pod-nrf-firmware`, board Seeeduino:nrf52:xiaonRF52840Sense). The program prints one line a second: `{"finger":true,"hr":72,"spo2":98,"presses":0,"sensor":true}`.
