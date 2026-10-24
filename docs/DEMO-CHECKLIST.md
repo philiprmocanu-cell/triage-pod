@@ -12,9 +12,16 @@ Not done yet: flashing the firmware onto the XIAO and testing it on the real boa
 - [ ] Red MAX30101 finger sensor + its 4-wire Qwiic cable
 - [ ] A box, tape, a marker for the "Ponga su dedo aquí" sign
 
+**Power: your own battery**
+- [ ] The 1,200 mAh pod battery with its charger board + on/off switch (the same wiring your camera
+      pod already used) — roughly 3 hours with Wi-Fi + camera on. **Charge it fully tonight** (USB-C
+      into the charger board, switch OFF while charging).
+- [ ] The small watch battery (wired into the round screen) is only ~1 hour and would need
+      re-wiring: leave it in the watch.
+- [ ] Power bank only as a spare (optional)
+
 **Buy tonight if you don't have them**
-- [ ] USB power bank (5,000 mAh or more) — powers the pod
-- [ ] Two USB-C cables: one short for the power bank, one **data** cable for flashing (charge-only cables can't flash)
+- [ ] A USB-C **data** cable for flashing (charge-only cables can't flash)
 - [ ] Drugstore fingertip pulse oximeter (~$25) — backup reading and side-by-side proof on stage
 - [ ] Optional: ring light (~$25), speakerphone (~$60–100) for a loud room
 
@@ -33,7 +40,7 @@ Not done yet: flashing the firmware onto the XIAO and testing it on the real boa
 3. Wire camera + sensor, power from the laptop's USB, and check
    `http://triagepod.local/vitals` shows `"camera": true` and `"sensor": true`.
 4. Put a finger on the sensor: `/vitals` should show a pulse and oxygen after ~5–10 s.
-5. Switch to the power bank and check again.
+5. Unplug the USB, flip the pod's switch ON (battery) and check `/vitals` again.
 
 ## 3. At the venue (10 minutes)
 
