@@ -59,6 +59,13 @@ const ACCENTS: Record<string, string[]> = {
   "es-DO": ["dominican"],
   "es-ES": ["castilian"],
   "es-US": ["united-states-spanish", "mexican"],
+  // English: Cartesia has native South African, British, Indian and American voices; Zambia and
+  // West Africa get the nearest, South African.
+  "en-ZM": ["south-african", "british"],
+  "en-NG": ["south-african", "british"],
+  "en-IN": ["indian-english", "british"],
+  "en-GB": ["british"],
+  "en-US": ["general-american"],
 };
 
 // Cartesia's speech engine accepts only these Spanish regions; the voice carries the accent.

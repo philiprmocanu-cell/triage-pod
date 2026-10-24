@@ -12,7 +12,7 @@ import TeachAccent from "./TeachAccent";
 type Region = { id: string; name: string; locale: string; languages: string[] };
 
 const REGIONS: Region[] = [
-  { id: "zm", name: "Rural Zambia (Eastern Province)", locale: "en-US", languages: ["en", "es"] },
+  { id: "zm", name: "Rural Zambia (Eastern Province)", locale: "en-ZM", languages: ["en", "es"] },
   { id: "gt", name: "Rural Guatemala", locale: "es-GT", languages: ["es", "en"] },
   { id: "bo", name: "Rural Bolivia", locale: "es-BO", languages: ["es", "en"] },
   { id: "pe", name: "Andean Peru", locale: "es-PE", languages: ["es", "en"] },

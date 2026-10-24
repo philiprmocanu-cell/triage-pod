@@ -493,6 +493,10 @@ export const LOCALES = {
   "es-EC": "Ecuadorian Spanish (guagua, chuta, ¿ya?, mande)",
   "es-ES": "Spain Spanish (vosotros, vale, tío)",
   "es-US": "Other or neutral Latin American Spanish",
-  "en-US": "English",
+  "en-ZM": "Zambian / Southern African English (running stomach, 'me I am', 'is it?', 'now now', BP for blood pressure, sugar for diabetes)",
+  "en-NG": "Nigerian / West African English (body is hot, stooling, purging, catarrh, pikin, 'abi')",
+  "en-IN": "Indian English (loose motions, paining, giddiness, 'only', 'itself')",
+  "en-GB": "British English (poorly, tummy bug, GP, 'I feel rough')",
+  "en-US": "American or other English",
 } as const;
 export type LocaleKey = keyof typeof LOCALES;

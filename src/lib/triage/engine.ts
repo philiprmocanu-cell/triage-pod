@@ -711,7 +711,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // community taught the pod on earlier visits.
   const patientWords = [...input.turns.filter((t) => t.role === "patient").map((t) => t.text), ...(patientText ? [patientText] : [])];
   const lexicon: Lexicon = { ...(await communityLexicon(intake.community)), ...learnFrom(patientWords) };
-  if (next && language === "es") next = { ...next, text: speakLike(next.text, lexicon) };
+  if (next) next = { ...next, text: speakLike(next.text, lexicon) }; // the patient's own words, in either language
 
   // Say it like a nurse who has been listening. Safety wording stays exactly as written: tests,
   // the speech check, the suicide question, re-asks, answers to the patient's own questions and

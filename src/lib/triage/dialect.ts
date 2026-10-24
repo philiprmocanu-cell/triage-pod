@@ -17,6 +17,13 @@ export const CONCEPTS: Record<string, Concept> = {
   now: { default: "ahorita", variants: ["ahorita", "ahora", "ahoritita"] },
   talk: { default: "platicar", variants: ["platicar", "conversar", "hablar", "charlar"] },
   dizzy: { default: "mareado", variants: ["mareado", "mareada", "atarantado", "zonzo"] },
+  // English, the way it is spoken in Zambia, Nigeria, India and Britain.
+  diarrhea_en: { default: "diarrhea", variants: ["running stomach", "runny stomach", "loose motions", "stooling", "purging", "runny tummy", "the runs"] },
+  fever_en: { default: "fever", variants: ["temperature", "hot body", "high temperature", "fever"] },
+  belly_en: { default: "belly", variants: ["tummy", "stomach", "belly"] },
+  child_en: { default: "child", variants: ["kid", "baby", "little one", "pikin", "small one", "child"] },
+  dizzy_en: { default: "dizzy", variants: ["giddy", "light-headed", "dizzy"] },
+  hurts_en: { default: "hurt", variants: ["paining", "pains", "hurt"] },
 };
 
 export type Lexicon = Partial<Record<string, string>>; // concept -> the patient's own word
