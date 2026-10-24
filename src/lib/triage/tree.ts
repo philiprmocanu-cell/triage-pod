@@ -123,6 +123,13 @@ export const FINDINGS = {
     label: "Lonely or isolated",
     ask: { en: "How often do you feel alone, left out, or without people to talk to?", es: "¿Qué tan seguido se siente solo, apartado o sin con quién platicar?" },
   },
+  voice_consent: {
+    label: "Lets the pod learn their way of speaking",
+    ask: {
+      en: "May the pod learn your way of speaking, so it talks to your neighbours the way you do? Only the sound of your voice; never what you said.",
+      es: "¿Permite que el asistente aprenda su manera de hablar, para hablarle a sus vecinos como usted? Solo el sonido de su voz; nunca lo que dijo.",
+    },
+  },
   volunteer: {
     label: "Wants to volunteer for others",
     ask: {

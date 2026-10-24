@@ -180,3 +180,20 @@ export function speakWithBrowser(text: string, locale: string): Promise<void> {
     speechSynthesis.speak(u);
   });
 }
+
+// Join several of the pod's own 16 kHz mono WAV recordings into one clip (for voice learning).
+export function mergeWavs(blobsData: ArrayBuffer[]): Blob {
+  const parts = blobsData.map((b) => b.slice(44));
+  const total = parts.reduce((n, p) => n + p.byteLength, 0);
+  const out = new ArrayBuffer(44 + total);
+  const v = new DataView(out);
+  const w = (o: number, s: string) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); v.setUint32(4, 36 + total, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, total, true);
+  let off = 44;
+  for (const p of parts) {
+    new Uint8Array(out, off, p.byteLength).set(new Uint8Array(p));
+    off += p.byteLength;
+  }
+  return new Blob([out], { type: "audio/wav" });
+}

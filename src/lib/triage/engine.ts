@@ -653,6 +653,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const f = INTAKE_FIELDS.find((x) => x !== "who" && !asked.has(`intake:${x}`))!;
     next = say(`intake:${f}`, INTAKE[f]);
   }
+  // With consent given, the pod asks once whether it may learn the patient's way of speaking.
+  if (!next && input.stage === "answer" && !redRule && complaintKnown && asked.has("intake:consent") && !asked.has("voice_consent") && !isChild && noulOf(a.consent) >= 0.6) next = say("voice_consent", FINDINGS.voice_consent.ask);
   // Every adult who consented is invited to volunteer for others in their village, once, at the end.
   if (!next && input.stage === "answer" && !redRule && complaintKnown && !asked.has("volunteer") && !isChild && (intake.consent ?? "") !== "" && !facts.self_harm_thoughts) next = say("volunteer", FINDINGS.volunteer.ask);
   const done = input.stage === "answer" && !next;
@@ -864,6 +866,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     answered,
     next,
     consent: intake.consent ? noulOf(a.consent) : null,
+    voice_consent: yes.voice_consent >= YES,
     intake,
     lexicon,
     tree,

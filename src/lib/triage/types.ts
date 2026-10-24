@@ -84,6 +84,7 @@ export type TriageResult = {
   answered: Step | null; // which step the patient's latest words answered
   next: { asks: Step | null; text: string; english: string; test?: { id: string; label: string; seconds: number; prep: number } } | null;
   consent: number | null; // probability the patient agreed to be saved (null = not asked yet)
+  voice_consent: boolean; // the patient said the pod may learn their way of speaking
   intake: Intake; // intake answers so far, including ones given before they were asked
   lexicon: Partial<Record<string, string>>; // regional words learned from this patient / community
   // The decision logic, made visible: each open pathway, why it opened, and each step's status.

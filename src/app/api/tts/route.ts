@@ -4,9 +4,9 @@ import { cartesia, pickVoice, TTS_MODEL, ttsLocale } from "@/lib/cartesia";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const { text, locale } = (await req.json()) as { text: string; locale: string };
+  const { text, locale, community } = (await req.json()) as { text: string; locale: string; community?: string };
   try {
-    const voice = await pickVoice(locale);
+    const voice = await pickVoice(locale, community);
     const res = await cartesia().tts.generate({
       model_id: TTS_MODEL,
       transcript: text,

@@ -36,9 +36,12 @@ export async function forgetClonedVoice(locale: string) {
   delete all[locale];
   await fs.writeFile(voicesFile(), JSON.stringify(all, null, 2));
 }
-export async function clonedVoice(locale: string) {
-  return (await readCloned())[locale] ?? null;
+export async function clonedVoice(locale: string, community?: string) {
+  const all = await readCloned();
+  const key = community ? `${locale}@${community.trim().toLowerCase()}` : null;
+  return (key && all[key]) || all[locale] || null;
 }
+export const voiceKey = (locale: string, community?: string) => (community ? `${locale}@${community.trim().toLowerCase()}` : locale);
 
 // The patient's dialect -> the Cartesia accents to look for, closest first. Cartesia has native
 // Mexican, Panamanian, Colombian, Argentinian, Dominican, Bolivian (camba) and Spain voices;
@@ -108,9 +111,9 @@ async function savePick(v: PickedVoice) {
 }
 
 // Find the voice that sounds most like the patient's region. A warm female voice by default.
-export async function pickVoice(locale: string): Promise<PickedVoice> {
-  const cloned = await clonedVoice(locale);
-  if (cloned) return { ...cloned, locale, match: "taught by a local speaker" };
+export async function pickVoice(locale: string, community?: string): Promise<PickedVoice> {
+  const cloned = await clonedVoice(locale, community);
+  if (cloned) return { ...cloned, locale, match: cloned.name.includes("learned") ? "learned from a patient here" : "taught by a local speaker" };
   const remembered = (await readPicks())[locale];
   if (remembered) return remembered;
   const picked = await pickFromCatalog(locale);

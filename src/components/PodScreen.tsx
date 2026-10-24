@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listenForUtterance, playBlob, speakWithBrowser } from "@/lib/audio";
+import { listenForUtterance, mergeWavs, playBlob, speakWithBrowser } from "@/lib/audio";
 import { PATHWAYS, type Lang } from "@/lib/triage/tree";
 import { TRAITS, TraitScan } from "@/lib/triage/traits";
 import type { CameraSignals, Frame, Intake, Seen, SpeechStats, TestResults, TriageResult, Turn, Urgency } from "@/lib/triage/types";
@@ -64,6 +64,10 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
   const [seen, setSeen] = useState<Seen>({});
   const [tests, setTests] = useState<TestResults>({});
   const [intake, setIntake] = useState<Intake>({});
+  // Voice learning: the patient's own recordings this visit, cloned into the village's voice once
+  // they say yes to "may the pod learn your way of speaking".
+  const clips = useRef<ArrayBuffer[]>([]);
+  const learned = useRef(false);
   const [language, setLanguage] = useState<Lang | null>(null);
   const [locale, setLocale] = useState<string | null>(null);
   const [camera, setCamera] = useState<LiveCamera | null>(null);
@@ -117,13 +121,13 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
   };
 
   const speak = useCallback(
-    async (text: string, loc: string) => {
+    async (text: string, loc: string, community?: string) => {
       setStatus("speaking");
       if (services.cartesia) {
         const res = await fetch("/api/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, locale: loc }),
+          body: JSON.stringify({ text, locale: loc, community }),
         });
         if (res.ok) {
           setVoiceInfo(`${decodeURIComponent(res.headers.get("X-Voice-Name") ?? "")} · ${res.headers.get("X-Voice-Match")} match`);
@@ -250,7 +254,24 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
           .then((d) => setSaved({ name: d.name, community: d.community, handover: d.handover }))
           .catch(() => {});
       }
-      if (r.next) await speak(r.next.text, loc);
+      // They said the pod may learn their way of speaking: clone this visit's recordings into the
+      // village's voice, so the very next sentence (and every later patient here) hears it.
+      const community = village ?? nextIntake.community;
+      if (r.voice_consent && !learned.current && clips.current.length) {
+        learned.current = true;
+        try {
+          const form = new FormData();
+          form.append("clip", mergeWavs(clips.current), "patient.wav");
+          form.append("locale", loc);
+          if (community) form.append("community", community);
+          form.append("name", `${community ?? "Village"} voice (learned)`);
+          const res = await fetch("/api/clone", { method: "POST", body: form });
+          if (res.ok) setVoiceInfo(`Learned this visit: ${(await res.json()).name}`);
+        } catch {
+          /* the catalog voice carries on */
+        }
+      }
+      if (r.next) await speak(r.next.text, loc, community);
       askedAt.current = now();
 
       if (r.next?.test && !r.done) {
@@ -291,6 +312,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     setStatus("listening");
     const wav = await listenForUtterance({ signal: ctl.signal, waitMs: 15000, onLevel: (l) => setLevel(l) });
     if (ctl.signal.aborted) return;
+    if (wav && wav.size > 48_000) clips.current.push(await wav.arrayBuffer()); // 1.5 s or more of real speech
     if (!wav) {
       setStatus("idle"); // nobody spoke: the mic button starts listening again
       return;
@@ -345,6 +367,8 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     setScanNow({});
     setScanMax({});
     cam.current?.reset();
+    clips.current = [];
+    learned.current = false;
   };
 
   // Live physical scan: every few seconds while someone is in front of the pod, Jev checks every
