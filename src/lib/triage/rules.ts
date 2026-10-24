@@ -244,3 +244,22 @@ export function runRules(findings: Findings, camera: CameraSignals): RuleHit[] {
 export function maxUrgency(...levels: Urgency[]): Urgency {
   return levels.reduce((a, b) => (URGENCY_RANK[b] > URGENCY_RANK[a] ? b : a), "green");
 }
+
+// Measured vitals typed in by the health worker (pulse oximeter, thermometer, BP cuff, glucometer).
+// Measurements beat anything the camera or the conversation can suggest.
+export function vitalsRules(v: { spo2?: number; tempC?: number; sys?: number; dia?: number; glucose?: number }, f: Findings): RuleHit[] {
+  const hits: RuleHit[] = [];
+  const add = (id: string, label: string, urgency: Urgency, evidence: string, resources: string[]) =>
+    hits.push({ id, label, urgency, source: "words", evidence: `measured: ${evidence}`, resources });
+  if (v.spo2 != null && v.spo2 < 90) add("low_oxygen", "Low oxygen level", "red", `SpO2 ${v.spo2}%`, ["Oxygen", "Urgent referral"]);
+  else if (v.spo2 != null && v.spo2 < 94) add("borderline_oxygen", "Borderline oxygen level", "yellow", `SpO2 ${v.spo2}%`, ["Pulse oximeter check", "Doctor review"]);
+  if (v.tempC != null && v.tempC >= 40) add("very_high_fever", "Very high fever", "yellow", `${v.tempC} °C`, ["Paracetamol", "Malaria rapid test"]);
+  if (v.sys != null && v.dia != null) {
+    if (v.sys >= 160 || v.dia >= 110) add("severe_hypertension", f.pregnant ? "Severe high blood pressure in pregnancy (pre-eclampsia)" : "Severe high blood pressure", "red", `BP ${v.sys}/${v.dia}`, ["Blood pressure check", "Urgent referral"]);
+    else if (v.sys >= 140 || v.dia >= 90) add("high_bp", "High blood pressure", f.pregnant ? "red" : "yellow", `BP ${v.sys}/${v.dia}`, ["Doctor review"]);
+    else if (v.sys < 90) add("low_bp", "Low blood pressure (possible shock)", "red", `BP ${v.sys}/${v.dia}`, ["IV fluids (referral)", "Urgent referral"]);
+  }
+  if (v.glucose != null && v.glucose < 70) add("low_sugar", "Low blood sugar", "red", `glucose ${v.glucose} mg/dL`, ["Oral glucose", "Blood glucose check"]);
+  else if (v.glucose != null && v.glucose > 300) add("high_sugar", "Very high blood sugar", "yellow", `glucose ${v.glucose} mg/dL`, ["Doctor review"]);
+  return hits;
+}

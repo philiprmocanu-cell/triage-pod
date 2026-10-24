@@ -13,7 +13,8 @@ import { postFor } from "../network";
 import { confirmComplaint, followUpQuestion, replyToPatient } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { NOTICED, TRAITS, TraitScan } from "./traits";
-import { maxUrgency, runRules } from "./rules";
+import { getVitals } from "../session";
+import { maxUrgency, runRules, vitalsRules } from "./rules";
 import {
   CLOSING,
   CLOSING_SUICIDE_RISK,
@@ -367,7 +368,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const facts = Object.fromEntries(FINDING_KEYS.map((k) => [k, yes[k] >= YES])) as unknown as Findings;
   facts.age_group = age;
   facts.weakness_reported = saidYes.face_or_arm_weakness >= YES; // the camera alone never counts as reported weakness
-  const ruleHits = runRules(facts, input.camera);
+  // Measured vitals (typed in by the health worker) join the safety rules.
+  const vitals = getVitals();
+  if (vitals.tempC != null && vitals.tempC >= 38) facts.fever = true;
+  const ruleHits = [...vitalsRules(vitals, facts), ...runRules(facts, input.camera)].sort((x, y) => URGENCY_RANK_LOCAL[y.urgency] - URGENCY_RANK_LOCAL[x.urgency]);
   for (const hit of ruleHits) {
     const p = hit.urgency === "red" ? 0.9 : 0.7;
     for (const item of hit.resources) {
@@ -679,6 +683,8 @@ const RULE_CAUSE: Record<string, string> = {
   spinal_cord: "Spinal cord compression",
   pregnancy_danger: "Pre-eclampsia",
   thunderclap_headache: "Bleeding in the brain",
+  low_oxygen: "Severe pneumonia",
+  low_sugar: "Low blood sugar",
   meningitis_signs: "Meningitis",
   dehydration: "Some dehydration",
   dysentery: "Dysentery",
@@ -686,6 +692,7 @@ const RULE_CAUSE: Record<string, string> = {
 };
 
 const UNSURE = "Not sure yet";
+const URGENCY_RANK_LOCAL: Record<Urgency, number> = { green: 0, yellow: 1, red: 2 };
 const ADVISORY_FIRST: Record<"malaria" | "diarrhea" | "respiratory", FindingKey> = { malaria: "fever", diarrhea: "diarrhea", respiratory: "cough" };
 const CONFIDENT = 0.7;
 

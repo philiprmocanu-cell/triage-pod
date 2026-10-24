@@ -46,7 +46,7 @@ const FRAME_EVERY_MS = 1000;
 const FRAME_KEEP = 12;
 const now = () => performance.now() / 1000;
 
-export default function PodScreen() {
+export default function PodScreen({ kiosk = false }: { kiosk?: boolean }) {
   const [region, setRegion] = useState(REGIONS[0]);
   const [status, setStatus] = useState<Status>("ready");
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -376,6 +376,95 @@ export default function PodScreen() {
   const busy = ["looking", "transcribing", "thinking", "speaking", "testing"].includes(status);
   const canAnswer = !busy && status !== "done" && status !== "ready";
 
+  // Share the live visit with the health worker's screen (/staff).
+  useEffect(() => {
+    const id = setTimeout(() => {
+      fetch("/api/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: { turns, result, tests, intake, scan: scanAvg, scanMs, status, faceVisible, heartRate: camera?.heartRateBpm ?? null, saved } }),
+      }).catch(() => {});
+    }, 300);
+    return () => clearTimeout(id);
+  }, [turns, result, tests, intake, scanAvg, scanMs, status, faceVisible, camera?.heartRateBpm, saved]);
+
+  // Hardware pod: one big button (sends Space) starts or talks; N = new patient; F = full screen.
+  useEffect(() => {
+    if (!kiosk) return;
+    let lock: { release: () => Promise<void> } | null = null;
+    (navigator as Navigator & { wakeLock?: { request: (t: string) => Promise<typeof lock> } }).wakeLock?.request("screen").then((l) => (lock = l)).catch(() => {});
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      // Space, Enter, or a presentation clicker (PageDown / arrow keys) all act as the pod's button.
+      if (["Space", "Enter", "NumpadEnter", "PageDown", "PageUp", "ArrowRight", "ArrowDown"].includes(e.code)) {
+        e.preventDefault();
+        if (status === "ready") onStart();
+        else if (status === "idle" || status === "listening") onMic();
+      } else if (e.key === "n" || e.key === "N") reset();
+      else if (e.key === "f" || e.key === "F") document.documentElement.requestFullscreen?.().catch(() => {});
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      lock?.release().catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kiosk, status]);
+
+  if (kiosk) {
+    const podTurn = [...turns].reverse().find((t) => t.role === "pod");
+    const isTest = podTurn?.asks?.startsWith("test:");
+    return (
+      <div className="fixed inset-0 flex flex-col bg-slate-950 text-slate-100">
+        <div className="flex items-center justify-between px-8 py-4 text-sm text-slate-400">
+          <span className="font-semibold tracking-wide text-slate-300">TRIAGE POD</span>
+          <span>{result?.network?.advisories[0] ? `⚠ ${result.network.advisories[0].text}` : "Un promotor de salud está con usted · A health worker is with you"}</span>
+        </div>
+        <div className="flex flex-1 flex-col items-center justify-center px-12 text-center">
+          {status === "ready" ? (
+            <>
+              <p className="text-5xl font-semibold leading-tight">Bienvenido. Siéntese frente a la cámara.</p>
+              <p className="mt-4 text-2xl text-slate-400">Welcome. Please sit in front of the camera.</p>
+              <button onClick={onStart} className="mt-10 rounded-3xl bg-sky-600 px-12 py-6 text-3xl font-semibold hover:bg-sky-500">
+                Empezar · Start
+              </button>
+            </>
+          ) : (
+            <>
+              <p className={`text-sm uppercase tracking-widest ${isTest ? "text-violet-300" : "text-sky-300"}`}>
+                {isTest ? "Haga esto ahora · Do this now" : status === "listening" ? "Le escucho · I'm listening" : status === "done" ? "" : "Pregunta · Question"}
+              </p>
+              <p className="mt-4 max-w-5xl text-5xl font-semibold leading-tight">{podTurn?.text ?? "…"}</p>
+              {podTurn?.english && podTurn.english !== podTurn.text && <p className="mt-4 max-w-4xl text-2xl text-slate-400">{plain(podTurn.english)}</p>}
+              {testClock && (
+                <p className="mt-8 text-7xl font-bold tabular-nums text-violet-300">
+                  {testClock.left}
+                  <span className="ml-3 text-2xl font-normal text-slate-400">{testClock.label}</span>
+                </p>
+              )}
+              {status === "listening" && (
+                <div className="mt-10 h-4 w-[32rem] overflow-hidden rounded-full bg-slate-800">
+                  <div className="h-4 bg-red-500 transition-all" style={{ width: `${Math.round(level * 100)}%` }} />
+                </div>
+              )}
+              {status === "idle" && (
+                <button onClick={onMic} className="mt-10 rounded-full bg-sky-600 px-10 py-5 text-2xl font-semibold hover:bg-sky-500">
+                  🎙️ Hablar · Talk
+                </button>
+              )}
+              {["thinking", "transcribing", "looking"].includes(status) && <p className="mt-10 text-xl text-slate-400">…</p>}
+            </>
+          )}
+          {error && <p className="mt-6 text-lg text-amber-300">{error}</p>}
+        </div>
+        <div className="absolute bottom-6 right-6 w-72 overflow-hidden rounded-2xl border border-slate-700">
+          <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} />
+        </div>
+        <p className="absolute bottom-3 left-8 text-xs text-slate-600">Button, clicker or Space: start · talk · N: new patient · F: full screen</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-6 py-4">
@@ -526,7 +615,7 @@ function Vital({ label, value, note, alert }: { label: string; value: string; no
   );
 }
 
-function Conversation({ turns }: { turns: Turn[] }) {
+export function Conversation({ turns }: { turns: Turn[] }) {
   if (!turns.length) return null;
   return (
     <div className="space-y-2 rounded-2xl border border-slate-800 bg-slate-900 p-4">
@@ -551,12 +640,13 @@ function linkedConditions(traitId: string): string[] {
   const names: string[] = [];
   for (const p of PATHWAYS) {
     const inPath = (t.finding && (p.triggers.includes(t.finding) || p.questions.includes(t.finding))) || t.hint === p.id;
-    if (inPath) names.push(...p.subtypes.filter((s) => s.urgency !== "green").slice(0, 2).map((s) => s.name));
+    // A face alone never suggests suicide risk: that is only ever asked, gently, in conversation.
+    if (inPath) names.push(...p.subtypes.filter((s) => s.urgency !== "green" && s.name !== "Suicide risk").slice(0, 2).map((s) => s.name));
   }
   return [...new Set(names)].slice(0, 4);
 }
 
-function ResultPanel({
+export function ResultPanel({
   result,
   tests,
   intake,
