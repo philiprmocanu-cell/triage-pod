@@ -1,0 +1,206 @@
+<title>Triage Pod System Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: one column of flow diagrams, each a horizontal chain of boxes that stacks on phones. */
+  :root {
+    --bg: #f6f4ee; --fg: #1d1b16; --muted: #6b655a; --line: #d8d2c4; --card: #ffffff;
+    --accent: #0b6e6e; --accent-soft: #d9efee; --red: #b4232c; --red-soft: #f8dcdc; --amber: #9a6b00; --amber-soft: #f7ebc6; --green: #2e7d4f; --green-soft: #dcefe2; --blue: #2a5fa8; --blue-soft: #dde7f7;
+    --display: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #14151a; --fg: #ecebe6; --muted: #a39d92; --line: #343640; --card: #1d1f26; --accent: #4fc3c3; --accent-soft: #163a3a; --red: #ff6b73; --red-soft: #3d1b1e; --amber: #ffc857; --amber-soft: #3b2f10; --green: #6fcf97; --green-soft: #163322; --blue: #7fb0ff; --blue-soft: #16274a; color-scheme: dark } }
+  :root[data-theme="dark"] { --bg: #14151a; --fg: #ecebe6; --muted: #a39d92; --line: #343640; --card: #1d1f26; --accent: #4fc3c3; --accent-soft: #163a3a; --red: #ff6b73; --red-soft: #3d1b1e; --amber: #ffc857; --amber-soft: #3b2f10; --green: #6fcf97; --green-soft: #163322; --blue: #7fb0ff; --blue-soft: #16274a; color-scheme: dark }
+  body { background: var(--bg); color: var(--fg); font-family: var(--display); line-height: 1.45; padding-block: 24px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  main { max-width: 1180px; margin: 0 auto; display: grid; gap: 40px; }
+  h1 { font-size: clamp(26px, 4vw, 38px); margin: 0 0 6px; text-wrap: balance; }
+  h2 { font-size: 20px; margin: 0 0 4px; }
+  .lead { color: var(--muted); max-width: 70ch; margin: 0; }
+  .eyebrow { font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 8px; }
+  section { display: grid; gap: 14px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 0; }
+  .node { background: var(--card); border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 150px; max-width: 230px; flex: 1 1 150px; min-width: 0; }
+  .node b { display: block; font-size: 14px; }
+  .node span { display: block; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .node.red { border-color: var(--red); background: var(--red-soft); }
+  .node.amber { border-color: var(--amber); background: var(--amber-soft); }
+  .node.green { border-color: var(--green); background: var(--green-soft); }
+  .node.blue { border-color: var(--blue); background: var(--blue-soft); }
+  .node.accent { border-color: var(--accent); background: var(--accent-soft); }
+  .node.gate { border-style: dashed; border-color: var(--accent); }
+  .arrow { align-self: center; flex: 0 0 auto; width: 34px; text-align: center; color: var(--accent); font-size: 20px; }
+  .arrow small { display: block; font: 500 10px/1.2 var(--mono); color: var(--muted); }
+  .branch { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .branch .node { max-width: none; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12.5px; color: var(--muted); }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; border: 1.5px solid var(--line); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .tablewrap { overflow-x: auto; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font: 500 11px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  code { font-family: var(--mono); font-size: 12.5px; background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+  .pill { display: inline-block; font: 500 11px/1 var(--mono); padding: 4px 7px; border-radius: 999px; border: 1px solid var(--line); margin: 2px 4px 0 0; }
+  .pill.r { color: var(--red); border-color: var(--red); } .pill.y { color: var(--amber); border-color: var(--amber); } .pill.g { color: var(--green); border-color: var(--green); }
+  @media (max-width: 640px) { .flow { flex-direction: column; } .arrow { transform: rotate(90deg); width: auto; padding: 2px 0; } .node { max-width: none; } }
+  @media (prefers-reduced-motion: no-preference) { .node { transition: border-color .15s; } }
+</style>
+
+<main>
+  <header>
+    <p class="eyebrow">Triage Pod · as built on 24 Oct 2026</p>
+    <h1>How the whole thing fits together</h1>
+    <p class="lead">Seven maps, top to bottom: the kit on the table, one patient visit, what a red flag does, which symptom opens which area, what the camera triggers, where the data goes, and which screen is which.</p>
+  </header>
+
+  <section>
+    <p class="eyebrow">1 · The kit on the table</p>
+    <div class="flow">
+      <div class="node accent"><b>USB pod</b><span>XIAO nRF52840 + red MAX30101 on a breadboard. Finger window up. One JSON line a second over the USB cable.</span></div>
+      <div class="arrow">→<small>USB</small></div>
+      <div class="node"><b>Bridge script</b><span><code>python3 hardware/pod-serial-bridge.py</code> on the laptop. Posts oxygen, pulse, finger on/off and button presses to the app every second.</span></div>
+      <div class="arrow">→<small>POST /api/session</small></div>
+      <div class="node accent"><b>Laptop = voice and brain</b><span>Chrome. Demo server <code>:3418</code> (fast build). Dev server <code>:3417</code> (code changes). Database <code>spacetime start</code> on <code>:3000</code>.</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>Laptop webcam</b><span>The eyes. 10 pictures a second. Sits at the patient's eye level, light on the face.</span></div>
+    </div>
+    <div class="branch">
+      <div class="node"><b>Outside services</b><span>Jev (TypeSafe) decides. Cartesia hears and speaks. Claude words things (needs API credit). World Bank numbers for the “where next” page.</span></div>
+      <div class="node"><b>Three windows for the demo</b><span>Patient: <code>:3418/kiosk?village=Katete</code> (press F). You: <code>:3418/staff</code>. Judges: <code>:3418/globe</code> and <code>:3418/government</code>.</span></div>
+      <div class="node"><b>Printed case</b><span>Faceplate (camera hole), sensor shelf (finger slot), base tray. Free PLA at the venue, under 3.5 h each. The hardware session owns this.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">2 · One patient visit</p>
+    <div class="flow">
+      <div class="node"><b>Look</b><span>Camera scans 61 signs every 2 s. Nothing alarming → carry on. A sign only becomes a question.</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>Intake</b><span>Name · village · who it's for and age · consent. Anything already said is not asked again.</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>“What brings you in?”</b><span>Claude restates it: “fever and chills for three days, is that right?”</span></div>
+      <div class="arrow">→</div>
+      <div class="node gate"><b>The gate</b><span>Only what you SAID opens an area. At most two areas. A headache never opens Injury.</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>History</b><span>Since when, always. “What can't you do” only if nothing opened. 1–10 only for pain.</span></div>
+    </div>
+    <div class="flow">
+      <div class="node"><b>Camera hunches</b><span>Max two signs. First confirm it in your words (“are you sweating a lot?”). A no drops it. A yes → its cause (“chest pain?”).</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>Area questions</b><span>Up to 4 per open area, danger signs first; physical tests where the camera can judge. 7 medical steps at most.</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>“Anything else?”</b><span>Then, for every adult who consented: “would you volunteer for others in your village?”</span></div>
+      <div class="arrow">→</div>
+      <div class="node gate"><b>Hard stop</b><span>16 pod turns, whatever happened. A healthy check-up is 10; a cold 13; a headache 14.</span></div>
+      <div class="arrow">→</div>
+      <div class="node accent"><b>Verdict + goodbye</b><span>What it most likely is, what is being sent, two self-care steps, the come-back-now signs.</span></div>
+    </div>
+    <div class="branch">
+      <div class="node red"><b>Emergency</b><span>A red rule fired. Help is called; up to three danger questions; red goodbye.</span></div>
+      <div class="node amber"><b>Likely</b><span>A condition is confident: ≥70% with two findings (a benign one once the danger questions are no). Colour red/yellow/green. Exact order.</span></div>
+      <div class="node blue"><b>Uncertain</b><span>An area opened, the questions ran out. The cover kit is sent anyway (fever: malaria test + paracetamol; stomach: ORS…). Worker checks today.</span></div>
+      <div class="node green"><b>Nothing found</b><span>“Nothing serious came up today.” Nothing ordered. Not everyone who comes in is sick.</span></div>
+    </div>
+    <div class="legend"><span>Then: saved to the registry · handover note · order and opt-ins to SpacetimeDB → map, government, patients, community.</span></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">3 · What a red flag does</p>
+    <div class="flow">
+      <div class="node red"><b>A rule fires</b><span>One-sided weakness · chest pressure + sweat · cannot breathe · heavy bleeding · child cannot drink / fit / limp · stiff neck + fever · pregnancy bleeding or fits · thoughts of suicide · SpO₂ &lt; 90 · BP ≥ 160/110 · glucose &lt; 70</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>“We are calling for help now”</b><span>Said once. Intake and the rest are skipped.</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>Up to 3 danger questions</b><span>From that area: fits, bleeding, can they drink… Stroke runs the smile, arm and speech checks instead.</span></div>
+      <div class="arrow">→</div>
+      <div class="node red"><b>Red goodbye + order</b><span>Pre-referral treatment is ordered (artesunate, ceftriaxone, blood, oxygen) so the health worker isn't waiting on a supply run.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">4 · Which symptom opens which area, and what is sent</p>
+    <div class="tablewrap"><table>
+      <tr><th>If you say…</th><th>Area opens</th><th>Asks, in order</th><th>Jev picks between</th><th>Sent to your home</th></tr>
+      <tr><td>fever, chills</td><td>Fever</td><td>very sleepy · fit · can't drink · stiff neck · chills · mosquito bites · rash · yellow eyes · palms test · vomits</td><td><span class="pill r">severe malaria</span><span class="pill r">meningitis</span><span class="pill y">malaria</span><span class="pill y">dengue</span><span class="pill y">another infection</span><span class="pill g">viral fever</span></td><td>malaria test · ACT · artesunate · ceftriaxone · paracetamol</td></tr>
+      <tr><td>cough, short of breath, fast breathing, wheeze</td><td>Breathing</td><td>chest show (child) · chest indrawing · can't drink · fast breathing · short of breath · fever · wheeze · cough over 2 weeks</td><td><span class="pill r">severe pneumonia</span><span class="pill y">pneumonia</span><span class="pill y">asthma</span><span class="pill y">TB</span><span class="pill g">cold</span></td><td>oxygen · ceftriaxone · amoxicillin · salbutamol · paracetamol</td></tr>
+      <tr><td>chest pain</td><td>Chest / heart</td><td>spreads to arm · sweating · short of breath · sudden</td><td><span class="pill r">heart attack</span><span class="pill y">angina</span><span class="pill y">chest infection</span><span class="pill g">muscle / reflux</span></td><td>aspirin · amoxicillin · paracetamol</td></tr>
+      <tr><td>face or arm weak, slurred speech, unsteady</td><td>Stroke / brain</td><td>smile test · weakness · arm-drift test · speech check · sudden · walk test · severe headache</td><td><span class="pill r">stroke</span><span class="pill r">low sugar</span><span class="pill y">Bell's palsy</span><span class="pill g">migraine</span></td><td>glucose gel · paracetamol (transport is a service)</td></tr>
+      <tr><td>headache</td><td>Headache</td><td>worst-ever · fever · stiff neck · chills · mosquito · weakness · light hurts · severe · pregnant</td><td><span class="pill r">brain bleed</span><span class="pill r">meningitis</span><span class="pill y">high BP</span><span class="pill y">fever headache</span><span class="pill g">migraine</span><span class="pill g">tension</span></td><td>ceftriaxone · malaria test · paracetamol</td></tr>
+      <tr><td>diarrhoea, vomiting, belly pain</td><td>Stomach</td><td>can't drink · very sleepy · sunken eyes · blood in stool · vomits · diarrhoea · fever · feet test</td><td><span class="pill r">severe dehydration</span><span class="pill y">some dehydration</span><span class="pill y">dysentery</span><span class="pill g">diarrhoea, no dehydration</span></td><td>IV fluids · ORS ×2 · zinc · ceftriaxone</td></tr>
+      <tr><td>hurt, fall, wound, bleeding</td><td>Injury</td><td>heavy bleeding · limb bent · can't bear weight · deep · dirty · tetanus shot</td><td><span class="pill r">major bleeding</span><span class="pill y">possible fracture</span><span class="pill y">wound needing care</span><span class="pill g">minor</span></td><td>dressing kit · blood · splint · tetanus vaccine · paracetamol</td></tr>
+      <tr><td>pregnant</td><td>Pregnancy</td><td>heavy bleeding · severe headache · fits · feet test · fever</td><td><span class="pill r">bleeding in pregnancy</span><span class="pill r">pre-eclampsia</span><span class="pill y">infection</span><span class="pill g">routine</span></td><td>blood · malaria test</td></tr>
+      <tr><td>back pain, pain on bending, weak legs</td><td>Back / joints</td><td>bladder control · leg weakness · crouch test · bend test · pain on bending · fever · injury</td><td><span class="pill r">spinal cord</span><span class="pill y">kidney infection</span><span class="pill y">sciatica</span><span class="pill y">fracture</span><span class="pill g">strain</span></td><td>paracetamol · splint</td></tr>
+      <tr><td>sad, no interest, worried, loss, lonely</td><td>Mental health</td><td>low mood · little interest · thoughts of ending life · anxious · can't stop worrying · loss or violence · lonely · wants a peer group</td><td><span class="pill r">suicide risk</span><span class="pill y">depression</span><span class="pill y">anxiety</span><span class="pill g">grief / stress</span><span class="pill g">loneliness</span></td><td>nothing shipped: Friendship-Bench sessions, community circle, worker stays with them</td></tr>
+    </table></div>
+    <div class="legend"><span><i style="border-color:var(--red)"></i>red = emergency</span><span><i style="border-color:var(--amber)"></i>yellow = treat today, doctor reviews</span><span><i style="border-color:var(--green)"></i>green = home with advice</span><span>Where there is no malaria (San Francisco), the malaria options, questions and orders are switched off.</span></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">5 · What the camera sees and what it triggers</p>
+    <div class="flow">
+      <div class="node"><b>10 pictures a second</b><span>Rolling four seconds in memory. A face close-up every third picture.</span></div>
+      <div class="arrow">→<small>every 2 s</small></div>
+      <div class="node"><b>Burst of 8 to Jev</b><span>61 yes/no signs over the burst. Answer in 0.2–0.6 s.</span></div>
+      <div class="arrow">→</div>
+      <div class="node gate"><b>Two gates</b><span>Face/skin/eye signs need a close, lit, facing face. Posture signs (holding chest, cane, bandage) only need the body in view.</span></div>
+      <div class="arrow">→<small>≥ 60%</small></div>
+      <div class="node"><b>A hunch, not a verdict</b><span>Smoothed over scans. One flicker reaches 40% at most.</span></div>
+    </div>
+    <div class="flow">
+      <div class="node"><b>Step 1: confirm the sign</b><span>“I notice you look sweaty. Are you sweating a lot, even without heat?”</span></div>
+      <div class="arrow">→<small>no</small></div>
+      <div class="node green"><b>Dropped</b><span>Your word beats the camera. Never counts again.</span></div>
+      <div class="arrow">→<small>yes</small></div>
+      <div class="node"><b>Step 2: the cause</b><span>“Do you have pain or pressure in your chest?”</span></div>
+      <div class="arrow">→<small>yes</small></div>
+      <div class="node amber"><b>Area opens</b><span>Chest / heart questions follow; a red rule can fire from the answers.</span></div>
+    </div>
+    <div class="tablewrap"><table>
+      <tr><th>Sign seen</th><th>Pod says</th><th>Confirms</th><th>Then asks</th></tr>
+      <tr><td>sweaty face</td><td>“I notice you are sweating.”</td><td>sweating a lot without heat?</td><td>chest pain → Chest / heart</td></tr>
+      <tr><td>one side of the face lower (≥45%)</td><td>“One side of your face looks different.”</td><td>— </td><td>smile test → Stroke</td></tr>
+      <tr><td>holding the chest</td><td>“I see you holding your chest.”</td><td>chest pain?</td><td>Chest / heart</td></tr>
+      <tr><td>flushed red face / red eyes</td><td>“Your face looks a little red.”</td><td>fever or feel hot?</td><td>Fever</td></tr>
+      <tr><td>yellow eyes</td><td>“Your eyes look a little yellow.”</td><td>fever?</td><td>Fever (yellow eyes counted as seen)</td></tr>
+      <tr><td>holding the head / belly / back</td><td>“I see you holding your…”</td><td>headache? belly pain? back pain?</td><td>Headache / Stomach / Back</td></tr>
+      <tr><td>struggling to breathe, mouth breathing</td><td>“It looks a little hard to breathe.”</td><td>hard to breathe now?</td><td>Breathing</td></tr>
+      <tr><td>bite marks, rash</td><td>“I see some marks on your skin.”</td><td>many mosquito bites / no net? rash new?</td><td>Fever</td></tr>
+      <tr><td>sad, tearful, anxious</td><td>“You seem a little down.”</td><td>felt down most days? nervous?</td><td>Mental health</td></tr>
+      <tr><td>wound, bandage, cane, limp arm</td><td>“I see a wound.”</td><td>hurt in an accident?</td><td>Injury</td></tr>
+      <tr><td>very thin, hollow cheeks, puffy face, sunken eyes</td><td>(shown to the worker)</td><td>weight loss? can drink?</td><td>Nutrition / Stomach</td></tr>
+    </table></div>
+  </section>
+
+  <section>
+    <p class="eyebrow">6 · Where the data goes</p>
+    <div class="flow">
+      <div class="node accent"><b>Visit ends</b><span>Verdict, orders, opt-ins.</span></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>Registry</b><span><code>data/registry.json</code> + Claude's handover note for the doctor. Names only with consent.</span></div>
+      <div class="arrow">→</div>
+      <div class="node blue"><b>SpacetimeDB “podnet”</b><span>Visit · delivery orders in the patient's name · +1 pops · patients · community members · agent log.</span></div>
+      <div class="arrow">→<small>live</small></div>
+      <div class="node"><b>Agents (every 10 s)</b><span>Supply allocator restocks posts, idle stock first. Outbreak sentinel spots clusters. Immunisation planner. Community connector pairs people.</span></div>
+    </div>
+    <div class="branch">
+      <div class="node"><b>/globe</b><span>+1 over the village, drone or truck at real speed (1 s = 1 min) to the home, live feed.</span></div>
+      <div class="node"><b>/government</b><span>Every post × every item, used / on the way, agent decisions, Claude briefing, agents on/off.</span></div>
+      <div class="node"><b>/patients</b><span>Who is due which vaccine dose; send to home; mark given.</span></div>
+      <div class="node"><b>/community</b><span>People wanting company paired with volunteers from the same village.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">7 · Which screen is which</p>
+    <div class="tablewrap"><table>
+      <tr><th>Tab</th><th>Who looks at it</th><th>What it shows</th></tr>
+      <tr><td><code>/demo</code></td><td>you</td><td>The six steps, what to say and do, reset everything.</td></tr>
+      <tr><td><code>/kiosk?village=Katete</code></td><td>the patient</td><td>The question in big type, both languages, oxygen and pulse from the USB pod, “come closer”. No diagnoses.</td></tr>
+      <tr><td><code>/pod?village=Katete</code></td><td>operator</td><td>Same visit with camera panels, typed-answer box for loud rooms, region picker (San Francisco = no malaria), accent teaching, result panel.</td></tr>
+      <tr><td><code>/staff</code></td><td>health worker</td><td>Live mirror: conversation, decision path, confident conditions with for/against, the exact order, vitals entry.</td></tr>
+      <tr><td><code>/globe</code></td><td>judges</td><td>3D satellite map of Eastern Province, Zambia.</td></tr>
+      <tr><td><code>/government</code></td><td>provincial office</td><td>Stock command and the agents' reasoning.</td></tr>
+      <tr><td><code>/patients</code> · <code>/community</code></td><td>posts</td><td>Profiles and vaccines due; circles and volunteers.</td></tr>
+      <tr><td><code>/agents</code> · <code>/dashboard</code></td><td>judges</td><td>Agent bus; outbreak and flood simulator with drone routing.</td></tr>
+      <tr><td><code>/deploy</code> · <code>/registry</code></td><td>judges / you</td><td>19 countries with World Bank numbers and partners; every saved visit.</td></tr>
+    </table></div>
+  </section>
+</main>
