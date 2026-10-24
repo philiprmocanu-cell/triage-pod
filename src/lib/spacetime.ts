@@ -32,6 +32,16 @@ export function needsFrom(resources: Resource[], orders?: TriageResult["orders"]
   return [...items].map((item) => ({ item, qty: 1 }));
 }
 
+export async function joinCommunity(m: { village: string; name: string; role: "seeking" | "volunteer"; topic: string }) {
+  const res = await fetch(`${URL_BASE}/v1/database/${DB}/call/join_community`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify([m.village, m.name, m.role, m.topic]),
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!res.ok) throw new Error(`SpacetimeDB join_community ${res.status}`);
+}
+
 export async function reportVisit(v: { village: string; patientName: string; urgency: Urgency; summary: string; needs: { item: string; qty: number }[] }) {
   const res = await fetch(`${URL_BASE}/v1/database/${DB}/call/report_visit`, {
     method: "POST",

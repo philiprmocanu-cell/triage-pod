@@ -22,7 +22,7 @@ export type VisitRecord = {
   causes: { name: string; probability: number }[];
   resources: Resource[];
   orders?: { item: string; qty: number; note?: string; for: string }[];
-  mentalHealth: { category: string | null; wantsPeerGroup: boolean };
+  mentalHealth: { category: string | null; wantsPeerGroup: boolean; volunteer?: boolean };
   handover: string | null;
 };
 

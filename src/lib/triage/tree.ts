@@ -87,6 +87,8 @@ export const FINDINGS = {
     seen: "Is there visible blood or an actively bleeding wound?",
   },
   injury: { label: "Injury", ask: { en: "Were you hurt in an accident or a fall?", es: "¿Se lastimó en un accidente o una caída?" }, seen: "Is there a visible wound, cut, bruise or deformed limb?" },
+  cant_bear_weight: { label: "Cannot use the limb", ask: { en: "Can you put weight on it or move it normally, or not at all?", es: "¿Puede apoyarse o moverlo normalmente, o no puede?" } },
+  deformed_limb: { label: "Limb bent or very swollen", ask: { en: "Does the arm or leg look bent, out of shape or very swollen?", es: "¿El brazo o la pierna se ve torcido, deformado o muy hinchado?" } },
   deep_wound: { label: "Deep or gaping wound", ask: { en: "Is the cut deep or wide, or does it gape open when you move?", es: "¿La herida es profunda o ancha, o se abre cuando se mueve?" } },
   dirty_wound: { label: "Dirty wound / bite", ask: { en: "Was it a dirty or rusty object, or an animal bite?", es: "¿Fue con algo sucio u oxidado, o una mordida de animal?" } },
   tetanus_recent: { label: "Tetanus shot in last 5 years", ask: { en: "Have you had a tetanus shot in the last five years?", es: "¿Le han puesto la vacuna del tétanos en los últimos cinco años?" } },
@@ -119,6 +121,13 @@ export const FINDINGS = {
   lonely: {
     label: "Lonely or isolated",
     ask: { en: "How often do you feel alone, left out, or without people to talk to?", es: "¿Qué tan seguido se siente solo, apartado o sin con quién platicar?" },
+  },
+  volunteer: {
+    label: "Wants to volunteer for others",
+    ask: {
+      en: "One last thing. Some people in your village go through hard times alone. Would you like to be a volunteer who meets them now and then to talk? A health worker would introduce you.",
+      es: "Una última cosa. Algunas personas de su comunidad pasan momentos difíciles solas. ¿Le gustaría ser voluntario para reunirse con ellas de vez en cuando y platicar? El promotor de salud los presentaría.",
+    },
   },
   wants_peer_group: {
     label: "Wants a peer support group",
@@ -230,10 +239,10 @@ export const PATHWAYS: Pathway[] = [
     label: "Injury / bleeding",
     description: "Wound, fall, accident, bleeding",
     triggers: ["injury", "severe_bleeding"],
-    questions: ["severe_bleeding", "deep_wound", "dirty_wound", "tetanus_recent", "very_sleepy", "short_of_breath"],
+    questions: ["severe_bleeding", "deformed_limb", "cant_bear_weight", "deep_wound", "dirty_wound", "tetanus_recent"],
     subtypes: [
       { name: "Major bleeding", description: "Bleeding that will not stop, or a large wound", urgency: "red", resources: ["Pressure bandage", "Emergency transport", "Blood (drone)"] },
-      { name: "Possible fracture", description: "Deformed or very painful limb after a fall", urgency: "yellow", resources: ["Splint", "Doctor review"] },
+      { name: "Possible fracture", description: "After a fall or blow the limb looks bent or very swollen, or cannot bear weight or move", urgency: "yellow", resources: ["Splint", "Doctor review"] },
       { name: "Wound needing care", description: "A cut from a blade or tool, deep, gaping or dirty, that needs cleaning, closing and tetanus protection", urgency: "yellow", resources: ["Wound dressing kit", "Tetanus vaccine"] },
       { name: "Minor injury", description: "Small cut or bruise", urgency: "green", resources: ["Wound dressing kit"] },
     ],
@@ -438,6 +447,12 @@ export const CLOSING: Record<Urgency, Text> = {
 export const CLOSING_WELL: Text = {
   en: "Thank you. Nothing worrying came up today, and you don't need any treatment right now.",
   es: "Gracias. Hoy no encontramos nada preocupante, y por ahora no necesita ningún tratamiento.",
+};
+
+// Closing when the questions ran out without a clear answer: send what covers the likely causes.
+export const CLOSING_UNSURE: Text = {
+  en: "Thank you. I can't tell exactly what this is yet, so I am sending the test and first treatment that cover the likely causes, and the health worker will check you today.",
+  es: "Gracias. Todavía no puedo decir exactamente qué es, así que estoy enviando la prueba y el primer tratamiento que cubren las causas probables, y el promotor de salud le va a revisar hoy.",
 };
 
 // Closing when someone has said they have thought about ending their life: warm, not alarming.

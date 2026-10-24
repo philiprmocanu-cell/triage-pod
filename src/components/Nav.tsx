@@ -12,6 +12,7 @@ const TABS = [
   { href: "/globe", label: "Live map" },
   { href: "/government", label: "Government" },
   { href: "/patients", label: "Patients" },
+  { href: "/community", label: "Community", tone: "text-pink-300" },
   { href: "/agents", label: "Agents" },
   { href: "/dashboard", label: "Supply sim" },
   { href: "/deploy", label: "Where next" },

@@ -38,7 +38,16 @@ export async function listenForUtterance(opts: {
 }): Promise<Blob | null> {
   const { waitMs = 12000, silenceMs = 1300, maxMs = 25000, onLevel, signal } = opts;
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  // Chrome starts an AudioContext "suspended" when no user gesture is on record: the level meter
+  // then reads silence forever and the pod gives up after waitMs. Resume it (the Start click
+  // counts as the gesture), and if it still will not run, record a fixed window instead.
   const ctx = new AudioContext();
+  try {
+    await ctx.resume();
+  } catch {
+    /* handled below */
+  }
+  const meterWorks = ctx.state === "running";
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 1024;
   ctx.createMediaStreamSource(stream).connect(analyser);
@@ -69,6 +78,12 @@ export async function listenForUtterance(opts: {
       }
       last = now;
       onLevel?.(Math.min(1, rms / (threshold * 3)), Boolean(speechAt));
+      if (!meterWorks) {
+        // No level meter: take a fixed 7-second window and let speech-to-text decide.
+        onLevel?.(0.5, true);
+        if (now - t0 > 7000) return resolve("speech");
+        return void requestAnimationFrame(step);
+      }
       if (speechAt && spokeMs > 250 && now - lastVoice > silenceMs) return resolve("speech");
       if (!speechAt && now - t0 > waitMs) return resolve("none");
       if (now - t0 > maxMs) return resolve(speechAt ? "speech" : "none");

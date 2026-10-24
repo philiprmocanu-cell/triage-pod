@@ -19,6 +19,17 @@ export const AgentLog = __t.object("AgentLog", {
 });
 export type AgentLog = __Infer<typeof AgentLog>;
 
+export const CommunityMember = __t.object("CommunityMember", {
+  id: __t.u64(),
+  villageId: __t.u32(),
+  name: __t.string(),
+  role: __t.string(),
+  topic: __t.string(),
+  matchedWith: __t.string(),
+  joinedAt: __t.timestamp(),
+});
+export type CommunityMember = __Infer<typeof CommunityMember>;
+
 export const DeliveryOrder = __t.object("DeliveryOrder", {
   id: __t.u64(),
   visitId: __t.u64(),

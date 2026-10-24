@@ -26,6 +26,7 @@ export const STOCK_ITEMS = [
   "IV fluids",
   "Blood (O negative)",
   "Therapeutic food (RUTF)",
+  "Splint",
   "Malaria vaccine (R21)",
   "Measles-rubella vaccine",
   "Pentavalent vaccine",
@@ -82,9 +83,20 @@ export const SUPPLIES_FOR: Record<string, Supply[]> = {
   "Bleeding in pregnancy": [{ item: "Blood (O negative)", qty: 1 }],
   "Wound needing care": [{ item: "Wound dressing kit", qty: 1 }, { item: "Tetanus vaccine", qty: 1 }],
   "Minor injury": [{ item: "Wound dressing kit", qty: 1 }],
-  "Possible fracture": [{ item: "Paracetamol", qty: 1 }],
+  "Possible fracture": [{ item: "Splint", qty: 1 }, { item: "Paracetamol", qty: 1 }],
   // Nutrition
   "Severe malnutrition": [{ item: "Therapeutic food (RUTF)", qty: 7, note: "one week" }],
+};
+
+// When the questions run out and nothing is confident, what safely covers the likely causes in
+// that area (pathway id -> stock). The test comes first; treatment only where it is harmless.
+export const COVER_KIT: Record<string, Supply[]> = {
+  fever: [{ item: "Malaria rapid test", qty: 1 }, { item: "Paracetamol", qty: 1 }],
+  breathing: [{ item: "Paracetamol", qty: 1 }],
+  stomach: [{ item: "Oral rehydration salts", qty: 2 }],
+  headache: [{ item: "Paracetamol", qty: 1 }, { item: "Malaria rapid test", qty: 1 }],
+  pain: [{ item: "Paracetamol", qty: 1 }],
+  injury: [{ item: "Wound dressing kit", qty: 1 }],
 };
 
 // Which conditions a stock item treats (for the government view's "why we need this").
@@ -115,6 +127,7 @@ export const RULE_SUPPLIES: Record<string, Supply[]> = {
   dehydration: [{ item: "Oral rehydration salts", qty: 2 }, { item: "Zinc", qty: 1 }],
   dysentery: [{ item: "Oral rehydration salts", qty: 2 }],
   pneumonia: [{ item: "Amoxicillin", qty: 1 }],
+  possible_fracture: [{ item: "Splint", qty: 1 }, { item: "Paracetamol", qty: 1 }],
   child_danger_sign: [{ item: "Rectal artesunate", qty: 1 }, { item: "Ceftriaxone (pre-referral)", qty: 1 }],
   wound_care: [{ item: "Wound dressing kit", qty: 1 }, { item: "Tetanus vaccine", qty: 1 }],
   pregnancy_bleeding: [{ item: "Blood (O negative)", qty: 1 }],

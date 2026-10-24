@@ -13,13 +13,14 @@ import { postFor } from "../network";
 import { closingAdvice, confirmComplaint, followUpQuestion, phraseNext, replyToPatient } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { NOTICED, TRAITS, TraitScan } from "./traits";
-import { ordersFor, RULE_SUPPLIES } from "./supplies";
+import { COVER_KIT, ordersFor, RULE_SUPPLIES } from "./supplies";
 import { getVitals } from "../session";
 import { maxUrgency, runRules, vitalsRules } from "./rules";
 import {
   CLOSING,
   CLOSING_SUICIDE_RISK,
   CLOSING_WELL,
+  CLOSING_UNSURE,
   FINDING_KEYS,
   FINDINGS,
   FindingKey,
@@ -54,10 +55,13 @@ import type {
   Urgency,
 } from "./types";
 
-const MAX_STEPS = 10; // medical questions + tests after the history questions
+const MAX_STEPS = 7; // medical questions + tests after the history questions
+const MAX_POD_TURNS = 16; // hard end point for a visit, whatever happened
+const PER_PATHWAY = 4; // questions per open pathway, danger signs first
+const PAIN_PATHWAYS = new Set(["headache", "pain", "cardiac", "injury", "stomach"]); // the only ones worth a 1-10 score
 const MAX_FRAMES = 6;
 const YES = 0.6; // probability at which a finding counts as present
-const OPEN = 0.3; // probability at which a pathway is explored
+const OPEN = 0.5; // a pathway opens when the complaint clearly points at it, or a trigger symptom was said
 
 // Signs that mean: skip the paperwork, start helping.
 const EMERGENCY_SEEN: FindingKey[] = ["severe_bleeding", "short_of_breath", "face_or_arm_weakness", "blue_lips", "very_sleepy"];
@@ -344,7 +348,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
         .sort((x, y) => y.probability - x.probability),
     };
   }).sort((x, y) => y.probability - x.probability);
-  const open = pathways.filter((p) => p.probability >= OPEN);
+  // Gate: only what the patient actually said opens an area, and at most two areas at once.
+  // Everything else stays closed until another symptom they mention matches it.
+  const saidOpen = new Set(PATHWAYS.filter((p) => p.triggers.some((k) => saidYes[k] >= YES)).map((p) => p.id));
+  const open = pathways.filter((p) => saidOpen.has(p.id) || p.probability >= OPEN).slice(0, 2);
   // A pathway opened by the camera or the complaint, not by a confirmed symptom, first asks
   // about its main symptom ("I see you holding your chest" -> "do you have chest pain?").
   const stepsFor = (id: string): Step[] => {
@@ -451,7 +458,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const say = (asks: Step | null, t: { en: string; es: string }): TriageResult["next"] => ({ asks, text: t[language], english: t.en });
   const emergencySeen = EMERGENCY_SEEN.some((k) => (seen[k] ?? 0) >= YES);
   const intakeOpen = !redRule && !emergencySeen && !asked.has("open");
-  const medicalSteps = input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && !t.asks.startsWith("history:") && t.asks !== "open").length;
+  const podTurns = input.turns.filter((t) => t.role === "pod").length;
+  const outOfTime = podTurns >= MAX_POD_TURNS; // the visit ends no matter what
+  const medicalSteps = outOfTime ? MAX_STEPS : input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && !t.asks.startsWith("history:") && t.asks !== "open").length;
   // Confirmation: after each telling of the complaint, say it back once; a "no" means tell it again.
   const lastOpen = input.turns.map((t) => t.asks).lastIndexOf("open");
   const answeredOpenNow = Boolean(patientText) && lastPod?.asks === "open";
@@ -466,6 +475,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const testDone = (id: string) => id in input.tests || asked.has(`test:${id}`);
   const moodish = (["low_mood", "little_interest", "anxious", "trauma_or_loss", "lonely"] as FindingKey[]).some((k) => yes[k] >= YES);
 
+  // History: when it started always; "what can't you do" only when nothing specific opened;
+  // a 1-10 score only where pain is the story.
+  const historyWanted: HistoryField[] = ["onset", ...(open.length ? [] : ["impact" as const]), ...(open.some((p) => PAIN_PATHWAYS.has(p.id)) ? ["severity" as const] : [])];
   let next: TriageResult["next"] = null;
   // Explore what the camera noticed, at most two hunches: "I see you holding your chest. Do you
   // have pain or pressure in your chest?"
@@ -565,8 +577,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
     next = c === "UNCLEAR" ? say("open", RETELL) : { asks: "history:confirm", text: c.text, english: c.english };
   } else if (!redRule && confirmedWrong && retells < 2) {
     next = say("open", RETELL);
-  } else if (!redRule && (["onset", "impact", "severity"] as HistoryField[]).some((f) => !asked.has(`history:${f}`))) {
-    const f = (["onset", "impact", "severity"] as HistoryField[]).find((x) => !asked.has(`history:${x}`))!;
+  } else if (!redRule && historyWanted.some((f) => !asked.has(`history:${f}`))) {
+    const f = historyWanted.find((x) => !asked.has(`history:${x}`))!;
     next = say(`history:${f}`, HISTORY[f]);
   } else if (!redRule && medicalSteps < MAX_STEPS && nextHunch()) {
     next = nextHunch();
@@ -578,11 +590,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
     // The pod head's finger sensor: measure oxygen early whenever breathing, chest, fever or a
     // stroke is being considered and no reading exists yet.
     if (vitals.podConnected && vitals.spo2 == null && open.some((p) => ["breathing", "cardiac", "fever", "stroke"].includes(p.id))) order.push("test:finger");
-    for (const p of open) order.push(...stepsFor(p.id));
+    const askedIn = (id: string) => stepsFor(id).filter((st) => (st.startsWith("test:") ? testDone(st.slice(5)) : asked.has(st))).length;
+    for (const p of open) if (askedIn(p.id) < PER_PATHWAY) order.push(...stepsFor(p.id));
     // Nothing in the tree fits (toothache, ear pain...): ask Claude for one sensible nurse
-    // follow-up question, up to three times, before falling back to the mood screen.
+    // follow-up question, up to two times, before the single mood question.
     const freeAsked = input.turns.filter((t) => t.role === "pod" && t.asks === "free").length;
-    if (!open.length && complaintKnown && freeAsked < 3) {
+    if (!open.length && complaintKnown && freeAsked < 2) {
       try {
         const q = await followUpQuestion({ conversation, language, locale: topKey(probsOf(a.locale)) ?? input.defaultLocale });
         if (q) next = { asks: "free", text: q.text, english: q.english };
@@ -590,7 +603,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         /* fall through to the screen below */
       }
     }
-    if (!open.length) order.push("low_mood", "little_interest", "lonely"); // nothing physical found: screen mood and loneliness
+    if (!open.length) order.push("low_mood"); // nothing physical found: one mood question; a "yes" opens the mental-health area
     else if (age === "older_adult") order.push("lonely"); // older adults are the loneliest group: always ask
     const pick = next ? undefined : order.find((s) => {
       if (s.startsWith("test:")) {
@@ -612,10 +625,18 @@ export async function step(input: StepInput): Promise<TriageResult> {
       next = say(null, MORE);
     }
   }
-  if (!next && input.stage === "answer" && !redRule && complaintKnown && !asked.has("history:else")) next = say("history:else", HISTORY.else);
+  if (!next && input.stage === "answer" && !redRule && complaintKnown && !asked.has("history:else") && !outOfTime) next = say("history:else", HISTORY.else);
+  // Every adult who consented is invited to volunteer for others in their village, once, at the end.
+  if (!next && input.stage === "answer" && !redRule && complaintKnown && !asked.has("volunteer") && !isChild && (intake.consent ?? "") !== "" && !facts.self_harm_thoughts) next = say("volunteer", FINDINGS.volunteer.ask);
   const done = input.stage === "answer" && !next;
-  const nothingNeeded = urgency === "green" && !resources.some((r) => r.probability >= 0.5);
-  if (done) next = say(null, ruleHits.some((h) => h.id === "suicide_risk") ? CLOSING_SUICIDE_RISK : nothingNeeded ? CLOSING_WELL : CLOSING[urgency]);
+  const confidentCause = causes.some((c) => c.confident);
+  // The one-word outcome. "Uncertain" = an area opened but the questions ran out without a clear
+  // answer: send what safely covers its likely causes rather than nothing.
+  const topOpen = open[0];
+  const verdict: TriageResult["verdict"] = redRule ? "emergency" : confidentCause ? "likely" : done && topOpen && topOpen.probability >= OPEN ? "uncertain" : "nothing_found";
+  if (verdict === "uncertain") for (const s of COVER_KIT[topOpen!.id] ?? []) addOrder(orders, { ...s, for: `uncertain: ${topOpen!.label}` });
+  const nothingNeeded = urgency === "green" && !orders.length && !resources.some((r) => r.probability >= 0.5);
+  if (done) next = say(null, ruleHits.some((h) => h.id === "suicide_risk") ? CLOSING_SUICIDE_RISK : verdict === "uncertain" ? CLOSING_UNSURE : nothingNeeded ? CLOSING_WELL : CLOSING[urgency]);
 
   const lastAsked = lastPod?.asks;
   const reAsked = (lastPod?.text ?? "").startsWith(SORRY[language]);
@@ -789,7 +810,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
     urgency,
     resources,
     doctor_required: urgency !== "green",
-    reason: top,
+    reason:
+      verdict === "nothing_found" && !redRule
+        ? "Nothing serious found: most likely a minor illness that will pass on its own"
+        : verdict === "uncertain"
+          ? `Not settled within ${topOpen!.label}: the cover kit is sent and the health worker checks today`
+          : top,
     rule_hits: ruleHits,
     speech_confused: speechConfused,
     done,
@@ -806,7 +832,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
     peer_group: {
       wants: yes.wants_peer_group >= YES && !facts.self_harm_thoughts,
       category: mental && mental.probability >= OPEN ? (mental.subtypes[0]?.name ?? null) : null,
+      volunteer: yes.volunteer >= YES,
     },
+    verdict,
     jev_ms: Date.now() - t0,
   };
 }
@@ -830,6 +858,7 @@ const RULE_CAUSE: Record<string, string> = {
   dehydration: "Some dehydration",
   dysentery: "Dysentery",
   kidney_infection: "Kidney infection",
+  possible_fracture: "Possible fracture",
   wound_care: "Wound needing care",
   pregnancy_bleeding: "Bleeding in pregnancy",
 };

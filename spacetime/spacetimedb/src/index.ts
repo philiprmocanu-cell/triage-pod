@@ -95,6 +95,21 @@ const patient = table(
   }
 );
 
+// People who opted in at the end of a visit: those who want company through a hard time, and
+// volunteers willing to meet them. The connector agent pairs them within a village.
+const communityMember = table(
+  { name: 'community_member', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    villageId: t.u32().index('btree'),
+    name: t.string(), // first name only is enough
+    role: t.string(), // seeking | volunteer
+    topic: t.string(), // what they are going through / what they can offer, in their words
+    matchedWith: t.string(), // name of the person they were paired with, or ''
+    joinedAt: t.timestamp(),
+  }
+);
+
 const agentLog = table(
   { name: 'agent_log', public: true },
   {
@@ -125,7 +140,7 @@ const tickTimer = table(
   }
 );
 
-const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, patient, agentLog, settings, tickTimer });
+const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, patient, communityMember, agentLog, settings, tickTimer });
 export default spacetimedb;
 
 const Need = t.object('Need', { item: t.string(), qty: t.u32() });
@@ -150,7 +165,7 @@ const VILLAGES = [
 const ITEMS = [
   'Malaria rapid test', 'Antimalarial (ACT)', 'Rectal artesunate', 'Amoxicillin', 'Ceftriaxone (pre-referral)',
   'Oral rehydration salts', 'Zinc', 'Paracetamol', 'Salbutamol inhaler', 'Oxygen cylinder', 'Aspirin', 'Glucose gel',
-  'Wound dressing kit', 'Tetanus vaccine', 'IV fluids', 'Blood (O negative)', 'Therapeutic food (RUTF)',
+  'Wound dressing kit', 'Tetanus vaccine', 'IV fluids', 'Blood (O negative)', 'Therapeutic food (RUTF)', 'Splint',
   'Malaria vaccine (R21)', 'Measles-rubella vaccine', 'Pentavalent vaccine', 'PCV vaccine', 'Rotavirus vaccine', 'Polio vaccine (OPV)', 'BCG vaccine', 'HPV vaccine',
 ];
 const HEAVY = new Set(['Oxygen cylinder', 'IV fluids']); // by road, not drone
@@ -159,7 +174,7 @@ const HUB_ONLY = new Set(['Oxygen cylinder', 'IV fluids', 'Blood (O negative)'])
 const MIN_STOCK: Record<string, number> = {
   'Malaria rapid test': 6, 'Antimalarial (ACT)': 4, 'Rectal artesunate': 2, 'Amoxicillin': 4, 'Ceftriaxone (pre-referral)': 2,
   'Oral rehydration salts': 6, 'Zinc': 4, 'Paracetamol': 6, 'Salbutamol inhaler': 1, 'Aspirin': 2, 'Glucose gel': 2,
-  'Wound dressing kit': 3, 'Tetanus vaccine': 2, 'Therapeutic food (RUTF)': 7,
+  'Wound dressing kit': 3, 'Tetanus vaccine': 2, 'Therapeutic food (RUTF)': 7, 'Splint': 2,
   'Malaria vaccine (R21)': 4, 'Measles-rubella vaccine': 4, 'Pentavalent vaccine': 4, 'PCV vaccine': 4, 'Rotavirus vaccine': 3, 'Polio vaccine (OPV)': 4, 'BCG vaccine': 2, 'HPV vaccine': 2,
 };
 const VACCINE_ITEMS = new Set(['Malaria vaccine (R21)', 'Measles-rubella vaccine', 'Pentavalent vaccine', 'PCV vaccine', 'Rotavirus vaccine', 'Polio vaccine (OPV)', 'BCG vaccine', 'HPV vaccine', 'Tetanus vaccine']);
@@ -225,6 +240,15 @@ function nextDoses(due: { code: string; label: string; months: number; item: str
   return due.filter((d) => (seen.has(d.item) ? false : (seen.add(d.item), true)));
 }
 
+const SEED_COMMUNITY = [
+  { villageId: 2, name: 'Dorothy', role: 'volunteer', topic: 'Lost my husband in 2024; I know the long evenings. Happy to sit with anyone.' },
+  { villageId: 2, name: 'Mutale', role: 'seeking', topic: 'Not sleeping, no interest in the field work since the floods.' },
+  { villageId: 3, name: 'Agnes', role: 'volunteer', topic: 'Church choir leader; good listener, free on Sundays.' },
+  { villageId: 6, name: 'Isaac', role: 'volunteer', topic: 'Retired teacher. Can walk to anyone in Lundazi.' },
+  { villageId: 6, name: 'Violet', role: 'seeking', topic: 'First baby coming, far from my family, worried all the time.' },
+  { villageId: 8, name: 'Peter', role: 'seeking', topic: 'Since the accident I stay inside. Would like someone to talk to.' },
+];
+
 function dueFor(p: { ageMonths: number; sex: string; pregnant: boolean; vaccinesGiven: string }) {
   const given = new Set(p.vaccinesGiven.split(',').map((s) => s.trim()).filter(Boolean));
   return SCHEDULE.filter((d) => {
@@ -271,6 +295,7 @@ function seed(ctx: any) {
     }
   }
   for (const p of PATIENTS) ctx.db.patient.insert(p);
+  for (const m of SEED_COMMUNITY) ctx.db.communityMember.insert({ id: 0n, ...m, matchedWith: '', joinedAt: ctx.timestamp });
   ctx.db.settings.insert({ id: 1, simulate: true, simEverySeconds: 6, agents: false, lastAgentsRun: ctx.timestamp }); // the officer switches the agents on
   ctx.db.tickTimer.insert({ scheduledId: 0n, scheduledAt: ScheduleAt.interval(1_000_000n) });
   log(ctx, 'Supply allocator', 0, 'Online. Watching stock at 11 posts against what pods are flagging.');
@@ -385,6 +410,22 @@ function runAgents(ctx: any) {
   const dueByVillage = new Map<string, number>();
   for (const p of ctx.db.patient.iter()) for (const d of nextDoses(dueFor(p))) dueByVillage.set(`${p.villageId}|${d.item}`, (dueByVillage.get(`${p.villageId}|${d.item}`) ?? 0) + 1);
 
+  // Community connector: pair each person seeking company with a free volunteer in the same village.
+  for (const v of posts) {
+    const members = [...ctx.db.communityMember.villageId.filter(v.id)];
+    const freeVols = members.filter((m: any) => m.role === 'volunteer' && !m.matchedWith);
+    for (const s of members.filter((m: any) => m.role === 'seeking' && !m.matchedWith)) {
+      const vol = freeVols.shift();
+      if (!vol) {
+        log(ctx, 'Community connector', v.id, `${s.name} (${short(v.name)}) is waiting for a volunteer: none free in the village yet.`);
+        break;
+      }
+      ctx.db.communityMember.id.update({ ...s, matchedWith: vol.name });
+      ctx.db.communityMember.id.update({ ...vol, matchedWith: s.name });
+      log(ctx, 'Community connector', v.id, `${short(v.name)}: ${vol.name} (volunteer) will meet ${s.name} this week; the health worker makes the introduction.`);
+    }
+  }
+
   // Supply allocator: every post should hold its minimum plus what it is actually using.
   for (const v of posts) {
     for (const item of ITEMS) {
@@ -446,6 +487,19 @@ export const recordDose = spacetimedb.reducer({ patientId: t.u32(), code: t.stri
   ctx.db.patient.id.update({ ...p, vaccinesGiven: [...given].join(',') });
 });
 
+// Someone opted in at the end of a visit (or on the community page).
+export const joinCommunity = spacetimedb.reducer(
+  { villageName: t.string(), name: t.string(), role: t.string(), topic: t.string() },
+  (ctx, { villageName, name, role, topic }) => {
+    const key = villageName.toLowerCase();
+    const v = [...ctx.db.village.iter()].find((x) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0])) ?? ctx.db.village.id.find(2);
+    const first = name.trim().split(' ')[0] || 'Someone';
+    if ([...ctx.db.communityMember.villageId.filter(v!.id)].some((m) => m.name === first && m.role === role)) return;
+    ctx.db.communityMember.insert({ id: 0n, villageId: v!.id, name: first, role, topic, matchedWith: '', joinedAt: ctx.timestamp });
+    log(ctx, 'Community connector', v!.id, role === 'volunteer' ? `${first} (${short(v!.name)}) offered to volunteer: "${topic}"` : `${first} (${short(v!.name)}) would like company through a hard time.`);
+  }
+);
+
 export const setSimulation = spacetimedb.reducer({ on: t.bool() }, (ctx, { on }) => {
   const s = ctx.db.settings.id.find(1);
   if (s) ctx.db.settings.id.update({ ...s, simulate: on });
@@ -471,6 +525,7 @@ export const resetDemo = spacetimedb.reducer((ctx) => {
   for (const v of [...ctx.db.village.iter()]) ctx.db.village.id.delete(v.id);
   for (const l of [...ctx.db.agentLog.iter()]) ctx.db.agentLog.id.delete(l.id);
   for (const p of [...ctx.db.patient.iter()]) ctx.db.patient.id.delete(p.id);
+  for (const m of [...ctx.db.communityMember.iter()]) ctx.db.communityMember.id.delete(m.id);
   for (const s of [...ctx.db.settings.iter()]) ctx.db.settings.id.delete(s.id);
   for (const tm of [...ctx.db.tickTimer.iter()]) ctx.db.tickTimer.scheduledId.delete(tm.scheduledId);
   seed(ctx);

@@ -97,7 +97,8 @@ export type TriageResult = {
   why: string | null; // why the pod is asking the current question
   complaint_known: boolean; // false until the patient has said what brought them in
   network: { post: string; advisories: { kind: string; text: string; source: string }[] }; // what the network agents told this pod
-  peer_group: { wants: boolean; category: string | null };
+  peer_group: { wants: boolean; category: string | null; volunteer: boolean };
+  verdict: "emergency" | "likely" | "uncertain" | "nothing_found"; // the one-word outcome the health worker reads first
   orders: { item: string; qty: number; note?: string; for: string }[]; // exact stock to send, only for conditions the pod is confident about
   jev_ms: number;
 };

@@ -226,6 +226,14 @@ const RULES: Rule[] = [
     test: (f) => (f.blood_in_stool ? "blood in stool" : null),
   },
   {
+    id: "possible_fracture",
+    label: "Possible broken bone: limb bent, very swollen or cannot bear weight",
+    urgency: "yellow",
+    source: "words",
+    resources: ["Splint", "Doctor review", "Referral for X-ray"],
+    test: (f) => (f.injury && (f.deformed_limb || f.cant_bear_weight) ? [f.deformed_limb && "limb bent or swollen", f.cant_bear_weight && "cannot bear weight"].filter(Boolean).join(" + ") : null),
+  },
+  {
     id: "wound_care",
     label: "Wound that needs cleaning, closing and tetanus cover",
     urgency: "yellow",

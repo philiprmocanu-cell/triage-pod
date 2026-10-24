@@ -10,6 +10,7 @@ const SCREENS = [
   { href: "/globe", title: "Live 3D map", what: "Satellite globe of Eastern Province. Every flagged need pops over its village; drones and trucks fly at real speed to the patient's home.", tag: "network", icon: "🌍" },
   { href: "/government", title: "Government view", what: "Provincial Health Office: every post × every item, what pods used, what the AI agents moved and why, and a Claude briefing ending in one decision.", tag: "network", icon: "🏛️" },
   { href: "/patients", title: "Patients & vaccines", what: "Profiles the posts keep: who is due which vaccine dose on Zambia's schedule. One click sends it to their home.", tag: "network", icon: "👶" },
+  { href: "/community", title: "Community circles", what: "People going through a hard time are paired with volunteers from their own village. Everyone is invited to volunteer at the end of a visit.", tag: "network", icon: "🤝" },
   { href: "/agents", title: "Agent bus", what: "Pods report, the sentinel warns, the allocator moves stock, the router refers emergencies, the doctor queue assigns reviews.", tag: "network", icon: "🤖" },
   { href: "/dashboard", title: "Supply simulator", what: "Start an outbreak or a flood and watch the network re-route drones and road deliveries.", tag: "network", icon: "🛩️" },
   { href: "/deploy", title: "Where next", what: "Live World Bank numbers for 19 candidate countries and the partners to call first.", tag: "plan", icon: "🗺️" },
