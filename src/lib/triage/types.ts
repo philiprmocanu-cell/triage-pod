@@ -86,6 +86,15 @@ export type TriageResult = {
   consent: number | null; // probability the patient agreed to be saved (null = not asked yet)
   intake: Intake; // intake answers so far, including ones given before they were asked
   lexicon: Partial<Record<string, string>>; // regional words learned from this patient / community
+  // The decision logic, made visible: each open pathway, why it opened, and each step's status.
+  tree: {
+    id: string;
+    label: string;
+    probability: number;
+    openedBy: string[];
+    steps: { step: string; label: string; status: "yes" | "no" | "unclear" | "next" | "waiting" }[];
+  }[];
+  why: string | null; // why the pod is asking the current question
   peer_group: { wants: boolean; category: string | null };
   jev_ms: number;
 };

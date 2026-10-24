@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { playBlob, Recorder, speakWithBrowser } from "@/lib/audio";
 import type { Lang } from "@/lib/triage/tree";
+import { TRAITS, TraitScan } from "@/lib/triage/traits";
 import type { CameraSignals, Frame, Intake, Seen, SpeechStats, TestResults, TriageResult, Turn, Urgency } from "@/lib/triage/types";
 import { CameraHandle, CameraPanel, LiveCamera } from "./CameraPanel";
 import TeachAccent from "./TeachAccent";
@@ -77,6 +78,10 @@ export default function PodScreen() {
   const [saved, setSaved] = useState<{ name: string | null; community: string | null; handover: string | null } | null>(null);
   const [testClock, setTestClock] = useState<{ label: string; left: number } | null>(null);
   const [teaching, setTeaching] = useState(false);
+  const [scanNow, setScanNow] = useState<TraitScan>({});
+  const [scanMax, setScanMax] = useState<TraitScan>({});
+  const [scanMs, setScanMs] = useState<number | null>(null);
+  const [autoStart, setAutoStart] = useState(true);
   const [typed, setTyped] = useState("");
   const [error, setError] = useState("");
   const recorder = useRef(new Recorder());
@@ -188,6 +193,7 @@ export default function PodScreen() {
           latest,
           frames: recentFrames(askedAt.current),
           seen,
+          traits: scanMax,
           tests: cur.tests,
           intake: cur.intake,
           camera: { ...cameraSnapshot(), smileTest: cur.smile ?? smileTest },
@@ -247,7 +253,7 @@ export default function PodScreen() {
       }
       setStatus(r.done ? "done" : "idle");
     },
-    [turns, tests, intake, seen, cameraSnapshot, language, locale, region, speak, runTest, smileTest],
+    [turns, tests, intake, seen, scanMax, cameraSnapshot, language, locale, region, speak, runTest, smileTest],
   );
 
   const run = useCallback(async (fn: () => Promise<void>) => {
@@ -314,8 +320,53 @@ export default function PodScreen() {
     setError("");
     setVoiceInfo("");
     setSaved(null);
+    setScanNow({});
+    setScanMax({});
     cam.current?.reset();
   };
+
+  // Live physical scan: every few seconds while someone is in front of the pod, Jev checks every
+  // visible trait over the last three pictures. Keeps the strongest reading of each trait.
+  const faceVisible = Boolean(camera?.faceVisible);
+  const scanning = useRef(false);
+  useEffect(() => {
+    if (!faceVisible || !services.jev) return;
+    const id = setInterval(async () => {
+      if (scanning.current || status === "testing" || frames.current.length < 2) return;
+      scanning.current = true;
+      try {
+        const t = now();
+        const res = await fetch("/api/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ frames: frames.current.slice(-3).map((f) => ({ secondsAgo: t - f.t, b64: f.b64 })) }),
+        });
+        if (res.ok) {
+          const d = await res.json();
+          if (d.person >= 0.5) {
+            setScanNow(d.traits);
+            setScanMax((m) => Object.fromEntries(TRAITS.map((x) => [x.id, Math.max(m[x.id] ?? 0, d.traits[x.id] ?? 0)])));
+            setScanMs(d.ms);
+          }
+        }
+      } finally {
+        scanning.current = false;
+      }
+    }, 3500);
+    return () => clearInterval(id);
+  }, [faceVisible, services.jev, status]);
+
+  // Auto-start: when someone has been sitting in front of the pod for 3 seconds, it greets them.
+  const faceSince = useRef<number | null>(null);
+  useEffect(() => {
+    if (!faceVisible) {
+      faceSince.current = null;
+      return;
+    }
+    faceSince.current ??= Date.now();
+    if (autoStart && status === "ready" && services.jev && Date.now() - faceSince.current > 3000 && Object.keys(scanNow).length) onStart();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [faceVisible, camera, autoStart, status, services.jev, scanNow]);
 
   const busy = ["looking", "transcribing", "thinking", "speaking", "testing"].includes(status);
   const canAnswer = !busy && status !== "done" && status !== "ready";
@@ -368,8 +419,9 @@ export default function PodScreen() {
         </div>
       )}
 
-      <main className="grid gap-6 p-6 lg:grid-cols-[1.1fr_1fr]">
+      <main className="grid gap-6 p-6 md:grid-cols-[1fr_1fr]">
         <section className="space-y-4">
+          <QuestionCard turns={turns} why={result?.why ?? null} status={status} />
           <div className="relative">
             <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} />
             {testClock && (
@@ -416,7 +468,13 @@ export default function PodScreen() {
               </button>
             )}
             <div className="flex-1 space-y-2">
-              <p className="text-lg">{STATUS_TEXT[status]}</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-lg">{STATUS_TEXT[status]}</p>
+                <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                  <input type="checkbox" checked={autoStart} onChange={(e) => setAutoStart(e.target.checked)} />
+                  auto-start
+                </label>
+              </div>
               <input
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
@@ -433,6 +491,7 @@ export default function PodScreen() {
         </section>
 
         <section className="space-y-4">
+          <ScanPanel now={scanNow} max={scanMax} ms={scanMs} faceVisible={faceVisible} />
           <ResultPanel result={result} tests={tests} intake={intake} saved={saved} voiceInfo={voiceInfo} />
         </section>
       </main>
@@ -483,10 +542,9 @@ function ResultPanel({
 }) {
   if (!result) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400">
-        1. The pod watches the patient for a few seconds. 2. It asks their name, community and consent. 3. It asks
-        questions and runs physical tests chosen from what it sees and hears. 4. Each answer narrows down the likely
-        condition and what the patient needs.
+      <div className="rounded-2xl border border-dashed border-slate-700 p-6 text-sm text-slate-400">
+        Sit in front of the pod: the live scan above starts by itself, and after 3 seconds the pod greets the patient.
+        Every answer then opens or closes pathways below, and the likely conditions and supplies update live.
       </div>
     );
   }
@@ -503,6 +561,28 @@ function ResultPanel({
         <p className="mt-1">{result.reason}</p>
         <p className="mt-2 text-sm font-semibold">{result.doctor_required ? "Doctor required" : "No doctor needed"}</p>
       </div>
+
+      {result.tree.length > 0 && (
+        <Card title="Decision tree · if this → ask that">
+          {result.tree.map((p) => (
+            <div key={p.id} className="mb-3 last:mb-0">
+              <div className="flex items-baseline justify-between">
+                <p className="font-semibold">{p.label}</p>
+                <span className="text-xs tabular-nums text-slate-400">{Math.round(p.probability * 100)}%</span>
+              </div>
+              <p className="text-xs text-slate-400">IF {p.openedBy.join(" + ") || "complaint"}</p>
+              <ol className="mt-1 space-y-0.5 border-l border-slate-700 pl-3">
+                {p.steps.map((st) => (
+                  <li key={st.step} className={`flex items-center gap-2 text-sm ${st.status === "next" ? "font-semibold text-sky-300" : st.status === "waiting" ? "text-slate-500" : ""}`}>
+                    <span className="w-14 shrink-0 text-xs">{STEP_BADGE[st.status]}</span>
+                    {st.label}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ))}
+        </Card>
+      )}
 
       {(intake.name || intake.community) && (
         <Card title="Patient">
@@ -662,6 +742,72 @@ function Bar({ label, value, hint, tag, small }: { label: string; value: number;
         <div className={`rounded bg-sky-500 ${small ? "h-1" : "h-2"}`} style={{ width: `${pct}%` }} />
       </div>
       {hint && <p className="mt-0.5 text-xs text-slate-500">{hint}</p>}
+    </div>
+  );
+}
+
+const STEP_BADGE: Record<string, string> = { yes: "✅ yes", no: "➖ no", unclear: "❔ unclear", next: "👉 now", waiting: "· later" };
+
+function QuestionCard({ turns, why, status }: { turns: Turn[]; why: string | null; status: Status }) {
+  const q = [...turns].reverse().find((t) => t.role === "pod");
+  if (!q) return null;
+  const isTest = q.asks?.startsWith("test:");
+  return (
+    <div className={`rounded-2xl border p-5 ${isTest ? "border-violet-500 bg-violet-950/60" : "border-sky-600 bg-sky-950/70"}`}>
+      <p className="text-xs uppercase tracking-wide text-slate-300">{isTest ? "Physical test" : status === "done" ? "Pod says" : "Pod is asking"}</p>
+      <p className="mt-1 text-2xl font-semibold leading-snug">{q.text}</p>
+      {q.english && q.english !== q.text && <p className="mt-1 text-sm italic text-slate-300">{q.english}</p>}
+      {why && <p className="mt-2 text-xs text-sky-300">Why: {why}</p>}
+    </div>
+  );
+}
+
+function ScanPanel({ now, max, ms, faceVisible }: { now: TraitScan; max: TraitScan; ms: number | null; faceVisible: boolean }) {
+  const flagged = TRAITS.filter((t) => (max[t.id] ?? 0) >= 0.4).sort((a, b) => (max[b.id] ?? 0) - (max[a.id] ?? 0));
+  const groups = [...new Set(TRAITS.map((t) => t.group))];
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+      <div className="mb-2 flex items-baseline justify-between">
+        <p className="text-xs uppercase tracking-wide text-slate-400">Live physical scan · {TRAITS.length} traits</p>
+        <span className="text-xs text-slate-500">{!faceVisible ? "waiting for a face" : ms ? `Jev ${ms} ms · every 3.5 s` : "starting…"}</span>
+      </div>
+      {flagged.length ? (
+        flagged.map((t) => (
+          <div key={t.id} className="py-1">
+            <div className="flex justify-between text-sm">
+              <span>
+                {t.label} <span className="text-xs text-slate-500">· {t.group}</span>
+              </span>
+              <span className="tabular-nums text-slate-300">
+                {Math.round((now[t.id] ?? 0) * 100)}% now · {Math.round((max[t.id] ?? 0) * 100)}% max
+              </span>
+            </div>
+            <div className="mt-1 h-1.5 rounded bg-slate-800">
+              <div className={`h-1.5 rounded ${(max[t.id] ?? 0) >= 0.6 ? "bg-amber-400" : "bg-sky-500"}`} style={{ width: `${(max[t.id] ?? 0) * 100}%` }} />
+            </div>
+          </div>
+        ))
+      ) : (
+        <p className="text-sm text-slate-400">{Object.keys(max).length ? "Nothing unusual seen so far." : "No scan yet."}</p>
+      )}
+      {Object.keys(max).length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-slate-400">All {TRAITS.length} traits checked</summary>
+          <div className="mt-2 grid grid-cols-1 gap-x-4 text-xs sm:grid-cols-2">
+            {groups.map((g) => (
+              <div key={g} className="mb-2">
+                <p className="font-semibold text-slate-300">{g}</p>
+                {TRAITS.filter((t) => t.group === g).map((t) => (
+                  <p key={t.id} className="flex justify-between text-slate-400">
+                    <span>{t.label}</span>
+                    <span className="tabular-nums">{Math.round((max[t.id] ?? 0) * 100)}%</span>
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }
