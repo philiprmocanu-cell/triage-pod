@@ -36,8 +36,8 @@ const RULES: Rule[] = [
     source: "words",
     resources: ["Emergency transport to hospital with CT", "Blood glucose check"],
     test: (f) =>
-      f.slurred_or_confused_speech || f.face_or_arm_weakness_reported
-        ? [f.slurred_or_confused_speech && "slurred/confused speech", f.face_or_arm_weakness_reported && "face/arm weakness"]
+      f.confused_speech || f.face_or_arm_weakness
+        ? [f.confused_speech && "slurred/confused speech", f.face_or_arm_weakness && "face/arm weakness"]
             .filter(Boolean)
             .join(", ")
         : null,
@@ -50,9 +50,9 @@ const RULES: Rule[] = [
     source: "words",
     resources: ["Emergency transport", "Aspirin (doctor to approve)", "ECG at receiving clinic"],
     test: (f) =>
-      f.chest_pain && (f.pain_spreads_to_arm_jaw_or_back || f.sweating_or_clammy || f.short_of_breath)
+      f.chest_pain && (f.pain_spreads || f.sweating || f.short_of_breath)
         ? "chest pain + " +
-          [f.pain_spreads_to_arm_jaw_or_back && "spreading pain", f.sweating_or_clammy && "sweating", f.short_of_breath && "short of breath"]
+          [f.pain_spreads && "spreading pain", f.sweating && "sweating", f.short_of_breath && "short of breath"]
             .filter(Boolean)
             .join(", ")
         : null,
@@ -67,10 +67,10 @@ const RULES: Rule[] = [
     test: (f) => {
       if (!isChild(f)) return null;
       const signs = [
-        f.unable_to_drink_or_breastfeed && "cannot drink/breastfeed",
+        f.unable_to_drink && "cannot drink/breastfeed",
         f.vomits_everything && "vomits everything",
         f.seizure && "convulsions",
-        f.very_sleepy_or_unconscious && "lethargic/unconscious",
+        f.very_sleepy && "lethargic/unconscious",
       ].filter(Boolean);
       return signs.length ? signs.join(", ") : null;
     },
@@ -89,7 +89,7 @@ const RULES: Rule[] = [
     urgency: "red",
     source: "words",
     resources: ["Pulse oximeter check", "Oxygen", "Pre-referral antibiotic dose", "Urgent referral"],
-    test: (f) => (f.chest_indrawing ? "chest indrawing" : null),
+    test: (f) => (f.chest_indrawing || f.blue_lips ? "chest indrawing or blue lips" : null),
   },
   {
     id: "severe_bleeding",
@@ -105,7 +105,7 @@ const RULES: Rule[] = [
     urgency: "red",
     source: "words",
     resources: ["Blood pressure check", "Urgent referral to maternity unit"],
-    test: (f) => (f.pregnant && f.severe_headache_or_blurred_vision ? "pregnant + severe headache/blurred vision" : null),
+    test: (f) => (f.pregnant && f.severe_headache ? "pregnant + severe headache/blurred vision" : null),
   },
   // Yellow: needs treatment or a doctor today
   {
@@ -130,7 +130,7 @@ const RULES: Rule[] = [
     urgency: "yellow",
     source: "words",
     resources: ["Oral rehydration salts", "Zinc"],
-    test: (f) => (f.diarrhea && f.sunken_eyes_or_very_thirsty ? "diarrhea + sunken eyes/thirst" : null),
+    test: (f) => (f.diarrhea && f.sunken_eyes ? "diarrhea + sunken eyes/thirst" : null),
   },
   {
     id: "dysentery",

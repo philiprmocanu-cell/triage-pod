@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { BrainInput, runTriage } from "@/lib/triage/brain";
+import { step, StepInput } from "@/lib/triage/engine";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as BrainInput;
+  const body = (await req.json()) as StepInput;
   try {
-    return NextResponse.json(await runTriage(body));
+    return NextResponse.json(await step(body));
   } catch (err) {
     console.error("triage failed", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Triage failed" }, { status: 500 });

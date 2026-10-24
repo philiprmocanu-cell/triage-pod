@@ -103,3 +103,34 @@ vision slide. Region is a config value, not hard-coded.
 
 Real Zipline integration, real patient data, medical approval. The pod **supports** the health
 worker and doctor; it does not diagnose on its own.
+
+## Update: Jev triage tree (built)
+
+Jev (TypeSafe `jev-latest`, an outside API like Claude) now makes every triage decision in one
+request per step, 0.1–0.8 s:
+
+1. **Look** — "Start check" sends a camera picture; Jev answers a yes/no for every visible sign
+   (sweating, struggling to breathe, face droop, drowsy, rash, sunken eyes, bleeding, wound,
+   yellow eyes, pale, blue lips, very thin). A worrying sign picks the opening question.
+2. **Listen** — after each answer Jev re-reads the conversation (each question paired with its
+   answer) and marks all 30 findings yes / no / not-yet-known, plus age group, main complaint,
+   dialect, and whether speech looks confused. Speech timing (words per second, long pauses)
+   comes from Cartesia's word timestamps.
+3. **Pathways** — findings and the complaint open pathways (stroke, chest, breathing, fever,
+   stomach, pregnancy, injury). Each pathway asks its own questions, danger signs first, skipping
+   anything already seen or answered. Children get the WHO danger-sign questions first.
+4. **Sub-classification** — inside each pathway Jev picks between sub-conditions (e.g. breathing →
+   severe pneumonia / pneumonia / asthma / TB / cold). Pathway × sub-condition = likely cause;
+   their supplies add up into the resource list.
+5. Fixed safety rules still override everything. Claude only writes English (translations and the
+   doctor's handover note) in the background.
+
+## Next: satellite layer (not built)
+
+No free satellite gives live video. Realistic free sources: NASA GIBS / Worldview daily images
+(MODIS/VIIRS, 250 m–1 km: floods, fires, smoke), Sentinel-2 every ~5 days at 10 m (roads, rivers,
+standing water), Sentinel-1 radar every ~6–12 days (sees floods through cloud), GPM IMERG
+rainfall every 30 min, plus OpenStreetMap roads and WorldPop population. Uses: is the road to the
+clinic flooded → send by drone; recent rain + standing water → malaria spike in 2–4 weeks →
+pre-stock tests; where people live far from any post → where the next pod goes. Jev can answer
+yes/no questions on map tiles ("is this road under water?").

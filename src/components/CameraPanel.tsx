@@ -14,6 +14,7 @@ const ROI_POINTS = [151, 50, 280];
 const FACE_EDGE = [234, 454];
 
 export type CameraHandle = {
+  capture: () => string | null; // base64 JPEG of the current frame, for Jev
   startSmileTest: () => void;
   finishSmileTest: () => "normal" | "asymmetric" | null;
   reset: () => void;
@@ -36,6 +37,15 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
   onSignalsRef.current = onSignals;
 
   useImperativeHandle(ref, () => ({
+    capture: () => {
+      const video = videoRef.current;
+      if (!video || !video.videoWidth) return null;
+      const c = document.createElement("canvas");
+      c.width = video.videoWidth;
+      c.height = video.videoHeight;
+      c.getContext("2d")!.drawImage(video, 0, 0);
+      return c.toDataURL("image/jpeg", 0.85).split(",")[1];
+    },
     startSmileTest: () => droop.current.startSmileTest(),
     finishSmileTest: () => droop.current.finishSmileTest(),
     reset: () => {

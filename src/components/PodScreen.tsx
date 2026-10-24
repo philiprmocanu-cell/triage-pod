@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { playBlob, Recorder, speakWithBrowser } from "@/lib/audio";
-import type { CameraSignals, TriageResult, Turn, Urgency } from "@/lib/triage/types";
+import type { Lang } from "@/lib/triage/tree";
+import type { CameraSignals, Seen, SpeechStats, TriageResult, Turn, Urgency } from "@/lib/triage/types";
 import { CameraHandle, CameraPanel, LiveCamera } from "./CameraPanel";
 
 type Region = { id: string; name: string; locale: string; languages: string[] };
@@ -15,15 +16,17 @@ const REGIONS: Region[] = [
   { id: "us", name: "Test (English)", locale: "en-US", languages: ["en", "es"] },
 ];
 
-const SMILE_PROMPT: Record<string, string> = {
+const SMILE_PROMPT: Record<Lang, string> = {
   es: "Por favor, sonría grande por tres segundos.",
   en: "Please give me a big smile for three seconds.",
 };
 
-type Status = "idle" | "listening" | "transcribing" | "thinking" | "speaking" | "smile" | "done";
+type Status = "ready" | "looking" | "idle" | "listening" | "transcribing" | "thinking" | "speaking" | "smile" | "done";
 
 const STATUS_TEXT: Record<Status, string> = {
-  idle: "Tap the microphone and speak",
+  ready: "Patient sits in front of the pod, then press Start",
+  looking: "Looking at the patient…",
+  idle: "Tap the microphone and answer",
   listening: "Listening… tap again when finished",
   transcribing: "Understanding…",
   thinking: "Checking…",
@@ -40,17 +43,34 @@ const URGENCY_STYLE: Record<Urgency, { label: string; cls: string }> = {
 
 const DELIVERY: Record<string, string> = { on_site: "In kit", drone: "Drone", road: "Road" };
 
+const SEEN_LABEL: Record<string, string> = {
+  sweating: "Sweating",
+  short_of_breath: "Struggling to breathe",
+  face_or_arm_weakness: "Face droop",
+  very_sleepy: "Drowsy / limp",
+  rash: "Rash",
+  sunken_eyes: "Sunken eyes",
+  severe_bleeding: "Bleeding",
+  injury: "Wound / injury",
+  yellow_eyes: "Yellow eyes / skin",
+  pale: "Very pale",
+  blue_lips: "Blue lips",
+  very_thin: "Very thin",
+};
+
 export default function PodScreen() {
   const [region, setRegion] = useState(REGIONS[0]);
-  const [status, setStatus] = useState<Status>("idle");
+  const [status, setStatus] = useState<Status>("ready");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [result, setResult] = useState<TriageResult | null>(null);
-  const [language, setLanguage] = useState<string | null>(null);
+  const [seen, setSeen] = useState<Seen>({});
+  const [language, setLanguage] = useState<Lang | null>(null);
   const [locale, setLocale] = useState<string | null>(null);
   const [camera, setCamera] = useState<LiveCamera | null>(null);
   const [smileTest, setSmileTest] = useState<CameraSignals["smileTest"]>("not_done");
-  const [services, setServices] = useState({ cartesia: false, claude: false });
-  const [voiceInfo, setVoiceInfo] = useState<string>("");
+  const [services, setServices] = useState({ cartesia: false, jev: false, claude: false });
+  const [voiceInfo, setVoiceInfo] = useState("");
+  const [handover, setHandover] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
   const [error, setError] = useState("");
   const recorder = useRef(new Recorder());
@@ -80,47 +100,85 @@ export default function PodScreen() {
     [services.cartesia],
   );
 
+  const cameraSnapshot = useCallback(
+    (): CameraSignals => ({
+      heartRateBpm: camera?.heartRateBpm ?? null,
+      heartRateConfidence: camera?.heartRateConfidence ?? 0,
+      droop: camera?.droop ?? null,
+      smileTest,
+    }),
+    [camera, smileTest],
+  );
+
+  // One Jev step: send the conversation + a fresh picture, show the result, ask the next question.
   const triage = useCallback(
-    async (latest: { text?: string; candidates?: Record<string, string> }) => {
-      setStatus("thinking");
-      const cameraSnapshot: CameraSignals = {
-        heartRateBpm: camera?.heartRateBpm ?? null,
-        heartRateConfidence: camera?.heartRateConfidence ?? 0,
-        droop: camera?.droop ?? null,
-        smileTest,
-      };
+    async (stage: "look" | "answer", latest?: { text?: string; candidates?: Record<string, string>; speech?: SpeechStats }) => {
+      setStatus(stage === "look" ? "looking" : "thinking");
       const res = await fetch("/api/triage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ turns, latest, camera: cameraSnapshot, defaultLocale: locale ?? region.locale, region: region.name }),
+        body: JSON.stringify({
+          stage,
+          turns,
+          latest,
+          image: cam.current?.capture() ?? undefined,
+          seen,
+          camera: cameraSnapshot(),
+          language,
+          region: region.name,
+          defaultLocale: locale ?? region.locale,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Triage failed");
       const r = data as TriageResult;
       setResult(r);
-      setLanguage(r.language);
-      setLocale(r.locale);
-      const next: Turn[] = [...turns, { role: "patient", text: r.patient_text, english: r.patient_text_english }];
-      if (r.next_question) next.push({ role: "pod", text: r.next_question, english: r.next_question_english ?? undefined });
+      setSeen(r.seen);
+      const lang = stage === "answer" ? r.language : language ?? (region.locale.startsWith("en") ? "en" : "es");
+      const loc = stage === "answer" ? r.locale : locale ?? region.locale;
+      if (stage === "answer") {
+        setLanguage(r.language);
+        setLocale(r.locale);
+      }
+
+      const next: Turn[] = [...turns];
+      if (r.patient_text) {
+        const idx = next.length;
+        next.push({ role: "patient", text: r.patient_text, english: lang === "en" ? r.patient_text : undefined });
+        if (lang !== "en") {
+          fetch("/api/english", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ translate: r.patient_text }) })
+            .then((x) => x.json())
+            .then((d) => d.text && setTurns((ts) => ts.map((t, i) => (i === idx ? { ...t, english: d.text } : t))))
+            .catch(() => {});
+        }
+      }
+      if (r.next) next.push({ role: "pod", text: r.next.text, english: r.next.english, asks: r.next.asks ?? undefined });
       setTurns(next);
-      if (r.next_question) await speak(r.next_question, r.locale);
+
+      if (r.done) {
+        setHandover("");
+        fetch("/api/english", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ handover: { turns: next, result: r } }) })
+          .then((x) => x.json())
+          .then((d) => setHandover(d.text ?? null))
+          .catch(() => setHandover(null));
+      }
+      if (r.next) await speak(r.next.text, loc);
       setStatus(r.done ? "done" : "idle");
     },
-    [camera, smileTest, turns, locale, region, speak],
+    [turns, seen, cameraSnapshot, language, locale, region, speak],
   );
 
-  const run = useCallback(
-    async (fn: () => Promise<void>) => {
-      setError("");
-      try {
-        await fn();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setStatus("idle");
-      }
-    },
-    [],
-  );
+  const run = useCallback(async (fn: () => Promise<void>) => {
+    setError("");
+    try {
+      await fn();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setStatus((s) => (s === "looking" ? "ready" : "idle"));
+    }
+  }, []);
+
+  const onStart = () => run(() => triage("look"));
 
   const onMic = () =>
     run(async () => {
@@ -133,9 +191,15 @@ export default function PodScreen() {
         const res = await fetch("/api/stt", { method: "POST", body: form });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Transcription failed");
-        const transcripts = data.transcripts as Record<string, string>;
-        if (Object.values(transcripts).every((t) => !t)) throw new Error("Didn't catch that — please try again.");
-        await triage(language ? { text: transcripts[language] } : { candidates: transcripts });
+        const t = data.transcripts as Record<string, { text: string; speech: SpeechStats }>;
+        if (Object.values(t).every((x) => !x.text)) throw new Error("Didn't catch that — please try again.");
+        const first = Object.values(t)[0];
+        await triage(
+          "answer",
+          language
+            ? { text: t[language].text, speech: t[language].speech }
+            : { candidates: Object.fromEntries(Object.entries(t).map(([l, x]) => [l, x.text])), speech: first.speech },
+        );
       } else {
         await recorder.current.start();
         setStatus("listening");
@@ -144,38 +208,41 @@ export default function PodScreen() {
 
   const onTyped = () =>
     run(async () => {
-      if (!typed.trim()) return;
       const text = typed.trim();
+      if (!text) return;
       setTyped("");
-      await triage({ text });
+      await triage("answer", { text });
     });
 
   const onSmileTest = () =>
     run(async () => {
-      const lang = language ?? region.languages[0];
-      await speak(SMILE_PROMPT[lang] ?? SMILE_PROMPT.en, locale ?? region.locale);
+      const lang = language ?? (region.locale.startsWith("en") ? "en" : "es");
+      await speak(SMILE_PROMPT[lang], locale ?? region.locale);
       setStatus("smile");
       cam.current?.startSmileTest();
       await new Promise((r) => setTimeout(r, 3500));
       const outcome = cam.current?.finishSmileTest();
       setSmileTest(outcome ?? "not_done");
-      setStatus(result?.done ? "done" : "idle");
+      setStatus(result?.done ? "done" : turns.length ? "idle" : "ready");
       if (!outcome) setError("Couldn't see a smile — try the smile test again.");
     });
 
   const reset = () => {
     setTurns([]);
     setResult(null);
+    setSeen({});
     setLanguage(null);
     setLocale(null);
     setSmileTest("not_done");
-    setStatus("idle");
+    setStatus("ready");
     setError("");
     setVoiceInfo("");
+    setHandover(null);
     cam.current?.reset();
   };
 
-  const busy = ["transcribing", "thinking", "speaking", "smile"].includes(status);
+  const busy = ["looking", "transcribing", "thinking", "speaking", "smile"].includes(status);
+  const canAnswer = !busy && status !== "done" && status !== "ready";
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -203,9 +270,9 @@ export default function PodScreen() {
         </div>
       </header>
 
-      {(!services.cartesia || !services.claude) && (
+      {(!services.cartesia || !services.jev) && (
         <div className="mx-6 mt-4 rounded-lg border border-amber-700 bg-amber-950/60 px-4 py-2 text-sm text-amber-200">
-          {!services.claude && "Claude key missing — add ANTHROPIC_API_KEY to .env.local. "}
+          {!services.jev && "Jev key missing — add TYPESAFE_API_KEY to .env.local. "}
           {!services.cartesia && "Cartesia key missing — using typing and the browser voice until CARTESIA_API_KEY is added."}
         </div>
       )}
@@ -225,25 +292,30 @@ export default function PodScreen() {
               alert={Boolean(camera?.droop?.flagged)}
               note={camera?.droop?.flagged ? `patient's ${camera.droop.side} side` : `asymmetry ${Math.round((camera?.droop?.score ?? 0) * 100)}%`}
             />
-            <Vital
-              label="Smile test"
-              value={smileTest === "not_done" ? "not done" : smileTest}
-              alert={smileTest === "asymmetric"}
-              note="FAST stroke check"
-            />
+            <Vital label="Smile test" value={smileTest === "not_done" ? "not done" : smileTest} alert={smileTest === "asymmetric"} note="FAST stroke check" />
           </div>
 
           <div className="flex items-center gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-4">
-            <button
-              onClick={onMic}
-              disabled={busy || status === "done" || !services.cartesia}
-              className={`h-20 w-20 shrink-0 rounded-full text-3xl transition ${
-                status === "listening" ? "animate-pulse bg-red-600" : "bg-sky-600 hover:bg-sky-500"
-              } disabled:opacity-40`}
-              aria-label="Speak"
-            >
-              🎙️
-            </button>
+            {status === "ready" || status === "looking" ? (
+              <button
+                onClick={onStart}
+                disabled={busy || !services.jev}
+                className="h-20 shrink-0 rounded-2xl bg-sky-600 px-6 text-lg font-semibold hover:bg-sky-500 disabled:opacity-40"
+              >
+                Start check
+              </button>
+            ) : (
+              <button
+                onClick={onMic}
+                disabled={!canAnswer && status !== "listening" || !services.cartesia}
+                className={`h-20 w-20 shrink-0 rounded-full text-3xl transition ${
+                  status === "listening" ? "animate-pulse bg-red-600" : "bg-sky-600 hover:bg-sky-500"
+                } disabled:opacity-40`}
+                aria-label="Speak"
+              >
+                🎙️
+              </button>
+            )}
             <div className="flex-1 space-y-2">
               <p className="text-lg">{STATUS_TEXT[status]}</p>
               <div className="flex gap-2">
@@ -251,7 +323,7 @@ export default function PodScreen() {
                   value={typed}
                   onChange={(e) => setTyped(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && onTyped()}
-                  disabled={busy || status === "done"}
+                  disabled={!canAnswer}
                   placeholder="…or type what the patient says"
                   className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
                 />
@@ -271,7 +343,7 @@ export default function PodScreen() {
         </section>
 
         <section className="space-y-4">
-          <ResultPanel result={result} voiceInfo={voiceInfo} />
+          <ResultPanel result={result} voiceInfo={voiceInfo} handover={handover} />
         </section>
       </main>
     </div>
@@ -304,16 +376,19 @@ function Conversation({ turns }: { turns: Turn[] }) {
   );
 }
 
-function ResultPanel({ result, voiceInfo }: { result: TriageResult | null; voiceInfo: string }) {
+function ResultPanel({ result, voiceInfo, handover }: { result: TriageResult | null; voiceInfo: string; handover: string | null }) {
   if (!result) {
     return (
       <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center text-slate-400">
-        The patient speaks in their own language. The pod watches, listens, asks follow-up questions, and the
-        triage decision appears here.
+        1. The pod looks at the patient for visible signs. 2. It asks questions in their own language, picked from
+        what it saw and heard. 3. Each answer narrows down the likely condition and what the patient needs.
       </div>
     );
   }
   const u = URGENCY_STYLE[result.urgency];
+  const seenList = Object.entries(result.seen)
+    .filter(([, v]) => (v ?? 0) >= 0.3)
+    .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0));
   return (
     <div className="space-y-4">
       <div className={`rounded-2xl p-5 ${u.cls}`}>
@@ -339,27 +414,71 @@ function ResultPanel({ result, voiceInfo }: { result: TriageResult | null; voice
         </Card>
       )}
 
-      <Card title="Likely causes (estimates)">
-        {result.causes.map((c) => (
-          <Bar key={c.name} label={c.name} value={c.probability} hint={c.why} />
-        ))}
+      <Card title={`What Jev sees on camera · answered in ${result.jev_ms} ms`}>
+        {seenList.length ? (
+          seenList.map(([k, v]) => <Bar key={k} label={SEEN_LABEL[k] ?? k} value={v ?? 0} />)
+        ) : (
+          <p className="text-sm text-slate-400">No visible warning signs.</p>
+        )}
+      </Card>
+
+      {result.pathways.length > 0 && (
+        <Card title="Pathways explored → sub-classification">
+          {result.pathways.map((p) => (
+            <div key={p.id} className="py-1.5">
+              <Bar label={p.label} value={p.probability} />
+              <div className="ml-4 border-l border-slate-700 pl-3">
+                {p.subtypes.slice(0, 3).map((s) => (
+                  <Bar key={s.name} label={s.name} value={s.probability} tag={s.urgency === "red" ? "red" : undefined} small />
+                ))}
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      <Card title="Likely causes (pathway × sub-classification)">
+        {result.causes.length ? (
+          result.causes.map((c) => <Bar key={c.name} label={c.name} value={c.probability} hint={c.why} />)
+        ) : (
+          <p className="text-sm text-slate-400">Waiting for the patient&apos;s answer.</p>
+        )}
       </Card>
 
       <Card title="Resources this patient will likely need">
-        {result.resources.map((r) => (
-          <Bar key={r.item} label={r.item} value={r.probability} tag={DELIVERY[r.delivery]} />
-        ))}
+        {result.resources.length ? (
+          result.resources.map((r) => <Bar key={r.item} label={r.item} value={r.probability} tag={DELIVERY[r.delivery]} />)
+        ) : (
+          <p className="text-sm text-slate-400">None yet.</p>
+        )}
       </Card>
 
-      <Card title="Handover note for the doctor">
-        <p>{result.english_summary}</p>
-      </Card>
+      {result.findings.length > 0 && (
+        <Card title="Findings (said · seen)">
+          <div className="flex flex-wrap gap-2">
+            {result.findings.map((f) => (
+              <span
+                key={f.key}
+                className={`rounded-full px-2.5 py-1 text-xs ${f.yes >= 0.6 ? "bg-sky-800 text-sky-100" : "bg-slate-800 text-slate-400"}`}
+              >
+                {f.label} {Math.round(f.yes * 100)}% · {f.source}
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {handover !== null && (
+        <Card title="Handover note for the doctor">
+          <p>{handover || "Writing…"}</p>
+        </Card>
+      )}
 
       <Card title="Language & dialect">
         <p>
           {result.language.toUpperCase()} · <span className="font-semibold">{result.locale}</span>
         </p>
-        <p className="text-sm text-slate-400">{result.dialect_reason}</p>
+        <p className="text-sm text-slate-400">{result.locale_reason}</p>
         {voiceInfo && <p className="mt-1 text-xs text-slate-500">Pod voice: {voiceInfo}</p>}
       </Card>
     </div>
@@ -375,19 +494,19 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-function Bar({ label, value, hint, tag }: { label: string; value: number; hint?: string; tag?: string }) {
+function Bar({ label, value, hint, tag, small }: { label: string; value: number; hint?: string; tag?: string; small?: boolean }) {
   const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
   return (
-    <div className="py-1.5">
-      <div className="flex items-baseline justify-between gap-2 text-sm">
+    <div className={small ? "py-1" : "py-1.5"}>
+      <div className={`flex items-baseline justify-between gap-2 ${small ? "text-xs text-slate-300" : "text-sm"}`}>
         <span>
           {label}
-          {tag && <span className="ml-2 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-300">{tag}</span>}
+          {tag && <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${tag === "red" ? "bg-red-900 text-red-200" : "bg-slate-800 text-slate-300"}`}>{tag}</span>}
         </span>
         <span className="tabular-nums text-slate-300">{pct}%</span>
       </div>
-      <div className="mt-1 h-2 rounded bg-slate-800">
-        <div className="h-2 rounded bg-sky-500" style={{ width: `${pct}%` }} />
+      <div className={`mt-1 rounded bg-slate-800 ${small ? "h-1" : "h-2"}`}>
+        <div className={`rounded bg-sky-500 ${small ? "h-1" : "h-2"}`} style={{ width: `${pct}%` }} />
       </div>
       {hint && <p className="mt-0.5 text-xs text-slate-500">{hint}</p>}
     </div>
