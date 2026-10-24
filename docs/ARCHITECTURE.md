@@ -39,18 +39,24 @@ Rules in code override everything (red flags). A condition is named only when a 
 | `/patients` | posts | 24 profiles, vaccine doses due on Zambia's schedule, send to home |
 | `/agents`, `/dashboard`, `/deploy`, `/registry`, `/demo` | judges / you | agent bus, supply simulator, where-next with World Bank data, saved visits, the demo script |
 
-## 3. One visit, step by step
+## 3. One visit, step by step (gated like a nurse)
 
-1. **Look.** The camera scans every 3.5 s: Jev judges 61 traits over the last three pictures (plus a face close-up). Face, skin and eye traits are judged only when a face is close, facing and lit; posture traits (holding chest, cane, bandage) only need the body in view. A patient's clear "no" later beats the camera.
-2. **Intake.** Name, village, who the visit is for and age, consent to save. Skipped if already said ("I'm Rosa from Katete with my son, he's three").
-3. **Open.** "What brings you in today?" Then Claude restates it: "I understand you've had fever with chills for three days, is that right?" A garbled transcript gets "tell me again in other words".
-4. **History.** Since when, what it stops you doing, how strong 1-10. Skipped for "just a check-up, I feel fine".
-5. **Camera hunches** (at most two signs, two questions each): confirm the sign in the patient's words, then its cause (section 6).
-6. **Pathway questions.** The complaint opens one or more pathways (section 5); danger signs first; physical tests where a camera can judge (smile, arm drift, walk, crouch, bend, chest, palms, feet, finger sensor).
-7. **"Anything else?"** then the **closing**: urgency colour, what the health worker will do, Claude's safety-net advice ("come back right away if...").
-8. **Save.** Registry + handover note + the exact order to SpacetimeDB, which feeds the globe, the government view and the agents.
+1. **Look.** The camera scans every 3.5 s: Jev judges 61 traits over the last three pictures (plus a face close-up). Face, skin and eye traits are judged only when a face is close, facing and lit; posture traits (holding chest, cane, bandage) only need the body in view. Nothing the camera sees opens an area by itself: it becomes a question.
+2. **Intake.** Name, village, who the visit is for and age, consent to save. Skipped if already said.
+3. **Open.** "What brings you in today?" Then Claude restates it and asks if that is right. A garbled transcript gets "tell me again in other words".
+4. **The gate.** Only what the patient SAID opens an area: a trigger symptom in their words ("fever" opens Fever; "my chest hurts" opens Chest), or Jev's reading of the complaint at 50%+ for that area. At most two areas are open at once; everything else stays closed until another symptom they mention matches it. A headache never opens Injury.
+5. **History.** "Since when" always; "what can't you do" only when no area opened; "how strong, 1-10" only when the story is pain (headache, back, chest, injury, stomach).
+6. **Camera hunches** (at most two signs, two questions each): confirm the sign in the patient's words, then its cause. A "no" closes it.
+7. **Area questions.** Up to 4 per open area, danger signs first, physical tests where the camera can judge; at most 7 medical questions and tests in total.
+8. **"Anything else?"** then the volunteer invitation (adults, consented), then the **closing**.
+9. **Hard stop.** 16 pod turns at most, whatever happened. Then the closing.
+10. **Save.** Registry + handover + the exact order to SpacetimeDB (globe, government, agents); opt-ins to the community circles.
 
-A red flag at any point: "We are calling for help now", up to three more danger-sign questions (fits, bleeding, can they drink), then the red closing. A suspected stroke runs the smile, arm and speech checks first. Suicide risk closes warmly at once.
+The closing is one of four verdicts the health worker reads first:
+- **Emergency** (a red rule fired): help is called; up to three more danger-sign questions first; no intake if it happened before the name.
+- **Likely** (a condition is confident): the condition, the colour, the exact order.
+- **Uncertain** (an area opened but the questions ran out without a clear answer): the pod says so and sends the area's cover kit anyway (fever: malaria test + paracetamol; stomach: ORS; injury: dressing kit...). The health worker checks the same day.
+- **Nothing found**: "Nothing serious came up today; most likely a minor illness that will pass." Nothing ordered. Not everyone who comes in is sick.
 
 If the patient asks the pod something ("is this serious?"), it answers in one or two sentences and then asks the side-stepped question again. If they say "sorry, what?", it repeats once in the language they are speaking.
 
@@ -363,10 +369,19 @@ Measured vitals: SpO2 < 90 red, 90-93 yellow; temperature >= 40 yellow (>= 38 co
 
 ## 8. Confidence: when a condition is named
 
-- Each open pathway gets a Jev choice over its conditions (plus "Not sure yet"). Probability = pathway strength x Jev's pick x confidence, where confidence = 0.35 + 0.15 per answered question in that pathway (full after five).
-- **Named** only if a safety rule backs it, or probability >= 0.70 with >= 2 separate findings and the pathway is past the early stage.
+- Each open area gets a Jev choice over its conditions (plus "Not sure yet"). Probability = area strength x Jev's pick x confidence, where confidence = 0.35 + 0.15 per answered question in that area (full after five).
+- **Named** only if a safety rule backs it, or probability >= 0.70 with >= 2 separate findings and the area is past the early stage.
 - Urgency comes from rules and named conditions only. Guesses never change the colour.
+- Orders come from named conditions and rules only, plus the cover kit of an uncertain area. Nothing is ordered for a guess.
 - The staff screen shows the top causes with "for / against" evidence so the worker sees why.
+
+## 8b. What Jev sees and does, exactly
+
+Jev is asked, every few seconds, one yes/no per trait over the last three pictures: "Is the face visibly sweaty?", "Is the person holding their chest?", "Are the whites of the eyes yellow?" It answers each with a probability. The pod smooths them over scans (one flicker only reaches 40%). Then:
+- A trait tied to a **finding** (yellow eyes, rash, holding chest) counts as something seen, and the pod asks the patient about it in their own words before it counts for anything.
+- A trait tied to a **hint** (flushed face, mouth breathing, cane) only earns a question in that area; it never opens the area on its own.
+- At the end of a visit the camera's "seen" list is on the staff screen as "camera noticed, worth asking about", never as a diagnosis.
+- During a visit Jev also reads every answer: for each of the 53 symptoms, "did the patient say yes / no / nothing about this?", which language they are speaking, whether they asked the pod a question, whether they answered the last question, and, for each open area, which condition fits best.
 
 ## 9. Real cases: what it saw, what it asked, what it concluded
 
