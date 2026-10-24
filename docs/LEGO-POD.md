@@ -6,6 +6,10 @@ Rule check (Cal Hacks 13.0 Hacker Guide): "All projects must be started during t
 
 The link: the XIAO nRF52840 has no Wi-Fi. It talks over the **USB cable** to the laptop. A small bridge program on the laptop (`hardware/pod-serial-bridge.py`) reads it and feeds the app; the kiosk URL stays `http://localhost:3418/kiosk?village=Katete` with the laptop webcam.
 
+Picture booklet of every step below (Lego style, one action per page): `hardware/booklet/Triage Pod — From the Watch.pdf`, 23 pages, also on the Desktop. Pages 1–12 take the watch apart at home, 13–18 plug together at the table, 19–23 power up.
+
+Decisions taken 2026-10-24 (Philip: "that's it"): no screen on the pod, USB power only, the breadboard Philip owns (half-size), and **the sensor stays plugged into the DRV board: the DRV's four wires are cut off the XIAO's pin tops and pushed into the breadboard rows** (red 3V3, black GND, white D4, yellow D5). No new cable needed. The DRV just passes the sensor through.
+
 Open questions (answers change the pages, not the plan): is the sensor's four-colour cable soldered into its holes or plugged into its black socket; screen on the pod or not; battery or USB only. Below assumes: cable to be checked, no screen, USB only.
 
 ## What you take from the watch (at home, scissors only)
@@ -13,13 +17,13 @@ Open questions (answers change the pages, not the plan): is the sensor's four-co
 | Part | Where it is | What to do |
 |---|---|---|
 | **XIAO nRF52840 Sense** (factory pins) | plugged into the back of the round screen board; four wires (red/black/white/yellow) soldered to the tops of its pins, going to the navy DRV board | watch switch OFF. Cut the four wires at the XIAO's pins with scissors (a stub of solder stays on each pin; fine). Lift the XIAO straight up out of the screen's sockets |
-| **Red MAX30101 sensor** | on the white foam pad; its four-colour cable goes to the DRV board's white socket | pull the small white plug out of the DRV board. Lift the sensor out. **Send a close-up of where the cable enters the red board:** if it is soldered into the holes, the sensor gets a new Qwiic cable into one of its two black sockets; if it is a plug, the socket is free for the new cable too. See "Cable" below |
+| **Red MAX30101 sensor + DRV board + motor** | the sensor's cable is plugged into the DRV's white socket; the DRV's four wires go to the XIAO | after the four cuts at the XIAO, lift the DRV with the sensor and motor out as one piece. Nothing on it is unplugged. **Send a close-up of where the cable enters the red board:** if it is soldered into the holes, the sensor gets a new Qwiic cable into one of its two black sockets; if it is a plug, the socket is free for the new cable too. See "Cable" below |
 | Screen board, DRV board, buzz motor, 500 mAh battery | the rest of the watch | not used. Leave them as they are |
 | **USB-C data cable** | your bag | the pod's power and its link to the laptop |
 
 ## Cable
 
-The sensor must reach four XIAO rows on the breadboard: GND, 3V3, D4, D5. The clean way is a **Qwiic-to-pins cable** (small white plug on one end, four loose pins on the other, SparkFun "Qwiic Cable – Breadboard Jumper" / Adafruit 4209): plug into either black socket on the red board, pins into the breadboard. If none can be had: four male-female jumper wires from the Arduino kit onto the sensor's existing cable pins, or (fallback) a MAX30102 module with header pins from the rental booth's sensor assortment, same program.
+The sensor must reach four XIAO rows on the breadboard: GND, 3V3, D4, D5. The way chosen: the sensor stays on the DRV board and the DRV's four wires go into the rows (see the booklet). Alternative, if a cable turns up: a **Qwiic-to-pins cable** (small white plug on one end, four loose pins on the other, SparkFun "Qwiic Cable – Breadboard Jumper" / Adafruit 4209): plug into either black socket on the red board, pins into the breadboard. If none can be had: four male-female jumper wires from the Arduino kit onto the sensor's existing cable pins, or (fallback) a MAX30102 module with header pins from the rental booth's sensor assortment, same program.
 
 ## What you get at the venue (rental booth, from 6 PM Friday)
 
@@ -29,13 +33,13 @@ The sensor must reach four XIAO rows on the breadboard: GND, 3V3, D4, D5. The cl
 ## The build at the table (every joint is a plug)
 
 1. Push the XIAO into the breadboard so one pin row is above the middle gap and the other below it, USB-C pointing off the short edge. Each pin now owns a row of five holes.
-2. Qwiic cable's plug into either black socket on the red sensor. Its four pins into the breadboard rows of these XIAO pins:
+2. Strip 5 mm off each of the DRV's four cut wires, twist tight, and push them into the breadboard rows of these XIAO pins:
 
-| Cable wire | XIAO pin |
+| DRV wire | XIAO pin |
 |---|---|
 | black | GND (right column, 2nd pin from USB-C) |
 | red | 3V3 (right column, 3rd pin). **Never 5V** |
-| blue | D4 (left column, 5th pin) |
+| white | D4 (left column, 5th pin) |
 | yellow | D5 (left column, 6th pin) |
 
 Pin map of the XIAO nRF52840 Sense, USB-C pointing up, component side up: left column D0 D1 D2 D3 D4 D5 D6 top to bottom; right column 5V GND 3V3 D10 D9 D8 D7. Same layout as the ESP32-S3.
@@ -47,7 +51,7 @@ Pin map of the XIAO nRF52840 Sense, USB-C pointing up, component side up: left c
    D1  ●  │               │  ●  GND  ← black
    D2  ●  │  XIAO         │  ●  3V3  ← red
    D3  ●  │  nRF52840     │  ●  D10
-   D4  ●  │  Sense        │  ●  D9      D4 ← blue (SDA)
+   D4  ●  │  Sense        │  ●  D9      D4 ← white (SDA)
    D5  ●  │               │  ●  D8      D5 ← yellow (SCL)
    D6  ●  │               │  ●  D7
           └───────────────┘
@@ -77,7 +81,7 @@ Faceplate and sensor shelf unchanged (sensor window-up in the shelf, cable throu
 | What you see | Do |
 |---|---|
 | bridge says "waiting for the pod on USB" | cable is power-only or not in the XIAO; try another USB-C cable |
-| `"sensor":false` in the pod's line | red/black/blue/yellow in the wrong rows, or a pin not fully in. Swap blue and yellow first |
+| `"sensor":false` in the pod's line | red/black/white/yellow in the wrong rows, or an end not fully in. Swap white and yellow first |
 | hr/spo2 stay 0 | finger flatter and stiller, lighter touch; keep fingers off for the first second after plugging in |
 | bridge prints `-> no app` | the laptop app is not running on :3418 |
 
