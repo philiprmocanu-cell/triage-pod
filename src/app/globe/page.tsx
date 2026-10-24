@@ -92,9 +92,14 @@ export default function GlobePage() {
         .ringPropagationSpeed(1.6)
         .ringRepeatPeriod(700);
       g.pointOfView({ lat: 0, lng: 15, altitude: 3.2 });
-      setTimeout(() => g.pointOfView({ lat: -12.75, lng: 33.35, altitude: 0.14 }, 4200), 700); // fly in from space
+      // Fly in from space to a view that still shows the curve of the planet and the whole
+      // province. (Any closer and the scroll wheel barely zooms: globe.gl scales the zoom step
+      // with the distance to the ground.)
+      setTimeout(() => g.pointOfView({ lat: -13.2, lng: 33.3, altitude: 0.38 }, 4200), 700);
       g.controls().autoRotate = false;
+      g.controls().zoomSpeed = 1.2;
       globeRef.current = g;
+      (window as unknown as { __globe?: unknown }).__globe = g; // for debugging from the console
 
       // Movers (drones/trucks) glide between towns; refresh markers a few times a second.
       const loop = () => {
@@ -236,7 +241,7 @@ export default function GlobePage() {
       <style>{CSS}</style>
       <div ref={el} className="absolute inset-0" />
 
-      <div className="pointer-events-none absolute left-5 top-5 z-10 max-w-md">
+      <div className="pointer-events-none absolute left-5 top-14 z-10 max-w-md">
         <p className="text-xs uppercase tracking-[0.25em] text-sky-300">Pod network · live</p>
         <h1 className="text-2xl font-bold">Eastern Province, Zambia</h1>
         <p className="mt-1 text-sm text-slate-300">
@@ -271,7 +276,7 @@ export default function GlobePage() {
         </div>
       </div>
 
-      <div className="hud absolute bottom-5 right-5 top-5 z-10 flex w-[26rem] flex-col p-4">
+      <div className="hud absolute bottom-5 right-5 top-14 z-10 flex w-[26rem] flex-col p-4">
         <div className="mb-3 flex items-center justify-between font-mono text-[11px] uppercase tracking-[0.25em] text-sky-300/90">
           <span>
             <span className="blink mr-2 inline-block h-2 w-2 rounded-full bg-emerald-400 align-middle" />
