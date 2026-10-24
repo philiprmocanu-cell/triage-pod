@@ -123,6 +123,21 @@ export async function extractWords(input: { conversation: unknown[]; language: "
   }
 }
 
+// Fixed wordings (closings, test instructions, re-asks) exist in English and Spanish only. For any
+// other language the patient speaks, Claude renders them, with a cache so each line costs once.
+const translations = new Map<string, string>();
+export async function translateTo(text: string, locale: string): Promise<string> {
+  const key = `${locale}|${text}`;
+  const hit = translations.get(key);
+  if (hit) return hit;
+  const out = await ask(
+    `Translate what a village health pod says to a patient into the language and regional variety "${locale}" exactly as people speak it (for ar-MA that is Moroccan Darija in Arabic script, not Modern Standard Arabic). Keep it short, warm and plain. Reply with the translation only.`,
+    text,
+  );
+  translations.set(key, out);
+  return out;
+}
+
 // Reflective listening: say back what the patient told us, so a speech-to-text slip ("tóxica
 // lentura" for "tos y calentura") is caught before the pod reasons on it.
 export async function confirmComplaint(input: { said: string; language: string; locale: string }): Promise<{ text: string; english: string } | "UNCLEAR"> {

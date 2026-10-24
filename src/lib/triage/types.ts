@@ -66,6 +66,7 @@ export type Intake = Partial<Record<IntakeField, string>>;
 
 export type TriageResult = {
   language: Lang;
+  spoken_language: string; // what the patient actually speaks (en, es, ar...); the logic runs in `language`
   locale: string;
   locale_reason: string;
   age_group: AgeGroup;

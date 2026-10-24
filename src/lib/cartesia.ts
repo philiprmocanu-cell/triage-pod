@@ -69,11 +69,16 @@ const ACCENTS: Record<string, string[]> = {
   "en-IN": ["indian-english", "british"],
   "en-GB": ["british"],
   "en-US": ["general-american"],
+  // Arabic: Cartesia has Modern Standard and Gulf voices, no Moroccan one yet; Darija words are
+  // written by Claude and read by the nearest voice.
+  "ar-MA": ["modern-standard-arabic", "khaleeji"],
+  "ar": ["modern-standard-arabic", "khaleeji"],
 };
 
 // Cartesia's speech engine accepts only these Spanish regions; the voice carries the accent.
 export function ttsLocale(locale: string): string {
   if (locale.startsWith("en")) return "en-US";
+  if (locale.startsWith("ar")) return "ar";
   if (locale === "es-ES") return "es-ES";
   if (["es-MX", "es-GT", "es-HN", "es-SV", "es-NI"].includes(locale)) return "es-MX";
   return "es-US"; // neutral Latin American

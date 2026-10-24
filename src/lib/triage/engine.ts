@@ -10,7 +10,7 @@
 import { jev, JevQuestion, noulOf, probsOf } from "../jev";
 import { advisoriesFor } from "../agents";
 import { postFor } from "../network";
-import { closingAdvice, confirmComplaint, extractWords, followUpQuestion, phraseNext, replyToPatient } from "./brain";
+import { closingAdvice, confirmComplaint, extractWords, followUpQuestion, phraseNext, replyToPatient, translateTo } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { NOTICED, TRAITS, TraitScan } from "./traits";
 import { COVER_KIT, ordersFor, RULE_SUPPLIES } from "./supplies";
@@ -78,6 +78,7 @@ export type StepInput = {
   intake: Intake;
   camera: CameraSignals;
   language: Lang | null;
+  spoken?: string | null; // the patient's actual language from earlier turns (en, es, ar...)
   region: string;
   defaultLocale: string;
 };
@@ -91,7 +92,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const epi = epiFor(input.region);
   // Conditions that cannot occur in this region are never offered to Jev or named.
   const subtypesOf = (p: Pathway) => p.subtypes.filter((s) => !(NEEDS_EPI[s.name] && !epi[NEEDS_EPI[s.name]]));
-  let language: Lang = input.language ?? (input.defaultLocale.startsWith("en") ? "en" : "es");
+  let language: Lang = input.language ?? (input.defaultLocale.startsWith("es") ? "es" : "en"); // the logic language: Spanish regions reason in Spanish, everyone else in English
+  // The language the patient speaks. The logic (findings, rules) always runs in English or Spanish;
+  // any other language is rendered by Claude on the way out and understood by Jev on the way in.
+  let spoken: string = input.spoken ?? (["en", "es"].includes(input.defaultLocale.split("-")[0]) ? language : input.defaultLocale.split("-")[0]);
   let patientText = input.latest?.text ?? null;
   if (input.latest?.candidates) {
     const entries = Object.entries(input.latest.candidates).filter(([, t]) => t);
@@ -111,12 +115,14 @@ export async function step(input: StepInput): Promise<TriageResult> {
       // the same in both and must not flip the conversation into English.
       const words = (input.latest.candidates[pick] ?? "").split(/\s+/).filter(Boolean).length;
       const sure = a.lang?.type === "choice" ? a.lang.confidence : 0;
-      const prior = input.language ?? language; // the region's language until the patient clearly speaks another
+      const prior = spoken; // the language they were speaking (or the region's) until they clearly switch
       if (pick !== prior && input.latest.candidates[prior] && (words < 6 || sure < 0.85)) pick = prior;
-      language = (pick === "en" ? "en" : "es") as Lang;
+      spoken = pick;
+      language = (pick === "en" ? "en" : pick === "es" ? "es" : "en") as Lang;
       patientText = input.latest.candidates[pick] ?? entries[0][1];
     } else if (entries.length === 1) {
-      language = (entries[0][0] === "en" ? "en" : "es") as Lang;
+      spoken = entries[0][0];
+      language = (spoken === "en" ? "en" : spoken === "es" ? "es" : "en") as Lang;
       patientText = entries[0][1];
     }
   }
@@ -727,6 +733,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // Say it like a nurse who has been listening. Safety wording stays exactly as written: tests,
   // the speech check, the suicide question, re-asks, answers to the patient's own questions and
   // every closing message.
+  let phrasedOk = false;
   const fixedWording =
     !next ||
     done ||
@@ -759,7 +766,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
       }).catch(() => null),
       new Promise<null>((r) => setTimeout(() => r(null), 2500)), // never hold the patient up: fall back to the plain question
     ]);
-    if (phrased) next = { ...next, text: phrased.text, english: next.english.startsWith("[hunch:") ? `${next.english.match(/^\[hunch:[^\]]*\]/)![0]} ${phrased.english}` : phrased.english };
+    if (phrased) {
+      phrasedOk = true;
+      next = { ...next, text: phrased.text, english: next.english.startsWith("[hunch:") ? `${next.english.match(/^\[hunch:[^\]]*\]/)![0]} ${phrased.english}` : phrased.english };
+    }
   }
 
   if (done && next && !redRule && complaintKnown) {
@@ -788,6 +798,14 @@ export async function step(input: StepInput): Promise<TriageResult> {
     };
     const tip = advice ?? { text: plain[language], english: plain.en };
     next = { ...next, text: `${next.text} ${tip.text}`, english: `${next.english} ${tip.english}` };
+  }
+
+  // A language the question bank does not have (Darija, ...): everything fixed is rendered by Claude.
+  const foreign = spoken !== "en" && spoken !== "es";
+  if (foreign && next && !phrasedOk) {
+    const loc = topKey(probsOf(a.locale)) ?? input.defaultLocale;
+    const rendered = await Promise.race([translateTo(next.text, loc.startsWith(spoken) ? loc : spoken).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 6000))]);
+    if (rendered) next = { ...next, text: rendered };
   }
 
   // Make the logic visible: why each pathway opened, and where each of its steps stands.
@@ -850,6 +868,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
 
   return {
     language,
+    spoken_language: spoken,
     locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
     locale_reason: localeReason(probsOf(a.locale)),
     age_group: age,

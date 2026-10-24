@@ -505,5 +505,7 @@ export const LOCALES = {
   "en-IN": "Indian English (loose motions, paining, giddiness, 'only', 'itself')",
   "en-GB": "British English (poorly, tummy bug, GP, 'I feel rough')",
   "en-US": "American or other English",
+  "ar-MA": "Moroccan Arabic, Darija (wakha, bzaf, daba, safi, labas, mashi mushkil, kayn)",
+  "ar": "Other Arabic (Egyptian, Levantine, Gulf, Modern Standard)",
 } as const;
 export type LocaleKey = keyof typeof LOCALES;

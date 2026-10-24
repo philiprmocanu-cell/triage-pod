@@ -18,6 +18,7 @@ const REGIONS: Region[] = [
   { id: "pe", name: "Andean Peru", locale: "es-PE", languages: ["es", "en"] },
   { id: "mx", name: "Rural Mexico", locale: "es-MX", languages: ["es", "en"] },
   { id: "us", name: "San Francisco (test: no malaria here)", locale: "en-US", languages: ["en", "es"] },
+  { id: "ma", name: "Morocco (Darija test)", locale: "ar-MA", languages: ["ar", "en", "es"] },
 ];
 
 type Status = "ready" | "looking" | "idle" | "listening" | "transcribing" | "thinking" | "speaking" | "testing" | "done";
@@ -69,6 +70,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
   const clips = useRef<ArrayBuffer[]>([]);
   const learned = useRef(false);
   const [language, setLanguage] = useState<Lang | null>(null);
+  const [spoken, setSpoken] = useState<string | null>(null);
   const [locale, setLocale] = useState<string | null>(null);
   const [camera, setCamera] = useState<LiveCamera | null>(null);
   const [smileTest, setSmileTest] = useState<CameraSignals["smileTest"]>("not_done");
@@ -210,6 +212,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
           intake: cur.intake,
           camera: { ...cameraSnapshot(), smileTest: cur.smile ?? smileTest },
           language,
+          spoken,
           region: region.name,
           defaultLocale: locale ?? region.locale,
         }),
@@ -223,6 +226,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       const loc = r.patient_text ? r.locale : locale ?? region.locale;
       if (r.patient_text) {
         setLanguage(r.language);
+        setSpoken(r.spoken_language ?? r.language);
         setLocale(r.locale);
       }
 
@@ -283,7 +287,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       setStatus(r.done ? "done" : "idle");
       if (!r.done && services.cartesia) void hearRef.current(); // listen for the answer, no tapping
     },
-    [turns, tests, intake, seen, scanAvg, cameraSnapshot, language, locale, region, speak, runTest, smileTest, services.cartesia],
+    [turns, tests, intake, seen, scanAvg, cameraSnapshot, language, spoken, locale, region, speak, runTest, smileTest, services.cartesia],
   );
 
   const run = useCallback(async (fn: () => Promise<void>) => {
