@@ -3,7 +3,7 @@
 // Built at the venue on a breadboard, no soldering. The laptop is the camera, the voice and the brain;
 // this board only measures pulse + oxygen and reports them over the USB cable, one JSON line per second:
 //   {"finger":true,"hr":72,"spo2":98,"presses":0,"sensor":true}
-// hr / spo2 are -1 until a steady reading exists. "presses" counts the XIAO's on-board button? The nRF52840
+// hr / spo2 are 0 until a steady reading exists (contract with hardware/pod-serial-bridge.py). "presses" counts the XIAO's on-board button? The nRF52840
 // XIAO has no user button on the top face, so a jumper from D0 to GND (momentary touch) counts as "talk".
 //
 // Board: Seeed XIAO nRF52840 Sense (arduino-cli FQBN Seeeduino:nrf52:xiaonRF52840Sense).
@@ -75,8 +75,8 @@ void loop() {
     lastOut = millis();
     JsonDocument d;
     d["finger"] = fingerOn;
-    d["hr"] = (fingerOn && hrOk && heartRate > 30 && heartRate < 220) ? heartRate : -1;
-    d["spo2"] = (fingerOn && spo2Ok && spo2 > 50) ? spo2 : -1;
+    d["hr"] = (fingerOn && hrOk && heartRate > 30 && heartRate < 220) ? heartRate : 0;
+    d["spo2"] = (fingerOn && spo2Ok && spo2 > 50) ? spo2 : 0;
     d["presses"] = presses;
     d["sensor"] = sensorOk;
     d["ir"] = lastIR;

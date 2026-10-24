@@ -401,7 +401,39 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     else if (status === "idle" || status === "listening") onMic();
   };
 
-  // Read the pod head's finger sensor and button once a second; valid readings go into the visit.
+  // No Wi-Fi pod given: the USB pod (nRF52840 + finger sensor) reaches us through the laptop
+  // bridge, which posts its readings and button presses to /api/session once a second.
+  useEffect(() => {
+    if (podUrl) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const s = await (await fetch("/api/session", { cache: "no-store" })).json();
+        if (!alive) return;
+        const v = s?.vitals ?? {};
+        const fresh = v.podConnected && typeof v.at === "number" && Date.now() - v.at < 3000;
+        if (!fresh) {
+          setPodVitals(null);
+          return;
+        }
+        setPodVitals({ finger: Boolean(v.finger), hr: v.hr ?? 0, spo2: v.spo2 ?? 0, presses: v.presses ?? 0, camera: false });
+        if (typeof v.presses === "number") {
+          if (podPresses.current !== null && v.presses > podPresses.current) buttonRef.current();
+          podPresses.current = v.presses;
+        }
+      } catch {
+        if (alive) setPodVitals(null);
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 1000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [podUrl]);
+
+  // Read the Wi-Fi pod head's finger sensor and button once a second; valid readings go into the visit.
   useEffect(() => {
     if (!podUrl) return;
     let alive = true;
@@ -518,7 +550,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
         <div className="absolute bottom-6 right-6 w-72 overflow-hidden rounded-2xl border border-slate-700">
           <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} remote={podUrl} />
         </div>
-        {podUrl && (
+        {(podUrl || podVitals) && (
           <div className="absolute bottom-10 left-8 rounded-2xl border border-slate-700 bg-slate-900/90 px-5 py-3">
             {!podVitals ? (
               <p className="text-sm text-amber-300">Pod sin conexión · Pod offline</p>
