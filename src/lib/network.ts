@@ -245,7 +245,13 @@ export async function snapshot() {
     const usual = fevers.length / HORIZON_H || 0.01;
     if (rate > Math.max(1, usual * 2.5)) alerts.push({ post: p.id, level: "red", text: `${p.name}: fever cases ${Math.round(rate / usual)}× normal — possible outbreak` });
   }
-  for (const f of s.flooded) alerts.push({ post: f, level: "amber", text: `${post(f).name}: road flooded (satellite) — drones only` });
+  for (const f of [...s.flooded]) {
+    if (!post(f)) {
+      s.flooded.delete(f); // a post id from an older map
+      continue;
+    }
+    alerts.push({ post: f, level: "amber", text: `${post(f)!.name}: road flooded (satellite) — drones only` });
+  }
 
   // Shortages, after counting what is already on the way.
   const incoming = (to: string, sku: string) =>

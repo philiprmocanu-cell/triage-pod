@@ -31,7 +31,8 @@ export default function DeployPage() {
     fetch("/api/deploy")
       .then((r) => r.json())
       .then((d) => {
-        if (d.error) throw new Error(d.error);
+        if (d.error && !d.countries) throw new Error(d.error);
+        if (d.error) setError(d.error);
         setRows(d.countries);
         setSource(d.source);
       })

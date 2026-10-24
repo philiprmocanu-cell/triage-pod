@@ -1,3 +1,6 @@
+import { promises as fs } from "fs";
+import path from "path";
+
 // Where pods could go first: candidate countries with live World Bank statistics, which
 // languages the pod can already speak there, and a transparent estimate of the impact.
 
@@ -58,21 +61,38 @@ export type Indicator = keyof typeof INDICATORS;
 export type CountryStats = Partial<Record<Indicator, { value: number; year: string }>>;
 
 let cache: { at: number; data: Record<string, CountryStats> } | null = null;
+const DISK = () => path.join(process.env.DATA_DIR ?? "data", "worldbank.json");
+
+export type StatsResult = { data: Record<string, CountryStats>; fetchedAt: string; live: boolean };
 
 // Most recent value of each indicator for every candidate country, straight from the World Bank.
-export async function liveStats(): Promise<Record<string, CountryStats>> {
-  if (cache && Date.now() - cache.at < 12 * 3600_000) return cache.data;
+// The last good answer is kept on disk, so the page still has numbers when the API is slow or
+// unreachable (it was, from the venue): `live` says which you got.
+export async function liveStats(): Promise<StatsResult> {
+  if (cache && Date.now() - cache.at < 12 * 3600_000) return { data: cache.data, fetchedAt: new Date(cache.at).toISOString(), live: true };
   const codes = COUNTRIES.map((c) => c.iso3).join(";");
   const data: Record<string, CountryStats> = Object.fromEntries(COUNTRIES.map((c) => [c.iso3, {}]));
-  await Promise.all(
-    (Object.entries(INDICATORS) as [Indicator, string][]).map(async ([key, code]) => {
-      const res = await fetch(`https://api.worldbank.org/v2/country/${codes}/indicator/${code}?format=json&mrnev=1&per_page=200`);
-      const json = await res.json();
-      for (const row of json?.[1] ?? []) {
-        if (row.value != null && data[row.countryiso3code]) data[row.countryiso3code][key] = { value: row.value, year: row.date };
-      }
-    }),
-  );
-  cache = { at: Date.now(), data };
-  return data;
+  try {
+    await Promise.all(
+      (Object.entries(INDICATORS) as [Indicator, string][]).map(async ([key, code]) => {
+        const res = await fetch(`https://api.worldbank.org/v2/country/${codes}/indicator/${code}?format=json&mrnev=1&per_page=200`, { signal: AbortSignal.timeout(8000) });
+        const json = await res.json();
+        for (const row of json?.[1] ?? []) {
+          if (row.value != null && data[row.countryiso3code]) data[row.countryiso3code][key] = { value: row.value, year: row.date };
+        }
+      }),
+    );
+    if (!Object.values(data).some((d) => Object.keys(d).length)) throw new Error("empty answer");
+    cache = { at: Date.now(), data };
+    await fs.mkdir(path.dirname(DISK()), { recursive: true });
+    await fs.writeFile(DISK(), JSON.stringify({ fetchedAt: new Date().toISOString(), data }));
+    return { data, fetchedAt: new Date().toISOString(), live: true };
+  } catch (err) {
+    try {
+      const saved = JSON.parse(await fs.readFile(DISK(), "utf8")) as { fetchedAt: string; data: Record<string, CountryStats> };
+      return { ...saved, live: false };
+    } catch {
+      throw err;
+    }
+  }
 }

@@ -54,6 +54,7 @@ export const SUPPLIES_FOR: Record<string, Supply[]> = {
     { item: "Paracetamol", qty: 1 },
   ],
   "Infection in pregnancy": [{ item: "Malaria rapid test", qty: 1 }],
+  "Fever from another infection": [{ item: "Malaria rapid test", qty: 1 }],
   "Viral fever": [{ item: "Paracetamol", qty: 1 }, { item: "Malaria rapid test", qty: 1 }],
   "Dengue": [{ item: "Paracetamol", qty: 1 }, { item: "Oral rehydration salts", qty: 2 }],
   "Meningitis": [{ item: "Ceftriaxone (pre-referral)", qty: 1 }],

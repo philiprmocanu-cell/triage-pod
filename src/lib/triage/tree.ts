@@ -187,6 +187,7 @@ export const PATHWAYS: Pathway[] = [
       { name: "Meningitis", description: "Fever with stiff neck, severe headache, rash or confusion", urgency: "red", resources: ["Pre-referral antibiotic dose", "Urgent referral"] },
       { name: "Malaria", description: "Fever with chills and sweats, often after many mosquito bites or sleeping without a net, in a malaria area, without danger signs", urgency: "yellow", resources: ["Malaria rapid test", "Artemisinin combination therapy"] },
       { name: "Dengue", description: "Fever with rash, body and eye pain, in a dengue area", urgency: "yellow", resources: ["Paracetamol (no ibuprofen)", "Oral rehydration salts", "Doctor review"] },
+      { name: "Fever from another infection", description: "The fever goes with a cough, a chest or urine problem, or an illness lasting weeks (TB): test for malaria, but the cause is elsewhere", urgency: "yellow", resources: ["Malaria rapid test", "Doctor review"] },
       { name: "Viral fever", description: "Fever with no danger signs and no specific pattern", urgency: "green", resources: ["Paracetamol", "Malaria rapid test"] },
     ],
   },

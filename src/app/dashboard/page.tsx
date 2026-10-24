@@ -27,9 +27,9 @@ type Snapshot = {
 export default function Dashboard() {
   const [data, setData] = useState<Snapshot | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [outbreakPost, setOutbreakPost] = useState("lanquin");
+  const [outbreakPost, setOutbreakPost] = useState("katete");
   const [outbreakKind, setOutbreakKind] = useState("malaria");
-  const [floodPost, setFloodPost] = useState("senahu");
+  const [floodPost, setFloodPost] = useState("lundazi");
 
   const load = useCallback(async () => {
     const r = await fetch("/api/network", { cache: "no-store" });

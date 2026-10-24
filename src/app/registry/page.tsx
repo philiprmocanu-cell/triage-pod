@@ -45,6 +45,9 @@ export default async function RegistryPage() {
                 <p className="mt-1 text-xs text-slate-400">
                   Needs: {r.resources.slice(0, 5).map((x) => x.item).join(", ") || "—"}
                 </p>
+                {(r.orders?.length ?? 0) > 0 && (
+                  <p className="mt-1 text-xs text-sky-200">Ordered: {r.orders!.map((o) => `${o.qty}× ${o.item}`).join(", ")}</p>
+                )}
                 {r.mentalHealth.category && (
                   <p className="mt-1 text-xs text-sky-300">
                     Mental health: {r.mentalHealth.category}

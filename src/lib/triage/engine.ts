@@ -400,6 +400,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
   for (const hit of ruleHits) {
     const name = RULE_CAUSE[hit.id];
     if (!name) continue;
+    // Low oxygen alone is a red flag, not a diagnosis: it only names pneumonia with a chest sign.
+    if (hit.id === "low_oxygen" && !(facts.cough || facts.fast_breathing || facts.short_of_breath || facts.chest_indrawing)) continue;
     const c = causes.find((x) => x.name === name);
     const p = hit.urgency === "red" ? 0.95 : 0.8;
     if (c) {
