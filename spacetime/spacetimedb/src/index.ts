@@ -159,6 +159,35 @@ const VILLAGES = [
   { id: 10, name: 'Chama', lat: -11.217, lng: 33.167, population: 15000, hub: false },
   { id: 11, name: 'Lumezi', lat: -12.8, lng: 32.75, population: 7000, hub: false },
   { id: 12, name: 'Kasenengwa', lat: -13.88, lng: 32.17, population: 6500, hub: false },
+  // Rural health posts around each district (approximate locations, for the map).
+  { id: 13, name: 'Mphangwe', lat: -13.93, lng: 32.18, population: 2100, hub: false },
+  { id: 14, name: 'Kagoro', lat: -14.12, lng: 31.98, population: 1800, hub: false },
+  { id: 15, name: 'Kafumbwe', lat: -14.22, lng: 32.12, population: 2400, hub: false },
+  { id: 16, name: 'Minga', lat: -14.37, lng: 31.52, population: 2600, hub: false },
+  { id: 17, name: 'Nyamphande', lat: -14.17, lng: 31.22, population: 1900, hub: false },
+  { id: 18, name: 'Ukwimi', lat: -14.42, lng: 31.02, population: 2200, hub: false },
+  { id: 19, name: 'Nyanje', lat: -14.42, lng: 31.74, population: 2000, hub: false },
+  { id: 20, name: 'Mtaya', lat: -14.1, lng: 31.82, population: 1500, hub: false },
+  { id: 21, name: 'Kacholola', lat: -14.76, lng: 30.63, population: 1700, hub: false },
+  { id: 22, name: 'Chipembe', lat: -14.68, lng: 30.95, population: 1300, hub: false },
+  { id: 23, name: 'Egichikeni', lat: -12.45, lng: 33.08, population: 1900, hub: false },
+  { id: 24, name: 'Mwase', lat: -12.1, lng: 33.3, population: 2100, hub: false },
+  { id: 25, name: 'Kanyanga', lat: -12.38, lng: 33.36, population: 1600, hub: false },
+  { id: 26, name: 'Zingalume', lat: -13.93, lng: 32.6, population: 1800, hub: false },
+  { id: 27, name: 'Naviruli', lat: -14.2, lng: 32.5, population: 1400, hub: false },
+  { id: 28, name: 'Kakumbi', lat: -13.1, lng: 31.72, population: 2300, hub: false },
+  { id: 29, name: 'Jumbe', lat: -13.3, lng: 31.92, population: 1900, hub: false },
+  { id: 30, name: 'Msoro', lat: -13.57, lng: 31.78, population: 2000, hub: false },
+  { id: 31, name: 'Kapata', lat: -13.7, lng: 32.72, population: 3500, hub: false },
+  { id: 32, name: 'Mwami', lat: -13.76, lng: 32.78, population: 2800, hub: false },
+  { id: 33, name: 'Mkanda', lat: -13.48, lng: 32.6, population: 2200, hub: false },
+  { id: 34, name: 'Mlolo', lat: -14.1, lng: 32.95, population: 1200, hub: false },
+  { id: 35, name: 'Chikwa', lat: -11.55, lng: 32.95, population: 1500, hub: false },
+  { id: 36, name: 'Mapamba', lat: -11.0, lng: 33.3, population: 1300, hub: false },
+  { id: 37, name: 'Chasefu', lat: -12.62, lng: 32.85, population: 1700, hub: false },
+  { id: 38, name: 'Lumezi Mission', lat: -12.9, lng: 32.9, population: 1500, hub: false },
+  { id: 39, name: 'Chimtende', lat: -14.3, lng: 32.3, population: 1400, hub: false },
+  { id: 40, name: 'Kamoto', lat: -13.0, lng: 31.6, population: 1600, hub: false },
 ];
 
 // Keep identical to STOCK_ITEMS in src/lib/triage/supplies.ts.
@@ -296,9 +325,9 @@ function seed(ctx: any) {
   }
   for (const p of PATIENTS) ctx.db.patient.insert(p);
   for (const m of SEED_COMMUNITY) ctx.db.communityMember.insert({ id: 0n, ...m, matchedWith: '', joinedAt: ctx.timestamp });
-  ctx.db.settings.insert({ id: 1, simulate: true, simEverySeconds: 6, agents: false, lastAgentsRun: ctx.timestamp }); // the officer switches the agents on
+  ctx.db.settings.insert({ id: 1, simulate: false, simEverySeconds: 6, agents: false, lastAgentsRun: ctx.timestamp }); // nothing moves until a real pod visit, or the presenter switches the simulation / agents on
   ctx.db.tickTimer.insert({ scheduledId: 0n, scheduledAt: ScheduleAt.interval(1_000_000n) });
-  log(ctx, 'Supply allocator', 0, 'Online. Watching stock at 11 posts against what pods are flagging.');
+  log(ctx, 'Supply allocator', 0, 'Online. Watching stock at 39 posts against what pods are flagging.');
   log(ctx, 'Outbreak sentinel', 0, 'Online. Watching for case clusters by village.');
 }
 
