@@ -27,6 +27,67 @@ export class Recorder {
   }
 }
 
+// Hands-free listening: waits for the patient to start talking, and stops by itself after they
+// have been quiet for a moment. Returns null if nobody spoke within `waitMs`.
+export async function listenForUtterance(opts: {
+  waitMs?: number;
+  silenceMs?: number;
+  maxMs?: number;
+  onLevel?: (level: number, speaking: boolean) => void;
+  signal?: AbortSignal;
+}): Promise<Blob | null> {
+  const { waitMs = 12000, silenceMs = 1300, maxMs = 25000, onLevel, signal } = opts;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  const rec = new MediaRecorder(stream);
+  const chunks: Blob[] = [];
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  rec.start(100);
+
+  const buf = new Float32Array(analyser.fftSize);
+  const t0 = performance.now();
+  let noise = 0.01, calibrated = 0, speechAt = 0, lastVoice = 0, spokeMs = 0, last = t0;
+  const outcome = await new Promise<"speech" | "none">((resolve) => {
+    const step = () => {
+      if (signal?.aborted) return resolve("none");
+      analyser.getFloatTimeDomainData(buf);
+      const rms = Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
+      const now = performance.now();
+      if (calibrated < 15) {
+        noise = Math.max(noise, rms);
+        calibrated++;
+      }
+      const threshold = Math.max(0.02, noise * 2.5);
+      const voiced = rms > threshold;
+      if (voiced) {
+        if (!speechAt) speechAt = now;
+        lastVoice = now;
+        spokeMs += now - last;
+      }
+      last = now;
+      onLevel?.(Math.min(1, rms / (threshold * 3)), Boolean(speechAt));
+      if (speechAt && spokeMs > 250 && now - lastVoice > silenceMs) return resolve("speech");
+      if (!speechAt && now - t0 > waitMs) return resolve("none");
+      if (now - t0 > maxMs) return resolve(speechAt ? "speech" : "none");
+      requestAnimationFrame(step);
+    };
+    step();
+  });
+
+  await new Promise<void>((resolve) => {
+    rec.onstop = () => resolve();
+    rec.stop();
+  });
+  stream.getTracks().forEach((t) => t.stop());
+  await ctx.close();
+  onLevel?.(0, false);
+  if (outcome === "none") return null;
+  return toWav(new Blob(chunks, { type: rec.mimeType }));
+}
+
 async function toWav(blob: Blob, rate = 16000): Promise<Blob> {
   const ctx = new AudioContext();
   const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());

@@ -85,10 +85,33 @@ async function loadCatalog(): Promise<CatalogVoice[]> {
 
 export type PickedVoice = { id: string; name: string; locale: string; match: string };
 
+const picksFile = () => path.join(process.env.DATA_DIR ?? path.join(process.cwd(), "data"), "voice-picks.json");
+async function readPicks(): Promise<Record<string, PickedVoice>> {
+  try {
+    return JSON.parse(await fs.readFile(picksFile(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+async function savePick(v: PickedVoice) {
+  const all = await readPicks();
+  all[v.locale] = v;
+  await fs.mkdir(path.dirname(picksFile()), { recursive: true });
+  await fs.writeFile(picksFile(), JSON.stringify(all, null, 2));
+}
+
 // Find the voice that sounds most like the patient's region. A warm female voice by default.
 export async function pickVoice(locale: string): Promise<PickedVoice> {
   const cloned = await clonedVoice(locale);
   if (cloned) return { ...cloned, locale, match: "taught by a local speaker" };
+  const remembered = (await readPicks())[locale];
+  if (remembered) return remembered;
+  const picked = await pickFromCatalog(locale);
+  await savePick(picked);
+  return picked;
+}
+
+async function pickFromCatalog(locale: string): Promise<PickedVoice> {
 
   catalog ??= loadCatalog().catch((e) => {
     catalog = null;

@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { playBlob, Recorder, speakWithBrowser } from "@/lib/audio";
-import type { Lang } from "@/lib/triage/tree";
+import { listenForUtterance, playBlob, speakWithBrowser } from "@/lib/audio";
+import { PATHWAYS, type Lang } from "@/lib/triage/tree";
 import { TRAITS, TraitScan } from "@/lib/triage/traits";
 import type { CameraSignals, Frame, Intake, Seen, SpeechStats, TestResults, TriageResult, Turn, Urgency } from "@/lib/triage/types";
 import { CameraHandle, CameraPanel, LiveCamera } from "./CameraPanel";
@@ -24,8 +24,8 @@ type Status = "ready" | "looking" | "idle" | "listening" | "transcribing" | "thi
 const STATUS_TEXT: Record<Status, string> = {
   ready: "Patient sits in front of the pod, then press Start",
   looking: "Looking at the patient…",
-  idle: "Tap the microphone and answer",
-  listening: "Listening… tap again when finished",
+  idle: "Tap the microphone to talk",
+  listening: "Listening — just talk, I'll know when you're done",
   transcribing: "Understanding…",
   thinking: "Checking…",
   speaking: "Speaking…",
@@ -41,21 +41,6 @@ const URGENCY_STYLE: Record<Urgency, { label: string; cls: string }> = {
 
 const DELIVERY: Record<string, string> = { on_site: "In kit", drone: "Drone", road: "Road" };
 
-const SEEN_LABEL: Record<string, string> = {
-  sweating: "Sweating",
-  short_of_breath: "Struggling to breathe",
-  face_or_arm_weakness: "Face droop",
-  very_sleepy: "Drowsy / limp",
-  rash: "Rash",
-  sunken_eyes: "Sunken eyes",
-  severe_bleeding: "Bleeding",
-  injury: "Wound / injury",
-  yellow_eyes: "Yellow eyes / skin",
-  pale: "Very pale",
-  blue_lips: "Blue lips",
-  very_thin: "Very thin",
-  low_mood: "Tearful",
-};
 
 const FRAME_EVERY_MS = 1000;
 const FRAME_KEEP = 12;
@@ -82,9 +67,11 @@ export default function PodScreen() {
   const [scanMax, setScanMax] = useState<TraitScan>({});
   const [scanMs, setScanMs] = useState<number | null>(null);
   const [autoStart, setAutoStart] = useState(true);
+  const [level, setLevel] = useState(0);
+  const listenAbort = useRef<AbortController | null>(null);
+  const hearRef = useRef<() => Promise<void>>(async () => {});
   const [typed, setTyped] = useState("");
   const [error, setError] = useState("");
-  const recorder = useRef(new Recorder());
   const cam = useRef<CameraHandle>(null);
   const frames = useRef<{ t: number; b64: string }[]>([]);
   const askedAt = useRef(0); // when the pod finished asking the current question
@@ -144,8 +131,12 @@ export default function PodScreen() {
 
   // Runs one physical test: say the instruction, watch for N seconds, let Jev judge the pictures.
   const runTest = useCallback(
-    async (test: { id: string; label: string; seconds: number }) => {
+    async (test: { id: string; label: string; seconds: number; prep?: number }) => {
       setStatus("testing");
+      for (let left = test.prep ?? 1; left > 0; left--) {
+        setTestClock({ label: `Get ready · ${test.label}`, left });
+        await new Promise((r) => setTimeout(r, 1000));
+      }
       if (test.id === "smile") cam.current?.startSmileTest();
       const burst: { t: number; b64: string }[] = [];
       const every = Math.max(500, (test.seconds * 1000) / 8);
@@ -252,8 +243,9 @@ export default function PodScreen() {
         return triage("answer", undefined, { turns: nextTurns, tests: nextTests, intake: nextIntake, smile });
       }
       setStatus(r.done ? "done" : "idle");
+      if (!r.done && services.cartesia) void hearRef.current(); // listen for the answer, no tapping
     },
-    [turns, tests, intake, seen, scanMax, cameraSnapshot, language, locale, region, speak, runTest, smileTest],
+    [turns, tests, intake, seen, scanMax, cameraSnapshot, language, locale, region, speak, runTest, smileTest, services.cartesia],
   );
 
   const run = useCallback(async (fn: () => Promise<void>) => {
@@ -273,31 +265,42 @@ export default function PodScreen() {
       await triage("look");
     });
 
-  const onMic = () =>
-    run(async () => {
-      if (status === "listening") {
-        const wav = await recorder.current.stop();
-        setStatus("transcribing");
-        const form = new FormData();
-        form.append("audio", wav, "speech.wav");
-        form.append("languages", (language ? [language] : region.languages).join(","));
-        const res = await fetch("/api/stt", { method: "POST", body: form });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Transcription failed");
-        const t = data.transcripts as Record<string, { text: string; speech: SpeechStats }>;
-        if (Object.values(t).every((x) => !x.text)) throw new Error("Didn't catch that — please try again.");
-        const first = Object.values(t)[0];
-        await triage(
-          "answer",
-          language
-            ? { text: t[language].text, speech: t[language].speech }
-            : { candidates: Object.fromEntries(Object.entries(t).map(([l, x]) => [l, x.text])), speech: first.speech },
-        );
-      } else {
-        await recorder.current.start();
-        setStatus("listening");
-      }
-    });
+  // Hands-free: listen until the patient finishes speaking, transcribe in Spanish and English,
+  // and let Jev pick the real language every turn (so switching languages works).
+  const hear = async () => {
+    listenAbort.current?.abort();
+    const ctl = new AbortController();
+    listenAbort.current = ctl;
+    setStatus("listening");
+    const wav = await listenForUtterance({ signal: ctl.signal, waitMs: 15000, onLevel: (l) => setLevel(l) });
+    if (ctl.signal.aborted) return;
+    if (!wav) {
+      setStatus("idle"); // nobody spoke: the mic button starts listening again
+      return;
+    }
+    setStatus("transcribing");
+    const form = new FormData();
+    form.append("audio", wav, "speech.wav");
+    form.append("languages", region.languages.join(","));
+    const res = await fetch("/api/stt", { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Transcription failed");
+    const t = data.transcripts as Record<string, { text: string; speech: SpeechStats }>;
+    if (Object.values(t).every((x) => !x.text)) {
+      setError("Didn't catch that — listening again.");
+      return hear();
+    }
+    const best = t[language ?? region.languages[0]] ?? Object.values(t)[0];
+    await triage("answer", { candidates: Object.fromEntries(Object.entries(t).map(([l, x]) => [l, x.text])), speech: best.speech });
+  };
+  hearRef.current = () => run(hear);
+
+  const onMic = () => {
+    if (status === "listening") {
+      listenAbort.current?.abort();
+      setStatus("idle");
+    } else void run(hear);
+  };
 
   const onTyped = () =>
     run(async () => {
@@ -308,6 +311,7 @@ export default function PodScreen() {
     });
 
   const reset = () => {
+    listenAbort.current?.abort();
     setTurns([]);
     setResult(null);
     setSeen({});
@@ -468,6 +472,11 @@ export default function PodScreen() {
               </button>
             )}
             <div className="flex-1 space-y-2">
+              {status === "listening" && (
+                <div className="h-2 overflow-hidden rounded bg-slate-800">
+                  <div className="h-2 bg-red-500 transition-all" style={{ width: `${Math.round(level * 100)}%` }} />
+                </div>
+              )}
               <div className="flex items-center justify-between gap-2">
                 <p className="text-lg">{STATUS_TEXT[status]}</p>
                 <label className="flex items-center gap-1.5 text-xs text-slate-400">
@@ -491,8 +500,7 @@ export default function PodScreen() {
         </section>
 
         <section className="space-y-4">
-          <ScanPanel now={scanNow} max={scanMax} ms={scanMs} faceVisible={faceVisible} />
-          <ResultPanel result={result} tests={tests} intake={intake} saved={saved} voiceInfo={voiceInfo} />
+          <ResultPanel result={result} tests={tests} intake={intake} saved={saved} voiceInfo={voiceInfo} scan={scanMax} scanMs={scanMs} faceVisible={faceVisible} />
         </section>
       </main>
     </div>
@@ -527,43 +535,124 @@ function Conversation({ turns }: { turns: Turn[] }) {
   );
 }
 
+// The trait -> conditions it can point to, using the triage tree (e.g. sweating -> heart attack).
+function linkedConditions(traitId: string): string[] {
+  const t = TRAITS.find((x) => x.id === traitId);
+  if (!t) return [];
+  const names: string[] = [];
+  for (const p of PATHWAYS) {
+    const inPath = (t.finding && (p.triggers.includes(t.finding) || p.questions.includes(t.finding))) || t.hint === p.id;
+    if (inPath) names.push(...p.subtypes.filter((s) => s.urgency !== "green").slice(0, 2).map((s) => s.name));
+  }
+  return [...new Set(names)].slice(0, 4);
+}
+
 function ResultPanel({
   result,
   tests,
   intake,
   saved,
   voiceInfo,
+  scan,
+  scanMs,
+  faceVisible,
 }: {
   result: TriageResult | null;
   tests: TestResults;
   intake: Intake;
   saved: { name: string | null; community: string | null; handover: string | null } | null;
   voiceInfo: string;
+  scan: TraitScan;
+  scanMs: number | null;
+  faceVisible: boolean;
 }) {
+  const seenTraits = TRAITS.filter((t) => (scan[t.id] ?? 0) >= 0.5).sort((a, b) => (scan[b.id] ?? 0) - (scan[a.id] ?? 0));
+  const cameraCard = (
+    <Card title={`Camera sees → could mean · ${TRAITS.length} traits checked${scanMs ? ` · ${scanMs} ms` : ""}`}>
+      {!faceVisible && !Object.keys(scan).length ? (
+        <p className="text-sm text-slate-400">Waiting for someone to sit in front of the camera.</p>
+      ) : seenTraits.length ? (
+        seenTraits.slice(0, 6).map((t) => (
+          <div key={t.id} className="flex flex-wrap items-center gap-2 py-1.5 text-sm">
+            <span className="font-medium">{t.label}</span>
+            <span className="text-xs tabular-nums text-amber-300">{Math.round((scan[t.id] ?? 0) * 100)}%</span>
+            <span className="text-slate-500">→</span>
+            {linkedConditions(t.id).map((c) => (
+              <span key={c} className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-200">
+                {c}
+              </span>
+            ))}
+          </div>
+        ))
+      ) : (
+        <p className="text-sm text-slate-400">Nothing unusual seen.</p>
+      )}
+    </Card>
+  );
+
   if (!result) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-700 p-6 text-sm text-slate-400">
-        Sit in front of the pod: the live scan above starts by itself, and after 3 seconds the pod greets the patient.
-        Every answer then opens or closes pathways below, and the likely conditions and supplies update live.
+      <div className="space-y-4">
+        {cameraCard}
+        <div className="rounded-2xl border border-dashed border-slate-700 p-5 text-sm text-slate-400">
+          After 3 seconds in front of the camera the pod greets the patient and starts asking. The most likely
+          conditions, and why, appear here as they talk.
+        </div>
       </div>
     );
   }
+
   const u = URGENCY_STYLE[result.urgency];
-  const seenList = Object.entries(result.seen)
-    .filter(([, v]) => (v ?? 0) >= 0.3)
-    .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0));
-  const testList = Object.entries(tests);
+  const top = result.causes.slice(0, 3);
+  const nextPath = result.tree.find((p) => p.steps.some((s) => s.status === "next"));
   return (
     <div className="space-y-4">
       <div className={`rounded-2xl p-5 ${u.cls}`}>
         <p className="text-sm uppercase tracking-wide opacity-80">{result.done ? "Decision" : "Working decision"}</p>
         <p className="text-2xl font-bold">{u.label}</p>
         <p className="mt-1">{result.reason}</p>
-        <p className="mt-2 text-sm font-semibold">{result.doctor_required ? "Doctor required" : "No doctor needed"}</p>
+        {result.rule_hits.length > 0 && (
+          <ul className="mt-2 space-y-0.5 text-sm">
+            {result.rule_hits.map((h) => (
+              <li key={h.id}>
+                ⚑ {h.label} <span className="opacity-75">({h.evidence})</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
+      <Card title="Most likely conditions">
+        {top.length === 0 && <p className="text-sm text-slate-400">Listening to the patient — conditions appear after the first answer.</p>}
+        {top.map((c, i) => (
+          <div key={c.name} className={`rounded-xl p-3 ${i === 0 ? "bg-slate-800" : "mt-2 bg-slate-800/50"}`}>
+            <div className="flex items-baseline justify-between gap-2">
+              <p className={i === 0 ? "text-xl font-bold" : "font-semibold"}>
+                {c.name}
+                <span className={`ml-2 rounded px-1.5 py-0.5 align-middle text-xs ${URGENCY_STYLE[c.urgency].cls}`}>{c.urgency}</span>
+              </p>
+              <span className={`tabular-nums ${i === 0 ? "text-2xl font-bold" : "text-slate-300"}`}>{Math.round(c.probability * 100)}%</span>
+            </div>
+            <p className="text-xs text-slate-400">{c.pathway} · {c.why}</p>
+            {c.evidence.length > 0 && (
+              <p className="mt-1.5 text-sm">
+                <span className="text-emerald-300">Because:</span> {c.evidence.join(" · ")}
+              </p>
+            )}
+            {c.against.length > 0 && (
+              <p className="text-sm">
+                <span className="text-slate-400">Against:</span> {c.against.join(" · ")}
+              </p>
+            )}
+            {nextPath && nextPath.label === c.pathway && result.why && <p className="mt-1 text-xs text-sky-300">Checking next: {result.why}</p>}
+          </div>
+        ))}
+      </Card>
+
+      {cameraCard}
+
       {result.tree.length > 0 && (
-        <Card title="Decision tree · if this → ask that">
+        <Card title="Diagnostic path · if this → ask that">
           {result.tree.map((p) => (
             <div key={p.id} className="mb-3 last:mb-0">
               <div className="flex items-baseline justify-between">
@@ -574,7 +663,7 @@ function ResultPanel({
               <ol className="mt-1 space-y-0.5 border-l border-slate-700 pl-3">
                 {p.steps.map((st) => (
                   <li key={st.step} className={`flex items-center gap-2 text-sm ${st.status === "next" ? "font-semibold text-sky-300" : st.status === "waiting" ? "text-slate-500" : ""}`}>
-                    <span className="w-14 shrink-0 text-xs">{STEP_BADGE[st.status]}</span>
+                    <span className="w-16 shrink-0 text-xs">{STEP_BADGE[st.status]}</span>
                     {st.label}
                   </li>
                 ))}
@@ -584,31 +673,15 @@ function ResultPanel({
         </Card>
       )}
 
-      {(intake.name || intake.community) && (
-        <Card title="Patient">
-          <p>{saved?.name ?? intake.name ?? "—"}</p>
-          <p className="text-sm text-slate-400">
-            {saved?.community ?? intake.community ?? ""} {intake.who ? `· ${intake.who}` : ""}
-          </p>
-          {result.consent !== null && (
-            <p className="mt-1 text-xs text-slate-500">{result.consent >= 0.5 ? "Agreed to be saved in the registry" : "Did not agree — saved without a name"}</p>
-          )}
-        </Card>
-      )}
-
-      {result.rule_hits.length > 0 && (
-        <Card title="Safety rules triggered (fixed rules, not AI)">
-          {result.rule_hits.map((h) => (
-            <div key={h.id} className="flex items-start gap-2 py-1">
-              <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${URGENCY_STYLE[h.urgency].cls}`} />
-              <div>
-                <p className="font-medium">{h.label}</p>
-                <p className="text-xs text-slate-400">
-                  {h.source === "camera" ? "Camera" : "Words"}: {h.evidence}
-                </p>
-              </div>
-            </div>
-          ))}
+      {result.resources.length > 0 && (
+        <Card title="Have ready for this patient">
+          <div className="flex flex-wrap gap-2">
+            {result.resources.slice(0, 8).map((r) => (
+              <span key={r.item} className="rounded-lg bg-slate-800 px-2.5 py-1 text-sm">
+                {r.item} <span className="text-xs text-slate-400">{Math.round(r.probability * 100)}% · {DELIVERY[r.delivery]}</span>
+              </span>
+            ))}
+          </div>
         </Card>
       )}
 
@@ -618,76 +691,8 @@ function ResultPanel({
             Screen points to: <span className="font-semibold">{result.peer_group.category}</span>
           </p>
           <p className="text-sm text-slate-400">
-            {result.peer_group.wants
-              ? "Asked to be connected with a local peer support group (led by a trained lay counselor)."
-              : "Peer support group offered at the end of the visit; never shared without consent."}
+            {result.peer_group.wants ? "Asked to be connected with a local peer group." : "Peer group offered at the end; never shared without consent."}
           </p>
-        </Card>
-      )}
-
-      <Card title={`What Jev sees on camera (picture sequence) · ${result.jev_ms} ms`}>
-        {seenList.length ? (
-          seenList.map(([k, v]) => <Bar key={k} label={SEEN_LABEL[k] ?? k} value={v ?? 0} />)
-        ) : (
-          <p className="text-sm text-slate-400">No visible warning signs.</p>
-        )}
-      </Card>
-
-      {testList.length > 0 && (
-        <Card title="Physical tests (Jev watched)">
-          {testList.map(([id, r]) => (
-            <div key={id} className="py-1">
-              <p className="text-sm font-medium">{id.replace("_", " ")}</p>
-              {Object.keys(r ?? {}).length ? (
-                Object.entries(r ?? {}).map(([k, v]) => <Bar key={k} label={k.replaceAll("_", " ")} value={v ?? 0} small />)
-              ) : (
-                <p className="text-xs text-slate-500">Not done or not visible on camera</p>
-              )}
-            </div>
-          ))}
-        </Card>
-      )}
-
-      {result.pathways.length > 0 && (
-        <Card title="Pathways explored → sub-classification">
-          {result.pathways.map((p) => (
-            <div key={p.id} className="py-1.5">
-              <Bar label={p.label} value={p.probability} />
-              <div className="ml-4 border-l border-slate-700 pl-3">
-                {p.subtypes.slice(0, 3).map((s) => (
-                  <Bar key={s.name} label={s.name} value={s.probability} tag={s.urgency === "red" ? "red" : undefined} small />
-                ))}
-              </div>
-            </div>
-          ))}
-        </Card>
-      )}
-
-      <Card title="Likely causes (pathway × sub-classification)">
-        {result.causes.length ? (
-          result.causes.map((c) => <Bar key={c.name} label={c.name} value={c.probability} hint={c.why} />)
-        ) : (
-          <p className="text-sm text-slate-400">Waiting for the patient&apos;s answers.</p>
-        )}
-      </Card>
-
-      <Card title="Resources this patient will likely need">
-        {result.resources.length ? (
-          result.resources.map((r) => <Bar key={r.item} label={r.item} value={r.probability} tag={DELIVERY[r.delivery]} />)
-        ) : (
-          <p className="text-sm text-slate-400">None yet.</p>
-        )}
-      </Card>
-
-      {result.findings.length > 0 && (
-        <Card title="Findings (said · seen · tested)">
-          <div className="flex flex-wrap gap-2">
-            {result.findings.map((f) => (
-              <span key={f.key} className={`rounded-full px-2.5 py-1 text-xs ${f.yes >= 0.6 ? "bg-sky-800 text-sky-100" : "bg-slate-800 text-slate-400"}`}>
-                {f.label} {Math.round(f.yes * 100)}% · {f.source}
-              </span>
-            ))}
-          </div>
         </Card>
       )}
 
@@ -697,23 +702,52 @@ function ResultPanel({
         </Card>
       )}
 
-      <Card title="Language & dialect">
-        <p>
-          {result.language.toUpperCase()} · <span className="font-semibold">{result.locale}</span>
-        </p>
-        <p className="text-sm text-slate-400">{result.locale_reason}</p>
-        {Object.keys(result.lexicon ?? {}).length > 0 && (
-          <p className="mt-1 text-sm">
-            Learned words:{" "}
-            {Object.entries(result.lexicon).map(([concept, word]) => (
-              <span key={concept} className="mr-2 rounded bg-sky-900 px-1.5 py-0.5 text-xs text-sky-100">
-                {concept} → {word}
-              </span>
-            ))}
-          </p>
-        )}
-        {voiceInfo && <p className="mt-1 text-xs text-slate-500">Pod voice: {voiceInfo}</p>}
-      </Card>
+      <details className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+        <summary className="cursor-pointer text-xs uppercase tracking-wide text-slate-400">More details</summary>
+        <div className="mt-3 space-y-4">
+          {(intake.name || intake.community) && (
+            <div>
+              <p className="text-xs text-slate-400">Patient</p>
+              <p>{saved?.name ?? intake.name ?? "—"}</p>
+              <p className="text-sm text-slate-400">
+                {saved?.community ?? intake.community ?? ""} {intake.who ? `· ${intake.who}` : ""}
+                {result.consent !== null && (result.consent >= 0.5 ? " · agreed to be saved" : " · saved without a name")}
+              </p>
+            </div>
+          )}
+          {Object.keys(tests).length > 0 && (
+            <div>
+              <p className="text-xs text-slate-400">Physical tests</p>
+              {Object.entries(tests).map(([id, r]) => (
+                <p key={id} className="text-sm">
+                  {id.replace("_", " ")}:{" "}
+                  {Object.keys(r ?? {}).length ? Object.entries(r ?? {}).map(([k, v]) => `${k.replaceAll("_", " ")} ${Math.round((v ?? 0) * 100)}%`).join(", ") : "not visible"}
+                </p>
+              ))}
+            </div>
+          )}
+          <div>
+            <p className="text-xs text-slate-400">All findings</p>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {result.findings.map((f) => (
+                <span key={f.key} className={`rounded-full px-2.5 py-1 text-xs ${f.yes >= 0.6 ? "bg-sky-800 text-sky-100" : "bg-slate-800 text-slate-400"}`}>
+                  {f.label} {Math.round(f.yes * 100)}% · {f.source}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs text-slate-400">Language & dialect</p>
+            <p className="text-sm">
+              {result.language.toUpperCase()} · {result.locale} <span className="text-slate-400">({result.locale_reason})</span>
+            </p>
+            {Object.keys(result.lexicon ?? {}).length > 0 && (
+              <p className="text-sm">Learned words: {Object.entries(result.lexicon).map(([c, w]) => `${c} → ${w}`).join(", ")}</p>
+            )}
+            {voiceInfo && <p className="text-xs text-slate-500">Pod voice: {voiceInfo}</p>}
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
@@ -727,87 +761,21 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-function Bar({ label, value, hint, tag, small }: { label: string; value: number; hint?: string; tag?: string; small?: boolean }) {
-  const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
-  return (
-    <div className={small ? "py-1" : "py-1.5"}>
-      <div className={`flex items-baseline justify-between gap-2 ${small ? "text-xs text-slate-300" : "text-sm"}`}>
-        <span>
-          {label}
-          {tag && <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${tag === "red" ? "bg-red-900 text-red-200" : "bg-slate-800 text-slate-300"}`}>{tag}</span>}
-        </span>
-        <span className="tabular-nums text-slate-300">{pct}%</span>
-      </div>
-      <div className={`mt-1 rounded bg-slate-800 ${small ? "h-1" : "h-2"}`}>
-        <div className={`rounded bg-sky-500 ${small ? "h-1" : "h-2"}`} style={{ width: `${pct}%` }} />
-      </div>
-      {hint && <p className="mt-0.5 text-xs text-slate-500">{hint}</p>}
-    </div>
-  );
-}
-
 const STEP_BADGE: Record<string, string> = { yes: "✅ yes", no: "➖ no", unclear: "❔ unclear", next: "👉 now", waiting: "· later" };
 
+// The one thing the patient needs to see: what the pod is asking or telling them to do right now.
 function QuestionCard({ turns, why, status }: { turns: Turn[]; why: string | null; status: Status }) {
   const q = [...turns].reverse().find((t) => t.role === "pod");
   if (!q) return null;
   const isTest = q.asks?.startsWith("test:");
   return (
     <div className={`rounded-2xl border p-5 ${isTest ? "border-violet-500 bg-violet-950/60" : "border-sky-600 bg-sky-950/70"}`}>
-      <p className="text-xs uppercase tracking-wide text-slate-300">{isTest ? "Physical test" : status === "done" ? "Pod says" : "Pod is asking"}</p>
+      <p className="text-xs uppercase tracking-wide text-slate-300">
+        {isTest ? "Do this now" : status === "done" ? "Pod says" : status === "listening" ? "Your turn — just talk" : "Pod is asking"}
+      </p>
       <p className="mt-1 text-2xl font-semibold leading-snug">{q.text}</p>
       {q.english && q.english !== q.text && <p className="mt-1 text-sm italic text-slate-300">{q.english}</p>}
       {why && <p className="mt-2 text-xs text-sky-300">Why: {why}</p>}
-    </div>
-  );
-}
-
-function ScanPanel({ now, max, ms, faceVisible }: { now: TraitScan; max: TraitScan; ms: number | null; faceVisible: boolean }) {
-  const flagged = TRAITS.filter((t) => (max[t.id] ?? 0) >= 0.4).sort((a, b) => (max[b.id] ?? 0) - (max[a.id] ?? 0));
-  const groups = [...new Set(TRAITS.map((t) => t.group))];
-  return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-      <div className="mb-2 flex items-baseline justify-between">
-        <p className="text-xs uppercase tracking-wide text-slate-400">Live physical scan · {TRAITS.length} traits</p>
-        <span className="text-xs text-slate-500">{!faceVisible ? "waiting for a face" : ms ? `Jev ${ms} ms · every 3.5 s` : "starting…"}</span>
-      </div>
-      {flagged.length ? (
-        flagged.map((t) => (
-          <div key={t.id} className="py-1">
-            <div className="flex justify-between text-sm">
-              <span>
-                {t.label} <span className="text-xs text-slate-500">· {t.group}</span>
-              </span>
-              <span className="tabular-nums text-slate-300">
-                {Math.round((now[t.id] ?? 0) * 100)}% now · {Math.round((max[t.id] ?? 0) * 100)}% max
-              </span>
-            </div>
-            <div className="mt-1 h-1.5 rounded bg-slate-800">
-              <div className={`h-1.5 rounded ${(max[t.id] ?? 0) >= 0.6 ? "bg-amber-400" : "bg-sky-500"}`} style={{ width: `${(max[t.id] ?? 0) * 100}%` }} />
-            </div>
-          </div>
-        ))
-      ) : (
-        <p className="text-sm text-slate-400">{Object.keys(max).length ? "Nothing unusual seen so far." : "No scan yet."}</p>
-      )}
-      {Object.keys(max).length > 0 && (
-        <details className="mt-2">
-          <summary className="cursor-pointer text-xs text-slate-400">All {TRAITS.length} traits checked</summary>
-          <div className="mt-2 grid grid-cols-1 gap-x-4 text-xs sm:grid-cols-2">
-            {groups.map((g) => (
-              <div key={g} className="mb-2">
-                <p className="font-semibold text-slate-300">{g}</p>
-                {TRAITS.filter((t) => t.group === g).map((t) => (
-                  <p key={t.id} className="flex justify-between text-slate-400">
-                    <span>{t.label}</span>
-                    <span className="tabular-nums">{Math.round((max[t.id] ?? 0) * 100)}%</span>
-                  </p>
-                ))}
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
     </div>
   );
 }

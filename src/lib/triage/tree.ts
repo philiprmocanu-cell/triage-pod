@@ -29,10 +29,18 @@ export const FINDINGS = {
     ask: { en: "Is one side of your face or one arm weak or numb?", es: "¿Tiene un lado de la cara o un brazo débil o dormido?" },
     seen: "Is one side of the person's face drooping compared with the other side (mouth corner or eyelid lower on one side)?",
   },
-  confused_speech: { label: "Slurred or confused speech", ask: { en: "Has your speech changed, or do words come out wrong?", es: "¿Siente que habla raro o que no le salen bien las palabras?" } },
+  // Speech test from stroke scales: repeat a simple sentence; Jev checks the transcript.
+  confused_speech: {
+    label: "Slurred or confused speech",
+    ask: { en: "Please repeat after me: \"Today the sky is blue and the river is calm.\"", es: "Por favor, repita después de mí: \"Hoy el cielo está azul y el río está tranquilo.\"" },
+  },
   severe_headache: { label: "Severe headache or blurred vision", ask: { en: "Do you have a very strong headache or blurry vision?", es: "¿Tiene un dolor de cabeza muy fuerte o ve borroso?" } },
   seizure: { label: "Seizure / convulsions", ask: { en: "Has there been a seizure or shaking fit?", es: "¿Ha tenido convulsiones o ataques?" } },
-  unable_to_drink: { label: "Cannot drink or breastfeed", ask: { en: "Can they drink or breastfeed, or are they unable to?", es: "¿Puede tomar líquidos o mamar, o no puede?" } },
+  unable_to_drink: {
+    label: "Cannot drink or breastfeed",
+    ask: { en: "Can you drink fluids, or are you unable to keep anything down?", es: "¿Puede tomar líquidos, o no puede tomar nada?" },
+    askChild: { en: "Can the child drink or breastfeed, or are they unable to?", es: "¿El niño puede tomar líquidos o mamar, o no puede?" },
+  },
   vomits_everything: { label: "Vomits everything", ask: { en: "Do they vomit everything they eat or drink?", es: "¿Vomita todo lo que come o toma?" } },
   very_sleepy: {
     label: "Very sleepy or hard to wake",
@@ -98,7 +106,7 @@ export const FINDINGS = {
       es: "Cerca de usted hay personas que se juntan seguido para platicar y apoyarse, con un consejero. ¿Le gustaría que el promotor de salud le presente con ellos?",
     },
   },
-} as const satisfies Record<string, { label: string; ask: Text; seen?: string }>;
+} as const satisfies Record<string, { label: string; ask: Text; askChild?: Text; seen?: string }>;
 
 export type FindingKey = keyof typeof FINDINGS;
 export const FINDING_KEYS = Object.keys(FINDINGS) as FindingKey[];
@@ -246,6 +254,7 @@ export type Test = {
   id: string;
   label: string;
   say: Text;
+  prep: number; // seconds to get into position before watching starts
   seconds: number;
   childOnly?: boolean;
   checks: { finding: FindingKey; question: string }[]; // Jev yes/no over the picture sequence
@@ -256,6 +265,7 @@ export const TESTS: Test[] = [
     id: "smile",
     label: "Smile test",
     say: { en: "Please give me a big smile, showing your teeth.", es: "Por favor, sonría grande, enseñando los dientes." },
+    prep: 1,
     seconds: 3,
     checks: [{ finding: "face_or_arm_weakness", question: "When the person smiles, does one side of the mouth lift clearly less than the other side?" }],
   },
@@ -263,13 +273,18 @@ export const TESTS: Test[] = [
     id: "arm_drift",
     label: "Arm drift test",
     say: { en: "Close your eyes and hold both arms straight out in front of you, palms up, until I say stop.", es: "Cierre los ojos y estire los dos brazos al frente, con las palmas hacia arriba, hasta que le diga." },
+    prep: 2,
     seconds: 8,
     checks: [{ finding: "face_or_arm_weakness", question: "Does one arm drift downward or turn over compared with the other arm?" }],
   },
   {
     id: "walk_line",
     label: "Heel-to-toe walk",
-    say: { en: "Please stand up and walk toward me in a straight line, heel to toe.", es: "Por favor, levántese y camine hacia mí en línea recta, poniendo un pie delante del otro." },
+    say: {
+      en: "With the health worker beside you, please stand up and walk toward me in a straight line, heel to toe.",
+      es: "Con el promotor de salud a su lado, levántese y camine hacia mí en línea recta, poniendo un pie delante del otro.",
+    },
+    prep: 4,
     seconds: 8,
     checks: [
       { finding: "balance_problem", question: "Does the person lose balance, stagger, step off the line, or reach out for support?" },
@@ -280,6 +295,7 @@ export const TESTS: Test[] = [
     id: "squat",
     label: "Crouch and stand",
     say: { en: "Please crouch down slowly, then stand back up.", es: "Por favor, agáchese despacio y luego levántese." },
+    prep: 2,
     seconds: 6,
     checks: [
       { finding: "leg_weakness", question: "Does the person struggle to get up, need to hold on to something, or fail to crouch?" },
@@ -290,6 +306,7 @@ export const TESTS: Test[] = [
     id: "bend",
     label: "Forward bend",
     say: { en: "Please bend forward slowly, as if to touch your toes, then stand up.", es: "Por favor, dóblese hacia adelante despacio, como para tocarse los pies, y luego enderécese." },
+    prep: 2,
     seconds: 6,
     checks: [{ finding: "pain_on_bending", question: "Does the person stop early, grimace in pain, or hold their back while bending?" }],
   },
@@ -297,6 +314,7 @@ export const TESTS: Test[] = [
     id: "chest_show",
     label: "Chest check (child)",
     say: { en: "Please lift the child's shirt so I can see the chest and belly while they breathe calmly.", es: "Por favor, levántele la camisa al niño para ver el pecho y la panza mientras respira tranquilo." },
+    prep: 4,
     seconds: 8,
     childOnly: true,
     checks: [
@@ -308,6 +326,7 @@ export const TESTS: Test[] = [
     id: "palms",
     label: "Palm check",
     say: { en: "Please hold both hands open toward the camera, palms facing me.", es: "Por favor, muestre las dos manos abiertas hacia la cámara, con las palmas hacia mí." },
+    prep: 1,
     seconds: 3,
     checks: [{ finding: "pale", question: "Are the palms of the hands very pale, almost white, compared with normal skin?" }],
   },
@@ -315,6 +334,7 @@ export const TESTS: Test[] = [
     id: "feet",
     label: "Foot swelling check",
     say: { en: "Please press your thumb on the top of each foot for three seconds, then show the feet to the camera.", es: "Por favor, apriete con el dedo encima de cada pie por tres segundos y luego muestre los pies a la cámara." },
+    prep: 5,
     seconds: 8,
     checks: [{ finding: "swollen_feet", question: "Are both feet swollen, or does a dent stay in the skin after pressing (pitting)?" }],
   },

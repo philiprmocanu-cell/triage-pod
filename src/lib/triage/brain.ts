@@ -57,3 +57,19 @@ export async function readIntake(intake: Intake): Promise<{ name: string | null;
   };
   return { name: field("name"), community: field("community"), patient: field("patient") };
 }
+
+// The patient asked the pod something ("is it serious?", "what should I do?"). Answer briefly, in
+// their language, without diagnosing or dosing, then the pod carries on with its next question.
+export async function replyToPatient(input: {
+  conversation: { speaker: string; said: string }[];
+  question: string;
+  language: string;
+  locale: string;
+  urgency: string;
+  likely: string[];
+}): Promise<string> {
+  return ask(
+    `You are the voice of a health pod at a rural health post (${input.locale}). The patient just asked you something. Answer in at most 25 words: one or two short, warm, plain sentences in their language and regional Spanish if Spanish. Never name a diagnosis as certain, never give medicine doses, never promise. You may say what the pod is checking and that the health worker and a doctor will explain and treat. If urgency is red, say calmly that help is being arranged now. Reply with the spoken words only.`,
+    JSON.stringify({ patient_question: input.question, urgency: input.urgency, what_the_pod_is_considering: input.likely, recent_conversation: input.conversation.slice(-6) }),
+  );
+}

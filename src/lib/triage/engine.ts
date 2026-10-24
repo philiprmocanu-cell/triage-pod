@@ -8,6 +8,7 @@
 // Code then opens pathways, picks the next step, applies the safety rules and adds up supplies.
 
 import { jev, JevQuestion, noulOf, probsOf } from "../jev";
+import { replyToPatient } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { TRAITS, TraitScan } from "./traits";
 import { maxUrgency, runRules } from "./rules";
@@ -90,7 +91,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
           },
         },
       );
-      const pick = a.lang?.type === "choice" ? a.lang.choice : entries[0][0];
+      let pick = a.lang?.type === "choice" ? a.lang.choice : entries[0][0];
+      // Stay in the patient's language unless they clearly switched: "No" or "Sí" alone is
+      // the same in both and must not flip the conversation into English.
+      const words = (input.latest.candidates[pick] ?? "").split(/\s+/).filter(Boolean).length;
+      const sure = a.lang?.type === "choice" ? a.lang.confidence : 0;
+      if (input.language && pick !== input.language && input.latest.candidates[input.language] && (words < 4 || sure < 0.8)) pick = input.language;
       language = (pick === "en" ? "en" : "es") as Lang;
       patientText = input.latest.candidates[pick] ?? entries[0][1];
     } else if (entries.length === 1) {
@@ -158,7 +164,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
     for (const k of FINDING_KEYS) {
       q[`said_${k}`] = {
         type: "choice",
-        instructions: `From the \`conversation\`: does the patient have this? "${FINDINGS[k].label}". The conversation may be in Spanish.`,
+        instructions:
+          k === "confused_speech"
+            ? 'From the `conversation`: does the patient have slurred or confused speech? If the pod asked them to repeat a sentence, did they repeat it wrongly, leave words out, or jumble them? The conversation may be in Spanish.'
+            : `From the \`conversation\`: does the patient have this? "${FINDINGS[k].label}". The conversation may be in Spanish.`,
         criteria: {
           yes: "The patient or caregiver said so, or it clearly follows from what they said.",
           no: "They said it is not the case, or answered no when asked.",
@@ -197,6 +206,13 @@ export async function step(input: StepInput): Promise<TriageResult> {
     for (const [f, question] of Object.entries(ALREADY)) {
       if (!intake[f as keyof Intake]) q[`already_${f}`] = { type: "noul", instructions: `From the \`conversation\`: ${question}` };
     }
+  }
+  // Is the patient answering, asking something back, or asking to hear it again?
+  if (patientText && lastPod) {
+    const ctx = `The pod last said: "${lastPod.text}". The patient then said: "${patientText}".`;
+    q.patient_asked = { type: "noul", instructions: `${ctx} Is the patient asking the pod a question or asking for help/advice (e.g. what is wrong, what to do, is it serious), rather than only answering?` };
+    q.repeat_request = { type: "noul", instructions: `${ctx} Is the patient asking the pod to repeat, or saying they did not hear or understand?` };
+    q.answered_last = { type: "noul", instructions: `${ctx} Does the patient's reply actually answer what the pod asked or said (any clear answer counts, including yes, no, or "I don't know")?` };
   }
   if (intake.consent) {
     q.consent = { type: "noul", instructions: "In `consent_answer`, did the person agree to have their name and health needs saved?" };
@@ -284,7 +300,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
       const prob = p.probability * s.probability;
       if (prob < 0.05) continue;
       const sdef = def.subtypes.find((d) => d.name === s.name)!;
-      causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description });
+      const keys = [...new Set([...def.triggers, ...def.questions.filter((q): q is FindingKey => !q.startsWith("test:"))])];
+      const src = (k: FindingKey) => ((tested.get(k) ?? 0) >= YES ? "test" : (seen[k] ?? 0) >= YES ? "camera" : "said");
+      const evidence = keys.filter((k) => yes[k] >= YES).map((k) => `${FINDINGS[k].label} (${src(k)})`);
+      if (hints[p.id]) evidence.push(`camera: ${hints[p.id].why}`);
+      const against = keys.filter((k) => known[k] && yes[k] < 0.3 && asked.has(k)).map((k) => `no ${FINDINGS[k].label.toLowerCase()}`);
+      causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description, evidence, against });
       for (const item of sdef.resources) need.set(item, 1 - (1 - (need.get(item) ?? 0)) * (1 - prob));
     }
   }
@@ -306,10 +327,28 @@ export async function step(input: StepInput): Promise<TriageResult> {
     if (!resources.some((r) => sameItem(r.item, item))) resources.push({ item, probability, delivery: deliveryFor(item) });
   }
 
+  // A fired safety rule is the strongest evidence there is: its condition goes to the top.
+  for (const hit of ruleHits) {
+    const name = RULE_CAUSE[hit.id];
+    if (!name) continue;
+    const c = causes.find((x) => x.name === name);
+    const p = hit.urgency === "red" ? 0.95 : 0.8;
+    if (c) {
+      c.probability = Math.max(c.probability, p);
+      c.evidence.unshift(`safety rule: ${hit.evidence}`);
+    } else {
+      const path = PATHWAYS.find((d) => d.subtypes.some((x) => x.name === name))!;
+      const sub = path.subtypes.find((x) => x.name === name)!;
+      causes.push({ name, pathway: path.label, probability: p, urgency: sub.urgency, why: sub.description, evidence: [`safety rule: ${hit.evidence}`], against: [] });
+    }
+  }
+  causes.sort((x, y) => y.probability - x.probability);
+
   // Urgency: any rule, or any red/yellow condition that is reasonably likely, can't be ruled out.
   const causeUrgency = causes.filter((c) => c.probability >= 0.3).map((c) => c.urgency);
   const urgency: Urgency = maxUrgency(...ruleHits.map((h) => h.urgency), ...causeUrgency);
   const redRule = ruleHits.some((h) => h.urgency === "red");
+  const strokeRed = redRule && ruleHits.filter((h) => h.urgency === "red").every((h) => h.id.startsWith("stroke"));
 
   // ---- Next step ----
   const say = (asks: Step | null, t: { en: string; es: string }): TriageResult["next"] => ({ asks, text: t[language], english: t.en });
@@ -332,6 +371,22 @@ export async function step(input: StepInput): Promise<TriageResult> {
     next = say(`intake:${f}`, INTAKE[f]);
   } else if (!asked.has("open") && !redRule) {
     next = seenOpener() ?? say("open", OPENING);
+  } else if (strokeRed && medicalSteps < MAX_STEPS) {
+    // Suspected stroke: help is called, but the quick bedside tests (smile, arms, walk) still run
+    // so the doctor gets the full picture on arrival.
+    // No walking once a stroke is flagged: fall risk. The speech check replaces it.
+    const t = (["test:smile", "test:arm_drift"] as Step[]).find((st) => !testDone(st.slice(5)));
+    if (!t && !asked.has("confused_speech")) next = say("confused_speech", FINDINGS.confused_speech.ask);
+    if (t) {
+      const def = TESTS.find((x) => `test:${x.id}` === t)!;
+      const first = !["smile", "arm_drift"].some((id) => testDone(id));
+      next = {
+        asks: t,
+        text: `${first ? HELP_NOW[language] + " " : ""}${def.say[language]}`,
+        english: `${first ? HELP_NOW.en + " " : ""}${def.say.en}`,
+        test: { id: def.id, label: def.label, seconds: def.seconds, prep: def.prep },
+      };
+    }
   } else if (!redRule && medicalSteps < MAX_STEPS) {
     const order: Step[] = [];
     if (isChild && open.length) order.push("unable_to_drink", "vomits_everything", "seizure", "very_sleepy");
@@ -348,15 +403,42 @@ export async function step(input: StepInput): Promise<TriageResult> {
     });
     if (pick?.startsWith("test:")) {
       const t = TESTS.find((x) => `test:${x.id}` === pick)!;
-      next = { ...say(pick, t.say)!, test: { id: t.id, label: t.label, seconds: t.seconds } };
+      next = { ...say(pick, t.say)!, test: { id: t.id, label: t.label, seconds: t.seconds, prep: t.prep } };
     } else if (pick) {
-      next = say(pick, FINDINGS[pick as FindingKey].ask);
+      const f = FINDINGS[pick as FindingKey];
+      next = say(pick, isChild && "askChild" in f ? f.askChild : f.ask);
     } else if (!open.length && medicalSteps < 3) {
       next = say(null, MORE);
     }
   }
   const done = input.stage === "answer" && !next;
   if (done) next = say(null, ruleHits.some((h) => h.id === "suicide_risk") ? CLOSING_SUICIDE_RISK : CLOSING[urgency]);
+
+  const lastAsked = lastPod?.asks;
+  const reAsked = (lastPod?.text ?? "").startsWith(SORRY[language]);
+  if (patientText && lastPod && !done && !redRule) {
+    if (noulOf(a.repeat_request) >= 0.6) {
+      next = { asks: lastAsked ?? null, text: `${CLARO[language]} ${stripPrefix(lastPod.text, language)}`, english: lastPod.english ?? lastPod.text };
+    } else if (noulOf(a.patient_asked) < 0.6 && noulOf(a.answered_last) < 0.3 && lastAsked && !reAsked && !lastAsked.startsWith("test:")) {
+      next = { asks: lastAsked, text: `${SORRY[language]} ${stripPrefix(lastPod.text, language)}`, english: `Sorry, I didn't quite understand. ${lastPod.english ?? ""}` };
+    }
+  }
+  if (patientText && noulOf(a.patient_asked) >= 0.6 && noulOf(a.repeat_request) < 0.6 && next) {
+    let reply: string;
+    try {
+      reply = await replyToPatient({
+        conversation: conversation.map((c) => ({ speaker: "exchange", said: JSON.stringify(c) })),
+        question: patientText,
+        language,
+        locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
+        urgency,
+        likely: causes.slice(0, 3).map((c) => c.name),
+      });
+    } catch {
+      reply = HELP_COMING[language];
+    }
+    next = { ...next, text: `${reply} ${next.text}`, english: `[answering the patient] ${next.english}` };
+  }
 
   // Talk back with the patient's own words: what this patient said, on top of what their
   // community taught the pod on earlier visits.
@@ -403,7 +485,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
             ? "Child: WHO danger signs are always checked first"
             : "Nothing specific found yet → screening";
 
-  const top = ruleHits[0]?.label ?? (causes[0] ? `Most likely: ${causes[0].name} (${Math.round(causes[0].probability * 100)}%)` : "No danger signs found so far");
+  const redHit = ruleHits.find((h) => h.urgency === "red");
+  const top = redHit?.label ?? (causes[0] ? `Most likely: ${causes[0].name} (${Math.round(causes[0].probability * 100)}%)` : ruleHits[0]?.label ?? "No danger signs found so far");
   const mental = pathways.find((p) => p.id === "mental");
 
   return {
@@ -437,6 +520,28 @@ export async function step(input: StepInput): Promise<TriageResult> {
     jev_ms: Date.now() - t0,
   };
 }
+
+// Which condition each safety rule points to.
+const RULE_CAUSE: Record<string, string> = {
+  stroke_face_droop_camera: "Stroke",
+  stroke_speech_or_weakness: "Stroke",
+  stroke_balance: "Stroke",
+  cardiac_chest_pain: "Heart attack",
+  severe_pneumonia: "Severe pneumonia",
+  pneumonia: "Pneumonia",
+  suicide_risk: "Suicide risk",
+  spinal_cord: "Spinal cord compression",
+  pregnancy_danger: "Pre-eclampsia",
+  dehydration: "Some dehydration",
+  dysentery: "Dysentery",
+  kidney_infection: "Kidney infection",
+};
+
+const HELP_NOW = { en: "We are calling for help now. While it comes, let's do a few quick checks.", es: "Ya estamos pidiendo ayuda. Mientras llega, hagamos unas pruebas rápidas." };
+const SORRY = { en: "Sorry, I didn't quite understand.", es: "Perdón, no le entendí bien." };
+const CLARO = { en: "Of course.", es: "Claro." };
+const HELP_COMING = { en: "Good question. The health worker and the doctor will explain everything to you.", es: "Buena pregunta. El promotor de salud y el doctor le van a explicar todo." };
+const stripPrefix = (t: string, l: Lang) => t.replace(SORRY[l], "").replace(CLARO[l], "").trim();
 
 const MORE = { en: "Can you tell me more about how you feel and where it hurts?", es: "¿Me puede contar más de cómo se siente y dónde le duele?" };
 

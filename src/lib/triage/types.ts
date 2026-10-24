@@ -36,7 +36,7 @@ export type RuleHit = {
   resources: string[];
 };
 
-export type Cause = { name: string; pathway: string; probability: number; urgency: Urgency; why: string };
+export type Cause = { name: string; pathway: string; probability: number; urgency: Urgency; why: string; evidence: string[]; against: string[] };
 
 export type Resource = {
   item: string;
@@ -82,7 +82,7 @@ export type TriageResult = {
   speech_confused: number;
   done: boolean;
   answered: Step | null; // which step the patient's latest words answered
-  next: { asks: Step | null; text: string; english: string; test?: { id: string; label: string; seconds: number } } | null;
+  next: { asks: Step | null; text: string; english: string; test?: { id: string; label: string; seconds: number; prep: number } } | null;
   consent: number | null; // probability the patient agreed to be saved (null = not asked yet)
   intake: Intake; // intake answers so far, including ones given before they were asked
   lexicon: Partial<Record<string, string>>; // regional words learned from this patient / community
