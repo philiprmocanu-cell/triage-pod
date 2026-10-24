@@ -1,18 +1,97 @@
-# Triage Pod — step-by-step build (one board, four solder joints)
+# Triage Pod — build it at the venue, no soldering, nothing pre-built
 
-What you end up with: the camera pod you already have (XIAO ESP32-S3 on the Grove Vision AI V2, 1,200 mAh battery) with the red oxygen/pulse sensor from the old watch wired to it, in a three-part printed case. It runs on battery, joins your phone hotspot, and the laptop does the talking.
+Rule check (Cal Hacks 13.0 Hacker Guide, "Project Submission & Judging"): **"All projects must be started during the event."** There is no written rule against bringing parts, but a pod that was soldered together weeks ago for another project reads as "started before the event". The guide also says no soldering inside the venue. So the clean way is a pod you plug together at your table from stock parts, with no iron at all. That is this plan.
 
-Do all soldering at home. The venue does not allow it.
+Nothing from the Zoron pod's soldered work is used: not its brain board, charger, switch, battery or resistor stick. They stay in the old case. The watch is not touched either.
 
-Tools: soldering iron, your silicone wire (or the Qwiic cable), wire stripper or small scissors, tape, a ruler, a multimeter if you have one (optional), USB-C data cable, phone hotspot.
+## What you take from home
 
-Where things live:
-- Firmware: `hardware/pod-firmware/pod-firmware.ino` (compiles; not flashed yet). Hotspot name/password go in `hardware/pod-firmware/secrets.h`, which is not committed.
-- Case: `hardware/case/pod-case.scad` plus the three exported files `pod-faceplate.stl`, `pod-sensor_shelf.stl`, `pod-base.stl`.
-- This file is the single source of truth for the physical pod.
-- Picture booklet of the same steps (Lego style, one action per page): `hardware/booklet/Triage Pod — Four Joints.pdf` (also on the Desktop). Pages 1–13 sensor out of the watch, 14–28 the four joints, 29–34 power up and check.
+| Part | Where it is now | What to do to it |
+|---|---|---|
+| **Spare Vision AI V2** (the clean one, never soldered) | the spare brain board | nothing |
+| **Fisheye camera + ribbon** | latched into the old pod's brain | unlatch the ribbon from the old brain, latch it into the spare brain (Book 1, pages 2–6) |
+| **XIAO ESP32-S3** (radio board, factory-soldered pins) | plugged into the old pod's brain, two battery wires on its underside | lift it off the old brain; cut the red and black wires off right at the underside pads with scissors (no iron). It is a stock board again |
+| **Wi-Fi antenna** | clipped on the XIAO | stays clipped on |
+| **Red MAX30101 sensor** | in the watch, plugged into the DRV board | pull its small plug out of the DRV board and lift it out. Its old soldered cable stays on it but is not used: the sensor has **two empty Qwiic sockets** |
+| **USB-C data cable** | your bag | flashing, and power at the table |
+
+## What you get at the venue (rental booth, from 6 PM Friday)
+
+- **Arduino Uno kit** from the rental booth: it has a **breadboard** and **jumper wires** (male–male). That is all the wiring you need.
+- **Qwiic-to-breadboard cable** (4-pin JST-SH plug on one end, four pins on the other; SparkFun "Qwiic Cable – Breadboard Jumper" or Adafruit 4209). Check the MLH Hardware Lab list first; if nobody has one, Amazon same-day. **Fallback:** a **MAX30102 module with header pins** from the rental booth's sensor assortment (same chip family, same program, plugs straight into the breadboard).
+- **Power:** the laptop's USB-C port, or any USB power bank. No battery, no charger, no switch.
+
+## The wiring (every joint is a plug, nothing is soldered)
+
+Push the XIAO into the breadboard so it straddles the middle gap, USB-C pointing out to the edge. Its two pin rows are now in two breadboard rows. Then five jumper wires from the XIAO's rows into the spare brain board's socket holes (the two black 7-hole strips on the brain's back face; the words are printed next to the holes):
+
+| From XIAO pin | To brain hole | Jumper colour (any colour works; these help) |
+|---|---|---|
+| 5V | **5V** | red |
+| 3V3 | **3V3** | orange |
+| GND | **GND** | black |
+| D6 | **RXD** | white |
+| D7 | **TXD** | yellow |
+
+(These are exactly the five connections the socket made when the XIAO sat on the brain. D3 to RST is not needed.)
+
+Then the sensor. Plug the Qwiic cable into either socket on the red board and push its four pins into the breadboard rows next to these XIAO pins:
+
+| Qwiic wire | XIAO pin |
+|---|---|
+| black | GND |
+| red | 3V3 (**never 5V**) |
+| blue | D4 (SDA) |
+| yellow | D5 (SCL) |
+
+Fallback module (MAX30102 with pins): four jumpers, VIN→3V3, GND→GND, SDA→D4, SCL→D5.
+
+Pin map of the XIAO, USB-C pointing up: left column D0 D1 D2 D3 D4 D5 D6 top to bottom; right column 5V GND 3V3 D10 D9 D8 D7.
+
+```
+                USB-C
+          ┌───────────────┐
+   D0  ●  │               │  ●  5V   → brain 5V
+   D1  ●  │               │  ●  GND  → brain GND, sensor black
+   D2  ●  │  XIAO         │  ●  3V3  → brain 3V3, sensor red
+   D3  ●  │  ESP32-S3     │  ●  D10
+   D4  ●  │               │  ●  D9      D4 ← sensor blue (SDA)
+   D5  ●  │               │  ●  D8      D5 ← sensor yellow (SCL)
+   D6  ●  │               │  ●  D7      D6 → brain RXD,  D7 → brain TXD
+          └───────────────┘
+```
+
+Checks before power (no meter needed, just eyes): no jumper in the brain's 5V hole except the one from XIAO 5V; the sensor's red pin is on the 3V3 row, not the 5V row; the ribbon latch on the brain is closed with the silver contacts facing the gold fingers.
+
+## Power, program, test
+
+1. USB-C cable from the laptop into the **XIAO** (not the brain). Tell Claude the hotspot name and password; Claude writes `hardware/pod-firmware/secrets.h` and uploads. The program is the same one as before: nothing changes because the pins are the same.
+2. If the upload will not start: hold BOOT on the XIAO, tap RESET, release BOOT, upload again.
+3. Chrome: `http://triagepod.local/vitals` → `"camera": true`, `"sensor": true`.
+4. Finger flat on the dark window for 10 seconds, reload: pulse and oxygen numbers.
+5. Kiosk: `http://localhost:3417/kiosk?village=Katete&pod=triagepod.local`, press F.
+
+For the demo the pod runs from a power bank on the USB-C cable; the laptop stays on the hotspot.
+
+## Case
+
+Same three prints. The base tray no longer needs battery rails: it holds the breadboard instead. Tell Claude the breadboard's size (a half-size board is about 82 × 55 mm, a mini one 46 × 35 mm) and the base gets a pocket for it. Faceplate and sensor shelf are unchanged; the sensor sits in the shelf window-up with the Qwiic cable leaving through the notch.
+
+## If it goes wrong
+
+| What you see | Do |
+|---|---|
+| `"sensor": false` | blue/yellow swapped, or a pin not fully in the breadboard. Swap blue and yellow. |
+| `"camera": false` | RXD/TXD swapped (swap the white and yellow jumpers), or the ribbon latch is open. |
+| Nothing lights on the brain | 5V/3V3/GND jumpers in the wrong holes; recount from the printed words. |
+| `triagepod.local` not found | both devices on the hotspot? Try the IP the hotspot shows for "triagepod". |
+| Upload will not start | hold BOOT, tap RESET, release BOOT, upload again. |
 
 ---
+
+# Fallback: the soldered route (only if you decide pre-soldered parts are fine)
+
+Four joints at home, before the venue. The picture booklet `hardware/booklet/Triage Pod — Four Joints.pdf` shows every step. Text version below.
 
 ## Measure first (2 min, send the numbers to Claude)
 
