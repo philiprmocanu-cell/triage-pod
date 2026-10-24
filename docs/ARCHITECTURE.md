@@ -17,7 +17,7 @@ Generated from the code on 2026-10-24 (`src/lib/triage/*.ts`). The scenario tran
                                                             |
             +-----------------------------------------------+------------------------------+
             v                                               v                              v
-     /globe (3D map, drones)                 /government (stock x posts, agents)    /patients (vaccines due)
+     /globe (40 posts, click-a-post)         /government (stock x posts, sky, agents)    /patients (vaccines due)
 ```
 
 Three AI services, each with one job:
@@ -34,10 +34,22 @@ Rules in code override everything (red flags). A condition is named only when a 
 | `/kiosk?village=Katete&pod=triagepod.local` | the patient | the question in big type, both languages, "come closer" if the camera cannot judge; no diagnoses |
 | `/pod?village=Katete` | the operator | the same visit plus camera panels, a typed-answer box, region and accent settings, the result panel |
 | `/staff` | the health worker | live mirror: conversation, decision path, confident conditions, the exact order, vitals entry (SpO2, temp, BP, glucose) |
-| `/globe` | judges | 3D satellite map: +1 bubbles per need, drones/trucks at real speed with ETA, live feed |
-| `/government` | provincial office | every post x every item, used / on the way, agent decisions log, Claude briefing |
-| `/patients` | posts | 24 profiles, vaccine doses due on Zambia's schedule, send to home |
-| `/agents`, `/dashboard`, `/deploy`, `/registry`, `/demo` | judges / you | agent bus, supply simulator, where-next with World Bank data, saved visits, the demo script |
+| `/globe` | judges | 3D satellite map: 40 health posts as plain dots (bigger ring for the Chipata hub), quiet until a pod flags a need; +1 bubbles, drones/trucks at real speed with ETA, live feed; click a post for what it asked for, sent and holds; layer buttons for flights, hubs and names; simulated visits OFF by default |
+| `/government` | provincial office | the same 40 sites x every item, used / on the way, satellite malaria and flood risk per post (NASA POWER), vaccines due per post, pods online (heartbeats), words the villages taught the pod, agent decisions log, Claude briefing; World Bank facts for Zambia in the header |
+| `/patients` | posts | 24 profiles, vaccine doses due on Zambia's schedule, the doctor's note from the last saved visit, send to home |
+| `/community` | posts | circles per village: who asked for company, who volunteers, the connector agent's pairings |
+| `/registry` | health team | every saved visit live from SpacetimeDB (`visit_record`, the handover arrives when Claude writes it); the JSON file is the fallback |
+| `/agents`, `/dashboard` | judges | the SIMULATOR (`src/lib/network.ts`): the same 40 posts with invented background patients at 60x, labelled as such; not the live network |
+| `/deploy`, `/demo` | you | where-next with live World Bank data (Zambia first), the presenter's script with facts and limits |
+
+### 2b. The network pages, what is real and what is not
+
+- **40 sites** are seeded by `spacetime/spacetimedb/src/index.ts` (12 district centres plus 28 rural health posts, approximate coordinates). Every network page reads them from the `village` table, so adding a village there is enough; `src/lib/network.ts` keeps a copy of the same list for the simulator.
+- **Nothing is simulated by default.** `settings.simulate` and `settings.agents` start false. The map and government view only move when a pod reports a visit, the office presses "Allocate now" or switches the agents on, or the presenter switches "Simulated visits" on (amber button on both pages).
+- **Map interaction**: a dot turns amber while its post has an open order or a live pod visit, blue when picked. Clicking a post opens a panel (asked for, sent from here, on the shelf with low items highlighted) and an "Open the pod here" link to `/kiosk?village=<name>`. Layers: flights and routes, hubs, all names (small posts show their name only when zoomed in).
+- **Satellite** (`/api/satellite`): NASA POWER for the 40 sites, one request per grid cell, cached 6 h in memory and in `data/satellite.json`. Recent weeks are preliminary; the API returns the same window one year earlier from the finished record and the page shows both. Days above 150 mm are excluded and counted.
+- **Pods** report a heartbeat row (`pod` table: status, step, language, online, last seen); the government header counts pods online and the table marks them with a green dot.
+- **Shelf counts** are the seed, not an inventory; the government legend says so. Stock-outs, restocks and post-to-post moves are counted from real rows in `stock` and `delivery_order`.
 
 ## 3. One visit, step by step (gated like a nurse)
 

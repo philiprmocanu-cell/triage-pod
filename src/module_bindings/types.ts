@@ -49,6 +49,17 @@ export const DeliveryOrder = __t.object("DeliveryOrder", {
 });
 export type DeliveryOrder = __Infer<typeof DeliveryOrder>;
 
+export const DialectWord = __t.object("DialectWord", {
+  id: __t.u64(),
+  villageId: __t.u32(),
+  community: __t.string(),
+  concept: __t.string(),
+  word: __t.string(),
+  times: __t.u32(),
+  heardAt: __t.timestamp(),
+});
+export type DialectWord = __Infer<typeof DialectWord>;
+
 export const Need = __t.object("Need", {
   item: __t.string(),
   qty: __t.u32(),
@@ -67,6 +78,16 @@ export const Patient = __t.object("Patient", {
   lastVisit: __t.string(),
 });
 export type Patient = __Infer<typeof Patient>;
+
+export const Pod = __t.object("Pod", {
+  villageId: __t.u32(),
+  status: __t.string(),
+  step: __t.string(),
+  language: __t.string(),
+  online: __t.bool(),
+  lastSeen: __t.timestamp(),
+});
+export type Pod = __Infer<typeof Pod>;
 
 export const Pop = __t.object("Pop", {
   villageId: __t.u32(),
@@ -118,4 +139,59 @@ export const Visit = __t.object("Visit", {
   createdAt: __t.timestamp(),
 });
 export type Visit = __Infer<typeof Visit>;
+
+export const VisitRecord = __t.object("VisitRecord", {
+  id: __t.string(),
+  villageId: __t.u32(),
+  createdAt: __t.string(),
+  region: __t.string(),
+  consent: __t.bool(),
+  name: __t.string(),
+  community: __t.string(),
+  patient: __t.string(),
+  ageGroup: __t.string(),
+  language: __t.string(),
+  locale: __t.string(),
+  urgency: __t.string(),
+  reason: __t.string(),
+  causes: __t.string(),
+  resources: __t.string(),
+  orders: __t.string(),
+  mentalCategory: __t.string(),
+  wantsPeerGroup: __t.bool(),
+  volunteer: __t.bool(),
+  handover: __t.string(),
+  updatedAt: __t.timestamp(),
+});
+export type VisitRecord = __Infer<typeof VisitRecord>;
+
+export const VisitRecordIn = __t.object("VisitRecordIn", {
+  id: __t.string(),
+  village: __t.string(),
+  createdAt: __t.string(),
+  region: __t.string(),
+  consent: __t.bool(),
+  name: __t.string(),
+  community: __t.string(),
+  patient: __t.string(),
+  ageGroup: __t.string(),
+  language: __t.string(),
+  locale: __t.string(),
+  urgency: __t.string(),
+  reason: __t.string(),
+  causes: __t.string(),
+  resources: __t.string(),
+  orders: __t.string(),
+  mentalCategory: __t.string(),
+  wantsPeerGroup: __t.bool(),
+  volunteer: __t.bool(),
+  handover: __t.string(),
+});
+export type VisitRecordIn = __Infer<typeof VisitRecordIn>;
+
+export const Word = __t.object("Word", {
+  concept: __t.string(),
+  word: __t.string(),
+});
+export type Word = __Infer<typeof Word>;
 

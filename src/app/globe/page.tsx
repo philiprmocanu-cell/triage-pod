@@ -29,9 +29,10 @@ type Order = {
   createdAt: { microsSinceUnixEpoch: bigint };
   departedAt?: { microsSinceUnixEpoch: bigint };
 };
+type Pod = { villageId: number; status: string; step: string; language: string; online: boolean; lastSeen: { microsSinceUnixEpoch: bigint } };
 type FeedItem = { id: number; at: string; text: string; tone: "need" | "move" | "done" | "alert" | "live" | "restock" | "agent" };
 type Marker =
-  | { kind: "village"; v: Village; lat: number; lng: number; state: "quiet" | "active" | "picked" }
+  | { kind: "village"; v: Village; lat: number; lng: number; state: "quiet" | "active" | "picked"; online: boolean }
   | { kind: "pop"; id: number; lat: number; lng: number; text: string; tone: string }
   | { kind: "mover"; id: string; lat: number; lng: number; mode: string; label: string };
 type Layers = { flights: boolean; hubs: boolean; labels: boolean };
@@ -49,6 +50,7 @@ export default function GlobePage() {
   const movers = useRef(new Map<string, Marker & { kind: "mover" }>());
   const villageMarkers = useRef<Marker[]>([]);
   const activeIds = useRef(new Set<number>());
+  const onlineIds = useRef(new Set<number>()); // posts with a pod switched on right now
   const pickedRef = useRef<Village | null>(null);
   const layersRef = useRef<Layers>({ flights: true, hubs: true, labels: false });
   const [connected, setConnected] = useState<"connecting" | "live" | "offline">("connecting");
@@ -60,6 +62,7 @@ export default function GlobePage() {
   const [stockOf, setStockOf] = useState<{ item: string; qty: number }[]>([]);
   const [asked, setAsked] = useState<Order[]>([]);
   const [sent, setSent] = useState<Order[]>([]);
+  const [podHere, setPodHere] = useState<Pod | null>(null);
 
   const push = (text: string, tone: FeedItem["tone"]) =>
     setFeed((f) => [{ id: ++feedSeq, at: new Date().toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }), text: plain(text), tone }, ...f].slice(0, 40));
@@ -74,6 +77,7 @@ export default function GlobePage() {
       lat: v.lat,
       lng: v.lng,
       state: p?.id === v.id ? "picked" : activeIds.current.has(v.id) ? "active" : "quiet",
+      online: onlineIds.current.has(v.id),
     }));
   };
 
@@ -222,10 +226,12 @@ export default function GlobePage() {
     const refreshKpis = (conn: DbConnection) => {
       const visits = [...conn.db.visit.iter()];
       const orders = [...conn.db.deliveryOrder.iter()] as Order[];
+      const pods = [...conn.db.pod.iter()] as Pod[];
+      onlineIds.current = new Set(pods.filter((p) => p.online).map((p) => p.villageId));
       setKpi({
         posts: villages.current.size,
         visits: visits.length,
-        live: visits.filter((v) => v.fromPod).length,
+        live: onlineIds.current.size,
         orders: orders.length,
         flying: orders.filter((o) => o.status === "on_the_way").length,
         delivered: orders.filter((o) => o.status === "delivered").length,
@@ -256,7 +262,7 @@ export default function GlobePage() {
             syncVillages(c);
             refreshKpis(c);
           })
-          .subscribe(["SELECT * FROM village", "SELECT * FROM stock", "SELECT * FROM visit", "SELECT * FROM delivery_order", "SELECT * FROM settings", "SELECT * FROM pop", "SELECT * FROM agent_log"]);
+          .subscribe(["SELECT * FROM village", "SELECT * FROM stock", "SELECT * FROM visit", "SELECT * FROM delivery_order", "SELECT * FROM settings", "SELECT * FROM pop", "SELECT * FROM agent_log", "SELECT * FROM pod"]);
       })
       .onConnectError(() => setConnected("offline"))
       .onDisconnect(() => setConnected("offline"))
@@ -265,6 +271,18 @@ export default function GlobePage() {
 
     conn.db.village.onInsert(() => syncVillages(conn));
     conn.db.settings.onUpdate(() => refreshKpis(conn));
+    // A pod switching on or off: the ring on its post, the "live pods" count, a feed line.
+    conn.db.pod.onInsert((_ctx, p) => {
+      refreshKpis(conn);
+      if (p.online) push(`POD ONLINE ▸ ${vname(p.villageId)}`, "live");
+    });
+    conn.db.pod.onUpdate((_ctx, old, p) => {
+      if (old.online !== p.online) {
+        refreshKpis(conn);
+        push(p.online ? `POD ONLINE ▸ ${vname(p.villageId)}` : `POD OFF ▸ ${vname(p.villageId)}`, "live");
+      }
+    });
+    conn.db.pod.onDelete(() => refreshKpis(conn));
     conn.db.visit.onInsert((_ctx, v) => {
       refreshKpis(conn);
       if (v.fromPod) push(`LIVE POD ▸ ${v.patientName} · ${vname(v.villageId)} · ${v.urgency === "green" ? "nothing needed" : v.urgency.toUpperCase()}`, "live");
@@ -311,6 +329,7 @@ export default function GlobePage() {
       const orders = ([...conn.db.deliveryOrder.iter()] as Order[]).sort((a, b) => Number(b.id - a.id));
       setAsked(orders.filter((o) => o.toVillageId === picked.id).slice(0, 12));
       setSent(orders.filter((o) => o.fromVillageId === picked.id && o.toVillageId !== picked.id).slice(0, 12));
+      setPodHere(([...conn.db.pod.iter()] as Pod[]).find((p) => p.villageId === picked.id) ?? null);
     };
     read();
     const id = setInterval(read, 1000);
@@ -398,6 +417,7 @@ export default function GlobePage() {
               Open the pod here
             </Link>
           </div>
+          <PodNow pod={podHere} />
 
           <Section title={`Asked for · ${asked.length}`}>
             {asked.length ? asked.map((o) => <OrderRow key={String(o.id)} o={o} other={vname(o.fromVillageId)} dir="from" />) : <Empty>no requests yet — a pod visit here would be the first</Empty>}
@@ -463,6 +483,28 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <p className="text-xs text-slate-500">{children}</p>;
 }
 
+// What the pod at this post is doing right now, from its heartbeats.
+const STEP_LABEL: Record<string, string> = { name: "asking the name", community: "asking the community", who: "asking who the patient is", complaint: "asking what brought them in" };
+function PodNow({ pod }: { pod: Pod | null }) {
+  if (!pod || !pod.online) return <Section title="Pod here"><Empty>{pod ? "pod switched off" : "no pod switched on here"}</Empty></Section>;
+  const what = pod.status === "listening" ? "listening to the patient" : pod.status === "thinking" ? "working out the next question" : pod.status === "speaking" ? "speaking" : "waiting for a patient";
+  const step = pod.step ? (STEP_LABEL[pod.step] ?? (pod.step.startsWith("test:") ? `physical test: ${pod.step.slice(5).replaceAll("_", " ")}` : `about ${pod.step.replaceAll("_", " ")}`)) : "";
+  const seen = Math.max(0, Math.round((Date.now() - Number(pod.lastSeen.microsSinceUnixEpoch / BigInt(1000))) / 1000));
+  return (
+    <Section title="Pod here · online">
+      <div className="flex items-baseline justify-between gap-2 text-[12px] leading-5">
+        <span>
+          <span className="online-dot mr-1.5 inline-block h-2 w-2 rounded-full bg-emerald-400 align-middle" />
+          <span className="text-slate-100">{what}</span>
+          {step && <span className="text-slate-400"> · {step}</span>}
+          {pod.language && <span className="text-slate-500"> · {pod.language}</span>}
+        </span>
+        <span className="shrink-0 tabular-nums text-slate-500">{seen}s ago</span>
+      </div>
+    </Section>
+  );
+}
+
 function OrderRow({ o, other, dir }: { o: Order; other: string; dir: "from" | "to" }) {
   const status = o.status === "delivered" ? "delivered" : o.status === "on_the_way" ? `${o.mode === "drone" ? "drone" : "truck"} · ${o.etaMinutes} min` : o.mode === "walk" ? "from the shelf" : "packing";
   const tone = o.status === "delivered" ? "text-emerald-300" : o.status === "on_the_way" ? "text-sky-300" : "text-amber-300";
@@ -482,7 +524,7 @@ function markerEl(d: Marker, onPick: (v: Village) => void): HTMLElement {
   const n = document.createElement("div");
   if (d.kind === "village") {
     const big = d.v.hub || d.v.population >= 6000;
-    n.className = `village ${d.v.hub ? "hub" : ""} ${big ? "big" : "small"} ${d.state}`;
+    n.className = `village ${d.v.hub ? "hub" : ""} ${big ? "big" : "small"} ${d.state} ${d.online ? "online" : ""}`;
     n.innerHTML = `<span class="dot"></span><span class="name">${short(d.v.name)}</span>`;
     n.style.pointerEvents = "auto";
     n.onclick = (e) => {
@@ -506,6 +548,11 @@ const CSS = `
 .village.hub .dot{width:13px;height:13px;background:#34d399;box-shadow:0 0 0 3px rgba(2,6,23,.85),0 0 0 5px rgba(52,211,153,.55),0 0 16px rgba(52,211,153,.8)}
 .village.active .dot{background:#fbbf24;box-shadow:0 0 0 2px rgba(2,6,23,.85),0 0 0 4px rgba(251,191,36,.45),0 0 14px rgba(251,191,36,.9);animation:pulse 1.4s ease-in-out infinite}
 .village.picked .dot{background:#38bdf8;box-shadow:0 0 0 2px rgba(2,6,23,.85),0 0 0 5px rgba(56,189,248,.55),0 0 18px rgba(56,189,248,1)}
+.village.online .dot{position:relative}
+.village.online .dot:after{content:"";position:absolute;inset:-6px;border-radius:999px;border:1.5px solid #34d399;box-shadow:0 0 8px rgba(52,211,153,.9);animation:ring 1.8s ease-out infinite}
+.village.online.small .name{display:inline}
+@keyframes ring{0%{transform:scale(.6);opacity:1}100%{transform:scale(1.6);opacity:0}}
+.online-dot{animation:pulse 1.4s ease-in-out infinite}
 .village .name{font:600 11px/1.2 system-ui;color:#e2e8f0;background:rgba(2,6,23,.72);border:1px solid rgba(148,163,184,.35);padding:2px 6px;border-radius:999px}
 .village.hub .name{border-color:#34d399;color:#a7f3d0}
 .village.active .name{border-color:#fbbf24;color:#fde68a}

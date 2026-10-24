@@ -8,7 +8,10 @@
 // by road otherwise; flooded roads force drones, and oxygen (too heavy to fly) is flagged so the
 // patient is sent to a post that has it.
 //
-// Demo data: approximate locations in Eastern Province, Zambia. State lives in server memory.
+// Demo data: the same 40 sites SpacetimeDB seeds for the live map (spacetime/spacetimedb/src/index.ts),
+// approximate locations in Eastern Province, Zambia. State lives in server memory. This is the
+// SIMULATOR behind /dashboard and /agents (invented background patients); the live network the
+// pods write to is SpacetimeDB, shown on /globe and /government.
 
 import { runAgents } from "./agents";
 import { readRegistry, VisitRecord } from "./registry";
@@ -17,6 +20,7 @@ export type Post = { id: string; name: string; lat: number; lng: number; hub?: b
 
 export const POSTS: Post[] = [
   { id: "chipata", name: "Chipata (hub + drone base)", lat: -13.633, lng: 32.65, hub: true, population: 127000, oxygen: true },
+  // District health centres.
   { id: "katete", name: "Katete", lat: -14.05, lng: 32.05, population: 26000, oxygen: false },
   { id: "petauke", name: "Petauke", lat: -14.25, lng: 31.32, population: 31000, oxygen: true },
   { id: "sinda", name: "Sinda", lat: -14.217, lng: 31.767, population: 12000, oxygen: false },
@@ -28,6 +32,35 @@ export const POSTS: Post[] = [
   { id: "chama", name: "Chama", lat: -11.217, lng: 33.167, population: 15000, oxygen: false },
   { id: "lumezi", name: "Lumezi", lat: -12.8, lng: 32.75, population: 7000, oxygen: false },
   { id: "kasenengwa", name: "Kasenengwa", lat: -13.88, lng: 32.17, population: 6500, oxygen: false },
+  // Rural health posts around each district (approximate locations, for the map).
+  { id: "mphangwe", name: "Mphangwe", lat: -13.93, lng: 32.18, population: 2100, oxygen: false },
+  { id: "kagoro", name: "Kagoro", lat: -14.12, lng: 31.98, population: 1800, oxygen: false },
+  { id: "kafumbwe", name: "Kafumbwe", lat: -14.22, lng: 32.12, population: 2400, oxygen: false },
+  { id: "minga", name: "Minga", lat: -14.37, lng: 31.52, population: 2600, oxygen: false },
+  { id: "nyamphande", name: "Nyamphande", lat: -14.17, lng: 31.22, population: 1900, oxygen: false },
+  { id: "ukwimi", name: "Ukwimi", lat: -14.42, lng: 31.02, population: 2200, oxygen: false },
+  { id: "nyanje", name: "Nyanje", lat: -14.42, lng: 31.74, population: 2000, oxygen: false },
+  { id: "mtaya", name: "Mtaya", lat: -14.1, lng: 31.82, population: 1500, oxygen: false },
+  { id: "kacholola", name: "Kacholola", lat: -14.76, lng: 30.63, population: 1700, oxygen: false },
+  { id: "chipembe", name: "Chipembe", lat: -14.68, lng: 30.95, population: 1300, oxygen: false },
+  { id: "egichikeni", name: "Egichikeni", lat: -12.45, lng: 33.08, population: 1900, oxygen: false },
+  { id: "mwase", name: "Mwase", lat: -12.1, lng: 33.3, population: 2100, oxygen: false },
+  { id: "kanyanga", name: "Kanyanga", lat: -12.38, lng: 33.36, population: 1600, oxygen: false },
+  { id: "zingalume", name: "Zingalume", lat: -13.93, lng: 32.6, population: 1800, oxygen: false },
+  { id: "naviruli", name: "Naviruli", lat: -14.2, lng: 32.5, population: 1400, oxygen: false },
+  { id: "kakumbi", name: "Kakumbi", lat: -13.1, lng: 31.72, population: 2300, oxygen: false },
+  { id: "jumbe", name: "Jumbe", lat: -13.3, lng: 31.92, population: 1900, oxygen: false },
+  { id: "msoro", name: "Msoro", lat: -13.57, lng: 31.78, population: 2000, oxygen: false },
+  { id: "kapata", name: "Kapata", lat: -13.7, lng: 32.72, population: 3500, oxygen: false },
+  { id: "mwami", name: "Mwami", lat: -13.76, lng: 32.78, population: 2800, oxygen: false },
+  { id: "mkanda", name: "Mkanda", lat: -13.48, lng: 32.6, population: 2200, oxygen: false },
+  { id: "mlolo", name: "Mlolo", lat: -14.1, lng: 32.95, population: 1200, oxygen: false },
+  { id: "chikwa", name: "Chikwa", lat: -11.55, lng: 32.95, population: 1500, oxygen: false },
+  { id: "mapamba", name: "Mapamba", lat: -11.0, lng: 33.3, population: 1300, oxygen: false },
+  { id: "chasefu", name: "Chasefu", lat: -12.62, lng: 32.85, population: 1700, oxygen: false },
+  { id: "lumezi-mission", name: "Lumezi Mission", lat: -12.9, lng: 32.9, population: 1500, oxygen: false },
+  { id: "chimtende", name: "Chimtende", lat: -14.3, lng: 32.3, population: 1400, oxygen: false },
+  { id: "kamoto", name: "Kamoto", lat: -13.0, lng: 31.6, population: 1600, oxygen: false },
 ];
 
 export type Sku = { id: string; label: string; kg: number; drone: boolean; critical: number; match: RegExp };
@@ -395,6 +428,8 @@ export function act(action: { type: string; id?: string; post?: string; kind?: "
     if (f) launch(f);
   }
   if (action.type === "approve_all") s.flights.filter((f) => f.status === "proposed").forEach(launch);
+  // A post id from an older map (or a typo) must not take the simulator down.
+  if ((action.type === "outbreak" || action.type === "flood") && action.post && !POSTS.some((p) => p.id === action.post)) return;
   if (action.type === "outbreak" && action.post) {
     s.outbreak = { post: action.post, kind: action.kind ?? "malaria", since: now };
     // A burst of sick patients arriving at once, so the demo shows the system react within seconds.

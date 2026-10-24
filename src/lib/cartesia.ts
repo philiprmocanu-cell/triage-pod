@@ -75,6 +75,21 @@ const ACCENTS: Record<string, string[]> = {
   "ar": ["modern-standard-arabic", "khaleeji"],
 };
 
+// Where Cartesia has no voice from the patient's own country, say so on screen instead of
+// pretending: the nearest accent is used and the gap is named.
+const NEAREST: Record<string, string> = {
+  "ar-MA": "Cartesia has no Moroccan voice yet — using its Modern Standard Arabic voice; the words are Darija",
+  "en-ZM": "no Zambian voice yet — using the nearest, South African",
+  "en-NG": "no Nigerian voice yet — using the nearest, South African",
+  "es-GT": "no Guatemalan voice yet — using the nearest, Mexican",
+  "es-HN": "no Honduran voice yet — using the nearest, Panamanian",
+  "es-SV": "no Salvadoran voice yet — using the nearest, Panamanian",
+  "es-NI": "no Nicaraguan voice yet — using the nearest, Panamanian",
+  "es-EC": "no Ecuadorian voice yet — using the nearest, Colombian",
+  "es-PE": "no Peruvian voice yet — using the nearest, Colombian",
+};
+export const voiceNote = (locale: string, match: string): string | null => (match.endsWith("accent") || match === "same language" ? NEAREST[locale] ?? null : null);
+
 // Cartesia's speech engine accepts only these Spanish regions; the voice carries the accent.
 export function ttsLocale(locale: string): string {
   if (locale.startsWith("en")) return "en-US";

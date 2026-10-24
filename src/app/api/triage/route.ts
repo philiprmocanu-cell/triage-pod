@@ -9,6 +9,9 @@ export async function POST(req: Request) {
     return NextResponse.json(await step(body));
   } catch (err) {
     console.error("triage failed", err);
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Triage failed" }, { status: 500 });
+    const msg = err instanceof Error ? err.message : "Triage failed";
+    // Jev makes every decision: when it is down, the screen says so plainly instead of guessing.
+    const plain = /jev|typesafe/i.test(msg) ? `The triage brain (Jev) is not answering, so nothing was decided this turn. Try again; if it keeps failing, use the pod's judgement and call the health worker. (${msg})` : msg;
+    return NextResponse.json({ error: plain }, { status: 500 });
   }
 }

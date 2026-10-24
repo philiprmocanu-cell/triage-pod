@@ -12,7 +12,7 @@ Numbers and papers behind each part of the project, with where they come from. C
 
 - **Rwanda, University of Pennsylvania study of Zipline's network:** **in-hospital maternal deaths fell by about 51%** at hospitals served by drone blood delivery; every adopting hospital held less blood inventory, and the facilities closest to drone ports saw the largest reductions. Published in *Manufacturing & Service Operations Management*; summaries: https://mobile.hospimedica.com/critical-care/articles/294811654/medical-drone-program-improves-blood-access-and-patient-survival.amp.html and https://www.zipline.com/newsroom/journal-article-last-mile-delivery-reduces-maternal-mortality-by-51
 - A February 2026 retrospective follow-up reports **postpartum haemorrhage deaths down 46%** (secondary summary): https://wyde.beehiiv.com/p/zipline-hits-7-6-billion-valuation-and-2-million-deliveries-as-rwanda-goes-nationwide
-- Ghana replication reported by Zipline: about 56% (company figure, not peer-reviewed). Zipline is already flying in Zambia, which is why the demo's drones are not fiction.
+- Ghana replication reported by Zipline: about 56% (company figure, not peer-reviewed). Zipline flies in Rwanda, Ghana, Nigeria, Kenya and Côte d'Ivoire; I could not confirm a Zambia programme (checked 24 Oct 2026), so the map's drones stand for a partner to sign, not a fleet that exists today. Zipline's 2026 US State Department deal funds expansion to 15,000 facilities across Africa, so the partner is realistic.
 
 ## 3. Where a nurse-style assessment is missing, children die of missed danger signs
 
@@ -47,7 +47,8 @@ The pod's community circles copy this exactly: it screens with the two PHQ-2 que
 
 ## 7. Satellite data as an input (built: `/api/satellite`)
 
-- **NASA POWER** (free, no key) serves satellite-derived daily rainfall (GPM) and temperature (MERRA-2) for any point on Earth. The pod pulls the last 30 days for all 12 posts: 80 mm+ of rain in a month with 18–32 °C nights is the malaria transmission window two to six weeks later; a 40 mm day marks likely flooding. Docs: https://power.larc.nasa.gov/docs/services/api/
+- **NASA POWER** (free, no key) serves satellite-derived daily rainfall (GPM) and temperature (MERRA-2) for any point on Earth. The pod pulls the last 30 days for all 40 posts (one request per 0.5° × 0.625° grid cell, 18 cells): 80 mm+ of rain in a month with 18–32 °C nights is the malaria transmission window two to six weeks later; a 40 mm day marks likely flooding. Docs: https://power.larc.nasa.gov/docs/services/api/
+- Caveat, checked 24 Oct 2026: POWER's most recent weeks come from the preliminary GPM run and this season read hundreds of millimetres where the finished record for the same weeks in 2025 reads 0.3 mm (dry season). The API therefore also fetches the same window one year earlier and the government view shows both; single day-values above 150 mm are left out of totals and counted in the source line.
 - Next inputs, all free: Sentinel-1 radar flood maps (roads cut → drone-only routing), Sentinel-2 water index (standing water → breeding sites), WorldPop and Google Open Buildings (where people actually live → where to put pods), VIIRS night lights (electrification for charging).
 
 ## 8. One-line stats for the pitch

@@ -1,15 +1,19 @@
 // Patient registry: one record per visit, so the health team can see who needs what, where.
-// Stored as a local JSON file for the demo. A real deployment needs encryption, access control
-// and the country's health-data rules; names are saved only when the patient agreed.
+// Stored as a local JSON file for the demo, and mirrored into SpacetimeDB (`visit_record`) so the
+// staff and patient pages see each visit the moment it is saved. A real deployment needs
+// encryption, access control and the country's health-data rules; names are saved only when the
+// patient agreed.
 
 import { promises as fs } from "fs";
 import path from "path";
 import type { Resource, Urgency } from "./triage/types";
+import { saveVisitRecord } from "./spacetime";
 
 export type VisitRecord = {
   id: string;
   createdAt: string;
   region: string;
+  village?: string | null; // the post the pod stands at (?village= on the kiosk), when known
   consent: boolean;
   name: string | null; // null when the patient did not agree to be saved
   community: string | null;
@@ -41,6 +45,7 @@ export async function addVisit(record: VisitRecord) {
   all.push(record);
   await fs.mkdir(path.dirname(file()), { recursive: true });
   await fs.writeFile(file(), JSON.stringify(all, null, 2));
+  await mirror(record);
 }
 
 export async function updateVisit(id: string, patch: Partial<VisitRecord>) {
@@ -49,6 +54,12 @@ export async function updateVisit(id: string, patch: Partial<VisitRecord>) {
   if (i < 0) return;
   all[i] = { ...all[i], ...patch };
   await fs.writeFile(file(), JSON.stringify(all, null, 2));
+  await mirror(all[i]);
+}
+
+// The file is the record of truth for the demo; the network copy is best effort.
+async function mirror(record: VisitRecord) {
+  await saveVisitRecord(record).catch((e) => console.error("SpacetimeDB visit_record mirror failed (is `spacetime start` running?)", e));
 }
 
 // What each community needs: expected units = sum of each patient's probability of needing it.

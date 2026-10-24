@@ -3,7 +3,7 @@ import { addVisit, readRegistry, updateVisit, VisitRecord } from "@/lib/registry
 import { handover, readIntake } from "@/lib/triage/brain";
 import { rememberWords } from "@/lib/triage/dialect";
 import { snapshot } from "@/lib/network";
-import { joinCommunity, needsFrom, reportVisit } from "@/lib/spacetime";
+import { joinCommunity, needsFrom, rememberWordsLive, reportVisit } from "@/lib/spacetime";
 import type { Intake, TriageResult, Turn } from "@/lib/triage/types";
 
 export const runtime = "nodejs";
@@ -21,6 +21,7 @@ export async function POST(req: Request) {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     region,
+    village: village ?? null,
     consent,
     name: null,
     community: null,
@@ -48,6 +49,7 @@ export async function POST(req: Request) {
   };
   await updateVisit(record.id, patch);
   await rememberWords(patch.community ?? intake.community, result.lexicon ?? {}); // the community's words, for next time
+  await rememberWordsLive(village ?? patch.community ?? intake.community, result.lexicon ?? {}).catch(() => {}); // and for every other pod, live
   await snapshot().catch((e) => console.error("network refresh after visit failed", e)); // report this patient to the network agents
   // The live map: anything this patient needs is ordered to their home, under their name.
   await reportVisit({

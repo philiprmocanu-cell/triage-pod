@@ -9,18 +9,24 @@ import { type Infer as __Infer } from "spacetimedb";
 import AllocateReducer from "../allocate_reducer";
 import JoinCommunityReducer from "../join_community_reducer";
 import OrderVaccinesReducer from "../order_vaccines_reducer";
+import PodHeartbeatReducer from "../pod_heartbeat_reducer";
 import RecordDoseReducer from "../record_dose_reducer";
+import RememberWordsReducer from "../remember_words_reducer";
 import ReportVisitReducer from "../report_visit_reducer";
 import ResetDemoReducer from "../reset_demo_reducer";
+import SaveVisitRecordReducer from "../save_visit_record_reducer";
 import SetAgentsReducer from "../set_agents_reducer";
 import SetSimulationReducer from "../set_simulation_reducer";
 
 export type AllocateParams = __Infer<typeof AllocateReducer>;
 export type JoinCommunityParams = __Infer<typeof JoinCommunityReducer>;
 export type OrderVaccinesParams = __Infer<typeof OrderVaccinesReducer>;
+export type PodHeartbeatParams = __Infer<typeof PodHeartbeatReducer>;
 export type RecordDoseParams = __Infer<typeof RecordDoseReducer>;
+export type RememberWordsParams = __Infer<typeof RememberWordsReducer>;
 export type ReportVisitParams = __Infer<typeof ReportVisitReducer>;
 export type ResetDemoParams = __Infer<typeof ResetDemoReducer>;
+export type SaveVisitRecordParams = __Infer<typeof SaveVisitRecordReducer>;
 export type SetAgentsParams = __Infer<typeof SetAgentsReducer>;
 export type SetSimulationParams = __Infer<typeof SetSimulationReducer>;
 

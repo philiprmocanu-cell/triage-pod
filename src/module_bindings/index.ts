@@ -37,9 +37,12 @@ import {
 import AllocateReducer from "./allocate_reducer";
 import JoinCommunityReducer from "./join_community_reducer";
 import OrderVaccinesReducer from "./order_vaccines_reducer";
+import PodHeartbeatReducer from "./pod_heartbeat_reducer";
 import RecordDoseReducer from "./record_dose_reducer";
+import RememberWordsReducer from "./remember_words_reducer";
 import ReportVisitReducer from "./report_visit_reducer";
 import ResetDemoReducer from "./reset_demo_reducer";
+import SaveVisitRecordReducer from "./save_visit_record_reducer";
 import SetAgentsReducer from "./set_agents_reducer";
 import SetSimulationReducer from "./set_simulation_reducer";
 
@@ -49,12 +52,15 @@ import SetSimulationReducer from "./set_simulation_reducer";
 import AgentLogRow from "./agent_log_table";
 import CommunityMemberRow from "./community_member_table";
 import DeliveryOrderRow from "./delivery_order_table";
+import DialectWordRow from "./dialect_word_table";
 import PatientRow from "./patient_table";
+import PodRow from "./pod_table";
 import PopRow from "./pop_table";
 import SettingsRow from "./settings_table";
 import StockRow from "./stock_table";
 import VillageRow from "./village_table";
 import VisitRow from "./visit_table";
+import VisitRecordRow from "./visit_record_table";
 
 /** Type-only namespace exports for generated type groups. */
 
@@ -96,6 +102,20 @@ const tablesSchema = __schema({
       { name: 'delivery_order_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, DeliveryOrderRow),
+  dialectWord: __table({
+    name: 'dialect_word',
+    indexes: [
+      { accessor: 'id', name: 'dialect_word_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'villageId', name: 'dialect_word_village_id_idx_btree', algorithm: 'btree', columns: [
+        'villageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'dialect_word_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, DialectWordRow),
   patient: __table({
     name: 'patient',
     indexes: [
@@ -110,6 +130,17 @@ const tablesSchema = __schema({
       { name: 'patient_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, PatientRow),
+  pod: __table({
+    name: 'pod',
+    indexes: [
+      { accessor: 'villageId', name: 'pod_village_id_idx_btree', algorithm: 'btree', columns: [
+        'villageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'pod_village_id_key', constraint: 'unique', columns: ['villageId'] },
+    ],
+  }, PodRow),
   pop: __table({
     name: 'pop',
     indexes: [
@@ -165,6 +196,20 @@ const tablesSchema = __schema({
       { name: 'visit_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, VisitRow),
+  visitRecord: __table({
+    name: 'visit_record',
+    indexes: [
+      { accessor: 'id', name: 'visit_record_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'villageId', name: 'visit_record_village_id_idx_btree', algorithm: 'btree', columns: [
+        'villageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'visit_record_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, VisitRecordRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
@@ -172,9 +217,12 @@ const reducersSchema = __reducers(
   __reducerSchema("allocate", AllocateReducer),
   __reducerSchema("join_community", JoinCommunityReducer),
   __reducerSchema("order_vaccines", OrderVaccinesReducer),
+  __reducerSchema("pod_heartbeat", PodHeartbeatReducer),
   __reducerSchema("record_dose", RecordDoseReducer),
+  __reducerSchema("remember_words", RememberWordsReducer),
   __reducerSchema("report_visit", ReportVisitReducer),
   __reducerSchema("reset_demo", ResetDemoReducer),
+  __reducerSchema("save_visit_record", SaveVisitRecordReducer),
   __reducerSchema("set_agents", SetAgentsReducer),
   __reducerSchema("set_simulation", SetSimulationReducer),
 );

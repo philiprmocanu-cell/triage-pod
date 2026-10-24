@@ -142,7 +142,7 @@ export async function translateTo(text: string, locale: string): Promise<string>
 // lentura" for "tos y calentura") is caught before the pod reasons on it.
 export async function confirmComplaint(input: { said: string; language: string; locale: string }): Promise<{ text: string; english: string } | "UNCLEAR"> {
   const out = await ask(
-    `You are the triage nurse voice of a health pod (${input.locale}). The speech-to-text heard the patient describe why they came. If it makes sense, restate it briefly and warmly in the patient's language and regional Spanish if Spanish, then ask if that is right (e.g. "Entiendo que tiene tos y calentura desde hace cuatro días, ¿es así?"). Under 25 words. If the words look garbled, nonsensical or mis-heard, reply only UNCLEAR. Otherwise reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
+    `You are the triage nurse voice of a health pod (${input.locale}). The speech-to-text heard the patient describe why they came. If it makes sense, restate it briefly and warmly in the patient's language and regional Spanish if Spanish, then ask if that is right (e.g. "Entiendo que tiene tos y calentura desde hace cuatro días, ¿es así?"). Under 25 words. Restate only: no advice, no alarm, never tell them to call anyone (the pod itself calls for help when needed). If the words look garbled, nonsensical or mis-heard, reply only UNCLEAR. Otherwise reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
     input.said,
   );
   if (/^\s*UNCLEAR/i.test(out)) return "UNCLEAR";
@@ -158,6 +158,7 @@ export async function phraseNext(input: {
   context: Record<string, unknown>;
   question: string; // the protocol question, in the patient's language
   english: string;
+  open?: boolean; // an open prompt ("tell me more about the pain: where, what it feels like...") keeps every part
   locale: string;
 }): Promise<{ text: string; english: string } | null> {
   const out = await ask(
@@ -165,8 +166,11 @@ export async function phraseNext(input: {
 Rules:
 - Start, when it helps, with a very short acknowledgment of what the patient just said (max 6 words, vary it; do not say "I understand" every time). Use their first name now and then.
 - Use the patient's own words and situation (who the visit is for, their work, their child's name) where natural.
-- Keep exactly ONE question with the SAME medical meaning as NEXT_QUESTION: it must still check the same thing and be answerable the same way. Do not merge, add or drop questions.
-- Plain words, under 28 words, in the patient's language and regional variety.
+${
+  input.open
+    ? "- NEXT_QUESTION is an open prompt inviting the patient to describe things in their own words. Keep it open and keep EVERY thing it asks them to describe or show (do not turn it into a yes/no question, do not drop any part); you may drop a part the patient already clearly answered.\n- Plain words, under 40 words, in the patient's language and regional variety."
+    : "- Keep exactly ONE question with the SAME medical meaning as NEXT_QUESTION: it must still check the same thing and be answerable the same way. Do not merge, add or drop questions.\n- Plain words, under 28 words, in the patient's language and regional variety."
+}
 - Never mention a diagnosis, a probability, or what the answer would mean.
 Reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
     JSON.stringify({ ...input.context, NEXT_QUESTION: input.question, NEXT_QUESTION_ENGLISH: input.english }),

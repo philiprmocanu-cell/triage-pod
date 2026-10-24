@@ -15,6 +15,7 @@ type Patient = { id: number; name: string; villageId: number; ageMonths: number;
 type Village = { id: number; name: string; hub: boolean };
 type Visit = { villageId: number; patientName: string; urgency: string; summary: string; fromPod: boolean; createdAt: { microsSinceUnixEpoch: bigint } };
 type Order = { patientName: string; item: string; qty: number; status: string; mode: string; etaMinutes: number };
+type Note = { name: string; createdAt: string; urgency: string; reason: string; handover: string }; // saved visit with the doctor's handover ('' while Claude writes it)
 
 export default function PatientsPage() {
   const connRef = useRef<DbConnection | null>(null);
@@ -22,6 +23,7 @@ export default function PatientsPage() {
   const [villages, setVillages] = useState<Village[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [notes, setNotes] = useState<Note[]>([]);
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
   const [filterItem, setFilterItem] = useState<string | null>(null);
   const [filterVillage, setFilterVillage] = useState<number | null>(null);
@@ -33,6 +35,7 @@ export default function PatientsPage() {
       setVillages([...c.db.village.iter()] as Village[]);
       setVisits([...c.db.visit.iter()] as Visit[]);
       setOrders([...c.db.deliveryOrder.iter()] as Order[]);
+      setNotes([...c.db.visitRecord.iter()].filter((r) => r.name).map((r) => ({ name: r.name, createdAt: r.createdAt, urgency: r.urgency, reason: r.reason, handover: r.handover })));
     };
     const conn = DbConnection.builder()
       .withUri(SPACETIME_URI)
@@ -41,7 +44,7 @@ export default function PatientsPage() {
         setStatus("live");
         c.subscriptionBuilder()
           .onApplied(() => refresh(c))
-          .subscribe(["SELECT * FROM patient", "SELECT * FROM village", "SELECT * FROM visit", "SELECT * FROM delivery_order"]);
+          .subscribe(["SELECT * FROM patient", "SELECT * FROM village", "SELECT * FROM visit", "SELECT * FROM delivery_order", "SELECT * FROM visit_record"]);
         timer = setInterval(() => refresh(c), 1500);
       })
       .onConnectError(() => setStatus("offline"))
@@ -111,6 +114,7 @@ export default function PatientsPage() {
                 const mine = visits.filter((v) => v.patientName === p.name).sort((a, b) => Number(b.createdAt.microsSinceUnixEpoch - a.createdAt.microsSinceUnixEpoch));
                 const open = orders.filter((o) => o.patientName === p.name && o.status !== "delivered");
                 const upcoming = nextFor(p);
+                const note = notes.filter((n) => n.name.toLowerCase() === p.name.toLowerCase()).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
                 return (
                   <article key={p.id} className={`rounded-2xl border p-4 ${d.length ? "border-sky-800/70 bg-sky-950/20" : "border-slate-800 bg-slate-950/60"}`}>
                     <div className="flex items-start justify-between gap-2">
@@ -149,6 +153,12 @@ export default function PatientsPage() {
                         </button>
                       )}
                     </div>
+                    {note && (
+                      <p className="mt-2 rounded-lg bg-slate-900/70 px-2.5 py-1.5 text-[11px] text-slate-300">
+                        <span className="font-mono text-[10px] uppercase tracking-wide text-slate-500">Doctor&apos;s note · {new Date(note.createdAt).toLocaleDateString()} · </span>
+                        {note.handover || <span className="italic text-slate-500">Claude is writing the handover…</span>}
+                      </p>
+                    )}
                     <p className="mt-2 text-[10px] text-slate-600">Given: {p.vaccinesGiven ? p.vaccinesGiven.split(",").length : 0} of {SCHEDULE.filter((s) => !s.who).length} routine doses</p>
                   </article>
                 );

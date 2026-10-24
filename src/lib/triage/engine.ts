@@ -33,6 +33,9 @@ import {
   OPENING,
   PATHWAYS,
   Pathway,
+  Probe,
+  PROBES,
+  probesFor,
   SEEN_OPENER_ASKS,
   SEEN_OPENERS,
   Step,
@@ -63,9 +66,27 @@ const PAIN_PATHWAYS = new Set(["headache", "pain", "cardiac", "injury", "stomach
 const MAX_FRAMES = 6;
 const YES = 0.6; // probability at which a finding counts as present
 const OPEN = 0.5; // a pathway opens when the complaint clearly points at it, or a trigger symptom was said
+const JEV_TIMEOUT_MS = 30_000; // Jev usually answers in well under a second; past this the turn fails out loud
 
 // Signs that mean: skip the paperwork, start helping.
 const EMERGENCY_SEEN: FindingKey[] = ["severe_bleeding", "short_of_breath", "face_or_arm_weakness", "blue_lips", "very_sleepy"];
+
+// Every Jev call goes through here: a request that hangs would otherwise hang the visit with no
+// message on screen. On timeout the API returns an error the pod screen shows, and the health
+// worker can try again; nothing is decided from a half-answer.
+export async function jevWithin<T>(what: string, call: Promise<T>, ms = JEV_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      call,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Jev did not answer within ${Math.round(ms / 1000)} s (${what})`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export type StepInput = {
   stage: "look" | "answer";
@@ -116,7 +137,16 @@ export async function step(input: StepInput): Promise<TriageResult> {
       const words = (input.latest.candidates[pick] ?? "").split(/\s+/).filter(Boolean).length;
       const sure = a.lang?.type === "choice" ? a.lang.confidence : 0;
       const prior = spoken; // the language they were speaking (or the region's) until they clearly switch
-      if (pick !== prior && input.latest.candidates[prior] && (words < 6 || sure < 0.85)) pick = prior;
+      if (input.spoken) {
+        // They have spoken before: stay with that language unless this is clearly a switch.
+        if (pick !== prior && input.latest.candidates[prior] && (words < 6 || sure < 0.85)) pick = prior;
+      } else {
+        // First words of the visit: nothing is assumed from the region. The client already read
+        // this utterance for dialect markers and sends that variety as defaultLocale; its language
+        // wins over a shaky guess, and the region only breaks a real tie (a lone name, "no").
+        const hinted = input.defaultLocale.split("-")[0];
+        if (pick !== hinted && input.latest.candidates[hinted] && (words < 3 || sure < 0.6)) pick = hinted;
+      }
       spoken = pick;
       language = (pick === "en" ? "en" : pick === "es" ? "es" : "en") as Lang;
       patientText = input.latest.candidates[pick] ?? entries[0][1];
@@ -194,7 +224,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         instructions:
           k === "confused_speech"
             ? "From the `conversation`: did the patient or caregiver SAY that the patient's speech has become slurred or that words come out wrong? Only count what they report, not how they answered."
-            : `From the \`conversation\`: does the patient have this? "${FINDINGS[k].label}". The conversation may be in Spanish.`,
+            : `From the \`conversation\`: does the patient have this? "${"said" in FINDINGS[k] ? (FINDINGS[k] as { said: string }).said : FINDINGS[k].label}". The conversation may be in Spanish.`,
         criteria: {
           yes: "The patient or caregiver said so, or it clearly follows from what they said.",
           no: "They said it is not the case, or answered no when asked.",
@@ -233,7 +263,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     who: "Is it already clear who the visit is for: the speaker themselves (\"I have...\" counts), or a child or other person they brought? Age is not required.",
   };
   const ALREADY_HISTORY: Record<string, string> = {
-    onset: "Has the patient already said since when or for how long they have felt this way?",
+    onset: "Has the patient or caregiver already said since when or for how long the problem has been there (\"for four days\", \"since yesterday\", \"an hour ago\")?",
     impact: "Has the patient already said how this affects their daily life or what they cannot do?",
   };
   if (conversation.length) for (const [f, question] of Object.entries(ALREADY_HISTORY)) q[`already_h_${f}`] = { type: "noul", instructions: `From the \`conversation\`: ${question}` };
@@ -277,7 +307,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
     q.consent = { type: "noul", instructions: "In `consent_answer`, did the person agree to have their name and health needs saved?" };
   }
 
-  const a = Object.keys(q).length ? await jev(state, q, images) : {}; // nothing to ask before any picture or words
+  const tJev = Date.now();
+  const a = Object.keys(q).length ? await jevWithin(`triage ${input.stage}, ${Object.keys(q).length} questions`, jev(state, q, images)) : {}; // nothing to ask before any picture or words
+  const jevMs = Date.now() - tJev;
 
   // What the camera sees: everything seen so far this visit, refreshed by the new pictures and by
   // the on-device face-droop check.
@@ -331,7 +363,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
     saidYes[k] = said.yes ?? 0;
     saidKnown[k] = asked.has(k) || (said.yes ?? 0) + (said.no ?? 0) >= 0.6;
     known[k] = asked.has(k) || (said.yes ?? 0) + (said.no ?? 0) >= 0.6 || s >= 0.75;
-    if (k !== "wants_peer_group" && (y >= 0.3 || asked.has(k))) {
+    // Shown to the health worker: anything present, asked, or settled in the patient's own words
+    // ("no fits, she drinks fine" after an open probe counts as much as a "no" to a question).
+    if (k !== "wants_peer_group" && (y >= 0.3 || asked.has(k) || saidKnown[k])) {
       const fromSaid = (said.yes ?? 0) >= 0.3, fromSeen = s >= YES;
       findings.push({ key: k, label: FINDINGS[k].label, yes: y, known: known[k], source: fromSaid && fromSeen ? "both" : fromSeen ? "seen" : "said" });
     }
@@ -370,31 +404,40 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const saidOpen = new Set(PATHWAYS.filter((p) => p.triggers.some((k) => saidYes[k] >= YES)).map((p) => p.id));
   const open = pathways.filter((p) => saidOpen.has(p.id) || p.probability >= OPEN).slice(0, 2);
   // A pathway opened by the camera or the complaint, not by a confirmed symptom, first asks
-  // about its main symptom ("I see you holding your chest" -> "do you have chest pain?").
+  // about its main symptom ("I see you holding your chest" -> "do you have chest pain?"). Then
+  // its open probes ("tell me more about the pain"), then its yes/no questions for whatever the
+  // probes left unsettled.
   const stepsFor = (id: string): Step[] => {
     const def = PATHWAYS.find((d) => d.id === id)!;
     const confirmed = def.triggers.some((k) => saidYes[k] >= YES);
-    const steps = confirmed || def.questions.includes(def.triggers[0]) ? def.questions : [def.triggers[0], ...def.questions];
+    const probes = probesFor(id).map((p) => `probe:${p.id}` as Step);
+    const steps = confirmed || def.questions.includes(def.triggers[0]) ? [...probes, ...def.questions] : [def.triggers[0], ...probes, ...def.questions];
     return epi.malaria ? steps : steps.filter((st) => st !== "mosquito_bites"); // no bed-net question where there is no malaria
   };
+  const isFinding = (st: Step): st is FindingKey => st in FINDINGS;
+  // A probe is worth asking while two or more of the findings it covers are still unknown;
+  // once the patient's own words (or earlier questions) settled them, it is skipped.
+  const probeUseful = (p: Probe) => p.covers.filter((k) => !known[k]).length >= Math.min(2, p.covers.length);
 
   // Sub-classifications become likely causes; supplies add up across them.
   const causes: Cause[] = [];
   const need = new Map<string, number>();
   for (const p of complaintKnown ? open : []) {
     const def = PATHWAYS.find((d) => d.id === p.id)!;
-    // Confidence grows with every answered question or finished test in this pathway.
-    const answered = stepsFor(p.id).filter((st) => (st.startsWith("test:") ? st.slice(5) in input.tests : asked.has(st) || saidYes[st as FindingKey] >= YES)).length;
+    // Confidence grows with every answered question or finished test in this pathway. A finding
+    // the patient settled in their own words (yes or no, after an open probe) counts as answered.
+    const answered = stepsFor(p.id).filter((st) => (st.startsWith("test:") ? st.slice(5) in input.tests : isFinding(st) ? asked.has(st) || saidKnown[st] : asked.has(st))).length;
     const confidence = Math.min(1, 0.35 + 0.15 * answered);
     for (const s of p.subtypes) {
       const prob = p.probability * s.probability * confidence;
       if (prob < 0.05) continue;
       const sdef = def.subtypes.find((d) => d.name === s.name)!;
-      const keys = [...new Set([...def.triggers, ...def.questions.filter((q): q is FindingKey => !q.startsWith("test:"))])];
+      const keys = [...new Set([...def.triggers, ...def.questions.filter(isFinding)])];
       const src = (k: FindingKey) => ((tested.get(k) ?? 0) >= YES ? "test" : (seen[k] ?? 0) >= YES ? "camera" : "said");
       const evidence = keys.filter((k) => yes[k] >= YES).map((k) => `${FINDINGS[k].label} (${src(k)})`);
       if (hints[p.id]) evidence.push(`camera: ${hints[p.id].why}`);
-      const against = keys.filter((k) => known[k] && yes[k] < 0.3 && asked.has(k)).map((k) => `no ${FINDINGS[k].label.toLowerCase()}`);
+      // "No" in the patient's own words counts against a condition as much as a "no" to a question.
+      const against = keys.filter((k) => known[k] && yes[k] < 0.3 && saidKnown[k]).map((k) => `no ${FINDINGS[k].label.toLowerCase()}`);
       causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description, evidence, against, early: confidence < 0.8, confident: false, asked: answered });
       for (const item of sdef.resources) need.set(item, 1 - (1 - (need.get(item) ?? 0)) * (1 - prob));
     }
@@ -485,7 +528,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const whoUnclear = !redRule && complaintKnown && !asked.has("intake:who");
   const podTurns = input.turns.filter((t) => t.role === "pod").length;
   const outOfTime = podTurns >= MAX_POD_TURNS; // the visit ends no matter what
-  const medicalSteps = outOfTime ? MAX_STEPS : input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && !t.asks.startsWith("history:") && t.asks !== "open").length;
+  // Once the closing paperwork has started (name, village, consent), no medical question comes
+  // back: Jev re-reads the whole conversation every turn, and a finding sitting near the
+  // threshold must not reopen the visit after "before we finish, what's your name?".
+  const closingStarted = input.turns.some((t) => t.role === "pod" && /^intake:(name|community|consent)$/.test(t.asks ?? ""));
+  const medicalSteps = outOfTime || closingStarted ? MAX_STEPS : input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && !t.asks.startsWith("history:") && t.asks !== "open").length;
   // Confirmation: after each telling of the complaint, say it back once; a "no" means tell it again.
   const lastOpen = input.turns.map((t) => t.asks).lastIndexOf("open");
   const answeredOpenNow = Boolean(patientText) && lastPod?.asks === "open";
@@ -501,8 +548,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const moodish = (["low_mood", "little_interest", "anxious", "trauma_or_loss", "lonely"] as FindingKey[]).some((k) => yes[k] >= YES);
 
   // History: when it started always; "what can't you do" only when nothing specific opened;
-  // a 1-10 score only where pain is the story.
-  const historyWanted: HistoryField[] = ["onset", ...(open.length ? [] : ["impact" as const]), ...(open.some((p) => PAIN_PATHWAYS.has(p.id)) ? ["severity" as const] : [])];
+  // a 1-10 score only where pain is the story (diarrhea without belly pain has nothing to score).
+  const painStory = open.some((p) => PAIN_PATHWAYS.has(p.id) && (p.id !== "stomach" || yes.belly_pain >= YES));
+  const historyWanted: HistoryField[] = ["onset", ...(open.length ? [] : ["impact" as const]), ...(painStory ? ["severity" as const] : [])];
   let next: TriageResult["next"] = null;
   // Explore what the camera noticed, at most two hunches: "I see you holding your chest. Do you
   // have pain or pressure in your chest?"
@@ -583,7 +631,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const order: Step[] = [];
     if (isChild) order.push("fever", "unable_to_drink", "seizure", "very_sleepy");
     for (const id of ids) order.push(...stepsFor(id));
-    const pick = order.find((st) => !st.startsWith("test:") && !asked.has(st) && !known[st as FindingKey] && !(st === "pregnant" && !pregnancyPossible));
+    // Emergency: closed danger questions only, no open probes or tests.
+    const pick = order.find((st) => isFinding(st) && !asked.has(st) && !known[st] && !(st === "pregnant" && !pregnancyPossible));
     if (pick) {
       const f = FINDINGS[pick as FindingKey];
       const q = isChild && "askChild" in f ? f.askChild : f.ask;
@@ -614,16 +663,18 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const order: Step[] = [];
     // Network advisories from the outbreak sentinel: screen for what is spreading nearby first.
     for (const adv of advisories) if (complaintKnown && !known[ADVISORY_FIRST[adv.kind]]) order.push(ADVISORY_FIRST[adv.kind]);
-    if (isChild && open.length) order.push("unable_to_drink", "vomits_everything", "seizure", "very_sleepy");
+    // A child: the WHO danger signs first, in one open question, then one by one for whatever is still unclear.
+    if (isChild && open.length) order.push("probe:child_danger", "unable_to_drink", "vomits_everything", "seizure", "very_sleepy");
     // The pod head's finger sensor: measure oxygen early whenever breathing, chest, fever or a
     // stroke is being considered and no reading exists yet.
     if (vitals.podConnected && vitals.spo2 == null && open.some((p) => ["breathing", "cardiac", "fever", "stroke"].includes(p.id))) order.push("test:finger");
     const askedIn = (id: string) => stepsFor(id).filter((st) => (st.startsWith("test:") ? testDone(st.slice(5)) : asked.has(st))).length;
     for (const p of open) if (askedIn(p.id) < PER_PATHWAY) order.push(...stepsFor(p.id));
     // Nothing in the tree fits (toothache, ear pain...): ask Claude for one sensible nurse
-    // follow-up question, up to two times, before the single mood question.
+    // follow-up question, up to two times, before the single mood question. Not for someone who
+    // feels well: there is no complaint to follow up on.
     const freeAsked = input.turns.filter((t) => t.role === "pod" && t.asks === "free").length;
-    if (!open.length && complaintKnown && freeAsked < 2) {
+    if (!open.length && complaintKnown && !feelsWell && freeAsked < 2) {
       try {
         const q = await followUpQuestion({ conversation, language, locale: topKey(probsOf(a.locale)) ?? input.defaultLocale });
         if (q) next = { asks: "free", text: q.text, english: q.english };
@@ -638,6 +689,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         const t = TESTS.find((x) => `test:${x.id}` === s)!;
         return !testDone(t.id) && (!t.childOnly || isChild);
       }
+      if (s.startsWith("probe:")) return !asked.has(s) && probeUseful(PROBES.find((p) => `probe:${p.id}` === s)!);
       if (s === "wants_peer_group") return !asked.has(s) && moodish;
       if (s === "self_harm_thoughts") return !known[s] && (yes.low_mood >= YES || yes.little_interest >= YES || yes.trauma_or_loss >= YES);
       if (s === "pregnant" && !pregnancyPossible) return false;
@@ -646,6 +698,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
     if (pick?.startsWith("test:")) {
       const t = TESTS.find((x) => `test:${x.id}` === pick)!;
       next = { ...say(pick, t.say)!, test: { id: t.id, label: t.label, seconds: t.seconds, prep: t.prep } };
+    } else if (pick?.startsWith("probe:")) {
+      const p = PROBES.find((x) => `probe:${x.id}` === pick)!;
+      next = say(pick, isChild && p.sayChild ? p.sayChild : p.say);
     } else if (pick) {
       const f = FINDINGS[pick as FindingKey];
       next = say(pick, isChild && "askChild" in f ? f.askChild : f.ask);
@@ -762,6 +817,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         },
         question: next.text,
         english: next.english.replace(/^\[hunch:[^\]]*\]\s*/, ""),
+        open: Boolean(next.asks?.startsWith("probe:")), // an open prompt keeps all its parts
         locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
       }).catch(() => null),
       new Promise<null>((r) => setTimeout(() => r(null), 2500)), // never hold the patient up: fall back to the plain question
@@ -810,7 +866,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
 
   // Make the logic visible: why each pathway opened, and where each of its steps stands.
   const label = (st: Step) =>
-    st.startsWith("test:") ? `Test: ${TESTS.find((t) => `test:${t.id}` === st)?.label}` : FINDINGS[st as FindingKey]?.label ?? st;
+    st.startsWith("test:")
+      ? `Test: ${TESTS.find((t) => `test:${t.id}` === st)?.label}`
+      : st.startsWith("probe:")
+        ? `In their own words: ${PROBES.find((p) => `probe:${p.id}` === st)?.covers.map((k) => FINDINGS[k].label.toLowerCase()).join(", ")}`
+        : FINDINGS[st as FindingKey]?.label ?? st;
   const openedBy = (id: string) => {
     const def = PATHWAYS.find((d) => d.id === id)!;
     const why = def.triggers.filter((k) => yes[k] >= YES).map((k) => `${FINDINGS[k].label.toLowerCase()} (${(seen[k] ?? 0) >= YES ? "seen" : "said"})`);
@@ -827,6 +887,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
         else if (st.startsWith("test:")) {
           const r = input.tests[st.slice(5)];
           if (r) status = Object.values(r).some((v) => (v ?? 0) >= YES) ? "yes" : "no";
+        } else if (st.startsWith("probe:")) {
+          // An open probe is "yes" once the answer settled at least one of the findings it covers, and
+          // skipped (no) once they were all settled some other way.
+          const p = PROBES.find((x) => `probe:${x.id}` === st)!;
+          if (asked.has(st)) status = p.covers.some((k) => known[k]) ? "yes" : "unclear";
+          else if (!probeUseful(p)) status = "no";
         } else if (known[st as FindingKey]) {
           const y = yes[st as FindingKey];
           status = y >= YES ? "yes" : y < 0.3 ? "no" : "unclear";
@@ -853,9 +919,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
           ? "Understanding the problem before narrowing anything down"
           : next.english.startsWith("[hunch:")
             ? "The camera noticed something: asking instead of assuming"
+        : nextPath && next.asks?.startsWith("probe:")
+          ? `${nextPath.label} is open (${openedBy(nextPath.id).join(", ") || "complaint"}) → asking in their own words first; one answer can settle several questions`
         : nextPath
           ? `${nextPath.label} is open (${openedBy(nextPath.id).join(", ") || "complaint"}) → checking ${label(next.asks as Step).toLowerCase()}${stepsFor(nextPath.id).indexOf(next.asks as Step) < 2 ? " first" : ""}`
-          : isChild && ["unable_to_drink", "vomits_everything", "seizure", "very_sleepy"].includes(next.asks ?? "")
+          : isChild && ["probe:child_danger", "unable_to_drink", "vomits_everything", "seizure", "very_sleepy"].includes(next.asks ?? "")
             ? "Child: WHO danger signs are always checked first"
             : "Nothing specific found yet → screening";
 
@@ -908,7 +976,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
       volunteer: yes.volunteer >= YES,
     },
     verdict,
-    jev_ms: Date.now() - t0,
+    jev_ms: jevMs,
+    step_ms: Date.now() - t0,
   };
 }
 
@@ -999,7 +1068,7 @@ export async function judgeTest(testId: string, frames: Frame[], region: string)
   t.checks.forEach((c, i) => {
     q[`check_${i}`] = { type: "noul", instructions: `The \`frames\` show a patient doing this test: "${t.say.en}". Oldest picture first. ${c.question}` };
   });
-  const a = await jev({ setting: `Village health post, ${region}.`, test: t.label, frames: frameState }, q, images);
+  const a = await jevWithin(`test ${testId}`, jev({ setting: `Village health post, ${region}.`, test: t.label, frames: frameState }, q, images));
   const attempted = noulOf(a.did_it) >= 0.4;
   const results: Partial<Record<FindingKey, number>> = {};
   if (attempted) t.checks.forEach((c, i) => (results[c.finding] = Math.max(results[c.finding] ?? 0, noulOf(a[`check_${i}`]))));
@@ -1022,6 +1091,7 @@ function textFor(step: Step): Record<Lang, string> | null {
   if (step.startsWith("intake:")) return (INTAKE as Record<string, Record<Lang, string>>)[step.slice(7)] ?? null;
   if (step.startsWith("history:")) return (HISTORY as Record<string, Record<Lang, string>>)[step.slice(8)] ?? null;
   if (step.startsWith("test:")) return TESTS.find((t) => `test:${t.id}` === step)?.say ?? null;
+  if (step.startsWith("probe:")) return PROBES.find((p) => `probe:${p.id}` === step)?.say ?? null;
   return (FINDINGS as Record<string, { ask: Record<Lang, string> }>)[step]?.ask ?? null;
 }
 

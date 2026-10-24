@@ -60,8 +60,10 @@ export default function AgentsPage() {
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-6 py-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Pod network · agents</h1>
-          <p className="text-xs text-slate-400">Every pod talks to the network; the network agents act and talk back. Live, Eastern Province (Zambia) demo network.</p>
+          <h1 className="text-xl font-semibold tracking-tight">Pod network · agents (simulator)</h1>
+          <p className="text-xs text-slate-400">
+            Every pod talks to the network; the network agents act and talk back. This tab runs on the supply simulator: 40 posts with invented background patients at 60× real time. The live network the pods write to is the map and the government view.
+          </p>
         </div>
         <div className="flex flex-wrap gap-2 text-sm">
           <Link href="/" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">Pod</Link>
@@ -71,8 +73,8 @@ export default function AgentsPage() {
       </header>
 
       <div className="flex flex-wrap gap-2 px-6 pt-4">
-        <button disabled={!!busy} onClick={() => act({ action: "outbreak", post: "chisec", kind: "malaria" }, "outbreak")} className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold disabled:opacity-50">
-          Start malaria outbreak in Chisec
+        <button disabled={!!busy} onClick={() => act({ action: "outbreak", post: "katete", kind: "malaria" }, "outbreak")} className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold disabled:opacity-50">
+          Simulate a malaria outbreak in Katete
         </button>
         <button disabled={!!busy} onClick={() => act({ action: "approve_all" }, "approve")} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold disabled:opacity-50">
           Approve all deliveries

@@ -7,14 +7,15 @@ const SCREENS = [
   { href: "/kiosk?village=Katete", title: "Patient pod", what: "Camera + voice triage in the patient's language. Asks history first, confirms what the camera noticed, orders exactly what the patient needs.", tag: "pod", icon: "🩺" },
   { href: "/pod?village=Katete", title: "Pod, operator view", what: "The same visit with the camera, conversation, a typed-answer box for loud rooms, region and accent settings, and the result panel beside it.", tag: "pod", icon: "🎛️" },
   { href: "/staff", title: "Health worker screen", what: "Live mirror of the visit: decision path, confident conditions only, the exact order placed, vitals entry (oxygen, temperature, BP).", tag: "pod", icon: "🧑‍⚕️" },
-  { href: "/globe", title: "Live 3D map", what: "Satellite globe of Eastern Province. Every flagged need pops over its village; drones and trucks fly at real speed to the patient's home.", tag: "network", icon: "🌍" },
-  { href: "/government", title: "Government view", what: "Provincial Health Office: every post × every item, what pods used, what the AI agents moved and why, and a Claude briefing ending in one decision.", tag: "network", icon: "🏛️" },
-  { href: "/patients", title: "Patients & vaccines", what: "Profiles the posts keep: who is due which vaccine dose on Zambia's schedule. One click sends it to their home.", tag: "network", icon: "👶" },
+  { href: "/globe", title: "Live map", what: "40 health posts as dots on a satellite globe. Nothing moves until a pod flags a need; then the order flies from wherever the stock is. Click a post for what it asked for, sent and holds.", tag: "network", icon: "🌍" },
+  { href: "/government", title: "Government view", what: "Provincial Health Office: every post × every item, satellite malaria and flood risk, vaccines due, pods online, what the AI agents moved and why, and a Claude briefing ending in one decision.", tag: "network", icon: "🏛️" },
+  { href: "/patients", title: "Patients & vaccines", what: "Profiles the posts keep: who is due which vaccine dose on Zambia's schedule, with the doctor's note from their last visit. One click sends the dose to their home.", tag: "network", icon: "👶" },
   { href: "/community", title: "Community circles", what: "People going through a hard time are paired with volunteers from their own village. Everyone is invited to volunteer at the end of a visit.", tag: "network", icon: "🤝" },
-  { href: "/agents", title: "Agent bus", what: "Pods report, the sentinel warns, the allocator moves stock, the router refers emergencies, the doctor queue assigns reviews.", tag: "network", icon: "🤖" },
-  { href: "/dashboard", title: "Supply simulator", what: "Start an outbreak or a flood and watch the network re-route drones and road deliveries.", tag: "network", icon: "🛩️" },
-  { href: "/deploy", title: "Where next", what: "Live World Bank numbers for 19 candidate countries and the partners to call first.", tag: "plan", icon: "🗺️" },
-  { href: "/registry", title: "Visit registry", what: "Every visit this pod has done, with the doctor's handover note.", tag: "plan", icon: "📒" },
+  { href: "/agents", title: "Agent bus (simulator)", what: "Pods report, the sentinel warns, the allocator moves stock, the router refers emergencies, the doctor queue assigns reviews. Runs on invented background patients.", tag: "network", icon: "🤖" },
+  { href: "/dashboard", title: "Supply simulator", what: "A what-if sandbox: start an outbreak or a flood and watch the network re-route drones and road deliveries.", tag: "network", icon: "🛩️" },
+  { href: "/deploy", title: "Where next", what: "Live World Bank numbers for 19 candidate countries and the partners to call first. Zambia is first.", tag: "plan", icon: "🗺️" },
+  { href: "/registry", title: "Visit registry", what: "Every saved visit, live, with the doctor's handover note as Claude writes it.", tag: "plan", icon: "📒" },
+  { href: "/demo", title: "Presenter's tab", what: "The demo in order for Sunday: what to open, say, do and see at each step, the one-line facts with sources, and the honest limits.", tag: "plan", icon: "🎤" },
 ];
 
 export default function Home() {

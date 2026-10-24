@@ -9,6 +9,11 @@
 // the outbreak sentinel spots case clusters and pre-positions stock. Everything the agents decide
 // is written to `agent_log` so the government view can show its reasoning.
 // Clients subscribe to everything; `pop` is an event table for the "+1" bubbles on the globe.
+//
+// Three tables make the pods themselves live: `pod` (which pods are online and what each is doing
+// right now, from `podHeartbeat`), `visit_record` (the full saved visit and the doctor's handover
+// note, from `saveVisitRecord`, so the staff pages subscribe instead of polling a file) and
+// `dialect_word` (the words each community uses, from `rememberWords`, shared across pods).
 
 import { schema, table, t } from 'spacetimedb/server';
 import { ScheduleAt } from 'spacetimedb';
@@ -132,6 +137,66 @@ const settings = table(
   }
 );
 
+// One row per pod (one pod per village in the demo). The pod screen sends a heartbeat every few
+// seconds while it is open; `tick` marks the pod offline once the heartbeats stop.
+const pod = table(
+  { name: 'pod', public: true },
+  {
+    villageId: t.u32().primaryKey(),
+    status: t.string(), // idle | listening | thinking | speaking | offline
+    step: t.string(), // what the pod is asking about right now ('' between visits)
+    language: t.string(), // what the patient speaks (en, es, ar...), '' when nobody is there
+    online: t.bool(),
+    lastSeen: t.timestamp(),
+  }
+);
+
+// The full visit as the registry saves it (a mirror of data/registry.json), so the staff and
+// patient pages get every visit, and the doctor's handover note once Claude writes it, the
+// moment it lands. Lists are kept as JSON text; '' stands for "not known / not given".
+const visitRecord = table(
+  { name: 'visit_record', public: true },
+  {
+    id: t.string().primaryKey(), // the registry's uuid
+    villageId: t.u32().index('btree'),
+    createdAt: t.string(), // ISO, as the registry wrote it
+    region: t.string(),
+    consent: t.bool(),
+    name: t.string(), // '' when the patient did not agree to be saved
+    community: t.string(),
+    patient: t.string(), // "self" / "daughter, 3 years" ...
+    ageGroup: t.string(),
+    language: t.string(),
+    locale: t.string(),
+    urgency: t.string(), // green | yellow | red
+    reason: t.string(),
+    causes: t.string(), // JSON [{ name, probability }]
+    resources: t.string(), // JSON [{ item, probability, delivery }]
+    orders: t.string(), // JSON [{ item, qty, note, for }]
+    mentalCategory: t.string(),
+    wantsPeerGroup: t.bool(),
+    volunteer: t.bool(),
+    handover: t.string(), // '' until the note is written
+    updatedAt: t.timestamp(),
+  }
+);
+
+// The words a community uses for things ("running stomach" for diarrhea), one row per community,
+// concept and word, counted every time a patient there says it. Every pod reads the same table,
+// so a word learned in one village is spoken by every pod there from the next visit on.
+const dialectWord = table(
+  { name: 'dialect_word', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    villageId: t.u32().index('btree'), // 0 when the community is not one of the posts
+    community: t.string(), // as the patient said it, lower-case
+    concept: t.string(),
+    word: t.string(),
+    times: t.u32(),
+    heardAt: t.timestamp(),
+  }
+);
+
 const tickTimer = table(
   { name: 'tick_timer' },
   {
@@ -140,10 +205,17 @@ const tickTimer = table(
   }
 );
 
-const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, patient, communityMember, agentLog, settings, tickTimer });
+const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, patient, communityMember, agentLog, settings, pod, visitRecord, dialectWord, tickTimer });
 export default spacetimedb;
 
 const Need = t.object('Need', { item: t.string(), qty: t.u32() });
+const Word = t.object('Word', { concept: t.string(), word: t.string() });
+const VisitRecordIn = t.object('VisitRecordIn', {
+  id: t.string(), village: t.string(), createdAt: t.string(), region: t.string(), consent: t.bool(), name: t.string(), community: t.string(), patient: t.string(),
+  ageGroup: t.string(), language: t.string(), locale: t.string(), urgency: t.string(), reason: t.string(), causes: t.string(), resources: t.string(), orders: t.string(),
+  mentalCategory: t.string(), wantsPeerGroup: t.bool(), volunteer: t.bool(), handover: t.string(),
+});
+const POD_OFFLINE_AFTER_US = 20_000_000n; // no heartbeat for this long = the pod screen is closed
 
 // Approximate locations. Chipata is the regional hub with full shelves; the posts are short.
 const VILLAGES = [
@@ -345,6 +417,13 @@ function short(name: string) {
   return name.replace(/ \(.*\)$/, '');
 }
 
+// The post a pod or patient names, loosely ("katete", "Chipata", "Mfuwe"). Katete when nothing matches.
+function findVillage(ctx: any, villageName: string) {
+  const key = villageName.trim().toLowerCase();
+  const hit = key && [...ctx.db.village.iter()].find((x: any) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0]));
+  return hit ?? ctx.db.village.id.find(2);
+}
+
 function placeOrder(ctx: any, o: { visitId: bigint; kind: string; patientName: string; to: any; from: any; item: string; qty: number }) {
   const km = distanceKm(o.from, o.to);
   const mode = o.from.id === o.to.id ? 'walk' : HEAVY.has(o.item) ? 'road' : 'drone';
@@ -492,11 +571,51 @@ export const init = spacetimedb.init((ctx) => {
 export const reportVisit = spacetimedb.reducer(
   { villageName: t.string(), patientName: t.string(), urgency: t.string(), summary: t.string(), needs: t.array(Need) },
   (ctx, { villageName, patientName, urgency, summary, needs }) => {
-    const key = villageName.toLowerCase();
-    const v = [...ctx.db.village.iter()].find((x) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0])) ?? ctx.db.village.id.find(2);
+    const v = findVillage(ctx, villageName);
     recordVisit(ctx, v!.id, patientName || 'Patient', urgency, summary, needs, true);
   }
 );
+
+// The pod screen, every few seconds and on every change of what it is doing. One row per village;
+// `tick` flips `online` off when the heartbeats stop. Status 'offline' is the screen closing.
+export const podHeartbeat = spacetimedb.reducer(
+  { villageName: t.string(), status: t.string(), step: t.string(), language: t.string() },
+  (ctx, { villageName, status, step, language }) => {
+    const v = findVillage(ctx, villageName);
+    const online = status !== 'offline';
+    const row = { villageId: v!.id, status, step, language, online, lastSeen: ctx.timestamp };
+    const old = ctx.db.pod.villageId.find(v!.id);
+    if (old) ctx.db.pod.villageId.update(row);
+    else ctx.db.pod.insert(row);
+    if (online && !old?.online) log(ctx, 'Pod', v!.id, `${short(v!.name)}: pod online.`);
+    if (!online && old?.online) log(ctx, 'Pod', v!.id, `${short(v!.name)}: pod switched off.`);
+  }
+);
+
+// The registry saving a visit: once when the patient finishes, again a few seconds later with the
+// clean name, community and the doctor's handover note. Same id both times.
+export const saveVisitRecord = spacetimedb.reducer({ record: VisitRecordIn }, (ctx, { record }) => {
+  const { village, ...fields } = record;
+  const v = findVillage(ctx, village || record.community);
+  const row = { ...fields, villageId: v!.id, updatedAt: ctx.timestamp };
+  if (ctx.db.visitRecord.id.find(record.id)) ctx.db.visitRecord.id.update(row);
+  else ctx.db.visitRecord.insert(row);
+});
+
+// A patient used their community's words for things: count them, so every pod there can say them.
+export const rememberWords = spacetimedb.reducer({ community: t.string(), words: t.array(Word) }, (ctx, { community, words }) => {
+  const key = community.trim().toLowerCase();
+  if (!key || !words.length) return;
+  const v = [...ctx.db.village.iter()].find((x) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0]));
+  const villageId = v?.id ?? 0;
+  const known = [...ctx.db.dialectWord.iter()].filter((d) => d.community === key);
+  for (const { concept, word } of words) {
+    if (!word) continue;
+    const old = known.find((d) => d.concept === concept && d.word === word);
+    if (old) ctx.db.dialectWord.id.update({ ...old, times: old.times + 1, heardAt: ctx.timestamp });
+    else ctx.db.dialectWord.insert({ id: 0n, villageId, community: key, concept, word, times: 1, heardAt: ctx.timestamp });
+  }
+});
 
 // From the profiles page: send everything this patient is due to their home.
 export const orderVaccines = spacetimedb.reducer({ patientId: t.u32() }, (ctx, { patientId }) => {
@@ -520,8 +639,7 @@ export const recordDose = spacetimedb.reducer({ patientId: t.u32(), code: t.stri
 export const joinCommunity = spacetimedb.reducer(
   { villageName: t.string(), name: t.string(), role: t.string(), topic: t.string() },
   (ctx, { villageName, name, role, topic }) => {
-    const key = villageName.toLowerCase();
-    const v = [...ctx.db.village.iter()].find((x) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(' ')[0])) ?? ctx.db.village.id.find(2);
+    const v = findVillage(ctx, villageName);
     const first = name.trim().split(' ')[0] || 'Someone';
     if ([...ctx.db.communityMember.villageId.filter(v!.id)].some((m) => m.name === first && m.role === role)) return;
     ctx.db.communityMember.insert({ id: 0n, villageId: v!.id, name: first, role, topic, matchedWith: '', joinedAt: ctx.timestamp });
@@ -556,13 +674,23 @@ export const resetDemo = spacetimedb.reducer((ctx) => {
   for (const p of [...ctx.db.patient.iter()]) ctx.db.patient.id.delete(p.id);
   for (const m of [...ctx.db.communityMember.iter()]) ctx.db.communityMember.id.delete(m.id);
   for (const s of [...ctx.db.settings.iter()]) ctx.db.settings.id.delete(s.id);
+  for (const r of [...ctx.db.visitRecord.iter()]) ctx.db.visitRecord.id.delete(r.id);
+  for (const p of [...ctx.db.pod.iter()]) ctx.db.pod.villageId.delete(p.villageId); // open pods come back on their next heartbeat
   for (const tm of [...ctx.db.tickTimer.iter()]) ctx.db.tickTimer.scheduledId.delete(tm.scheduledId);
-  seed(ctx);
+  seed(ctx); // `dialect_word` stays: what a community calls things is knowledge, not demo state
 });
 
-// Every second: move orders along, a background patient now and then, the agents every 10 s.
+// Every second: move orders along, pods that went quiet, a background patient now and then, the
+// agents every 10 s.
 export const tick = spacetimedb.reducer({ onSchedule: tickTimer }, { timer: tickTimer.rowType }, (ctx) => {
   const now = ctx.timestamp.microsSinceUnixEpoch;
+  for (const p of [...ctx.db.pod.iter()]) {
+    if (p.online && now - p.lastSeen.microsSinceUnixEpoch > POD_OFFLINE_AFTER_US) {
+      ctx.db.pod.villageId.update({ ...p, online: false, status: 'offline', step: '', language: '' });
+      const v = ctx.db.village.id.find(p.villageId);
+      if (v) log(ctx, 'Pod', p.villageId, `${short(v.name)}: pod stopped answering (no heartbeat for 20 s).`);
+    }
+  }
   for (const o of [...ctx.db.deliveryOrder.iter()]) {
     if (o.status === 'ordered' && now - o.createdAt.microsSinceUnixEpoch > 2_000_000n) {
       const src = stockRow(ctx, o.fromVillageId, o.item);

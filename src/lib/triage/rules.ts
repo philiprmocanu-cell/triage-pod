@@ -239,7 +239,8 @@ const RULES: Rule[] = [
     urgency: "yellow",
     source: "words",
     resources: ["Wound dressing kit", "Tetanus vaccine"],
-    test: (f) => (f.injury && !f.severe_bleeding && (f.deep_wound || f.dirty_wound || !f.tetanus_recent) ? [f.deep_wound && "deep or gaping", f.dirty_wound && "dirty or bite", !f.tetanus_recent && "no recent tetanus shot"].filter(Boolean).join(" + ") : null),
+    // Needs a wound that is deep or dirty; a bruise or strain with no recent tetanus shot is not a wound to close.
+    test: (f) => (f.injury && !f.severe_bleeding && (f.deep_wound || f.dirty_wound) ? [f.deep_wound && "deep or gaping", f.dirty_wound && "dirty or bite", !f.tetanus_recent && "no recent tetanus shot"].filter(Boolean).join(" + ") : null),
   },
   {
     id: "heart_rate_abnormal",

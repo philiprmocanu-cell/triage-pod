@@ -25,7 +25,7 @@ export default function DeployPage() {
   const [pods, setPods] = useState(50);
   const [perPod, setPerPod] = useState(5000);
   const [effect, setEffect] = useState(10);
-  const [picked, setPicked] = useState("GTM");
+  const [picked, setPicked] = useState("ZMB"); // Zambia first: the demo is built for it
 
   useEffect(() => {
     fetch("/api/deploy")

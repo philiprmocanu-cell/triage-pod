@@ -4,19 +4,18 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 // One row of tabs on every screen except the patient-facing kiosk (which stays full screen).
+// One tab per real screen. The operator view (/pod), the visit registry (/registry) and the
+// simulators (/dashboard, /agents, /deploy) still exist and are linked from the pages that use
+// them; they are the same data as these tabs, not screens of their own.
 const TABS = [
   { href: "/demo", label: "Demo", tone: "text-amber-300" },
-  { href: "/kiosk?village=Katete", label: "Pod (patient)", match: "/kiosk" },
-  { href: "/pod?village=Katete", label: "Pod (operator)", match: "/pod" },
+  { href: "/kiosk?village=Katete", label: "Pod", match: "/kiosk" },
   { href: "/staff", label: "Health worker" },
   { href: "/globe", label: "Live map" },
   { href: "/government", label: "Government" },
   { href: "/patients", label: "Patients" },
   { href: "/community", label: "Community", tone: "text-pink-300" },
-  { href: "/agents", label: "Agents" },
-  { href: "/dashboard", label: "Supply sim" },
-  { href: "/deploy", label: "Where next" },
-  { href: "/registry", label: "Registry" },
+  { href: "/mosquito", label: "Mosquitoes", tone: "text-emerald-300" },
 ];
 
 export default function Nav() {

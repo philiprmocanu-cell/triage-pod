@@ -102,5 +102,6 @@ export type TriageResult = {
   peer_group: { wants: boolean; category: string | null; volunteer: boolean };
   verdict: "emergency" | "likely" | "uncertain" | "nothing_found"; // the one-word outcome the health worker reads first
   orders: { item: string; qty: number; note?: string; for: string }[]; // exact stock to send, only for conditions the pod is confident about
-  jev_ms: number;
+  jev_ms: number; // time Jev took to answer this turn's questions
+  step_ms: number; // the whole turn, Claude's wording included
 };

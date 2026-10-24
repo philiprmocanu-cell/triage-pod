@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
 import { jev, JevQuestion, noulOf } from "@/lib/jev";
+import { jevWithin } from "@/lib/triage/engine";
 import { TRAITS } from "@/lib/triage/traits";
 import type { Frame } from "@/lib/triage/types";
 
@@ -45,7 +46,7 @@ export async function POST(req: Request) {
     q[t.id] = { type: "noul", instructions: `${t.id === "face_droop" ? LOOK_ONLY : CALIBRATE} ${t.look}` };
   }
   try {
-    const a = await jev({ setting: "Patient sitting in front of a health pod camera.", frames: seq }, q, images);
+    const a = await jevWithin(`scan, ${seq.length} frames`, jev({ setting: "Patient sitting in front of a health pod camera.", frames: seq }, q, images), 20_000); // the next scan is due in a few seconds anyway
     const person = noulOf(a.person_visible);
     const face = noulOf(a.face_clear);
     const body = noulOf(a.body_clear);
@@ -62,6 +63,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ person, face, body, judged, bodyJudged, traits, ms: Date.now() - t0 });
   } catch (err) {
     console.error("scan failed", err);
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Scan failed" }, { status: 500 });
+    const msg = err instanceof Error ? err.message : "Scan failed";
+    // No guessing from a failed look: the scan reports nothing seen, and says why.
+    return NextResponse.json({ error: /jev|typesafe/i.test(msg) ? `The camera brain (Jev) is not answering, so nothing was judged from the pictures. (${msg})` : msg }, { status: 500 });
   }
 }

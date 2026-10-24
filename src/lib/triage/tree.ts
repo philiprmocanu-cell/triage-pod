@@ -9,7 +9,8 @@ export type Lang = "es" | "en";
 type Text = Record<Lang, string>;
 
 // Everything the pod tracks about the patient. `ask` is the follow-up question; `seen` is what
-// Jev checks for in the camera picture (only signs a webcam can plausibly show).
+// Jev checks for in the camera picture (only signs a webcam can plausibly show); `said`, where
+// the label alone would be read too loosely, is what counts when Jev reads the conversation.
 export const FINDINGS = {
   chest_pain: { label: "Chest pain or pressure", ask: { en: "Do you have pain or pressure in your chest?", es: "¿Siente dolor o presión en el pecho?" } },
   pain_spreads: { label: "Pain spreads to arm, jaw or back", ask: { en: "Does the pain move to your arm, jaw or back?", es: "¿El dolor se le pasa al brazo, la quijada o la espalda?" } },
@@ -42,10 +43,11 @@ export const FINDINGS = {
   light_hurts: { label: "Light or noise hurts", ask: { en: "Does light or noise make it worse?", es: "¿La luz o el ruido le molestan más?" } },
   severe_headache: { label: "Severe headache or blurred vision", ask: { en: "Do you have a very strong headache or blurry vision?", es: "¿Tiene un dolor de cabeza muy fuerte o ve borroso?" } },
   seizure: { label: "Seizure / convulsions", ask: { en: "Has there been a seizure or shaking fit?", es: "¿Ha tenido convulsiones o ataques?" } },
+  // Asked one way only ("can you still...?"): a bare "no" to a two-way question read as "cannot drink" and raised false alarms.
   unable_to_drink: {
     label: "Cannot drink or breastfeed",
-    ask: { en: "Can you drink fluids, or are you unable to keep anything down?", es: "¿Puede tomar líquidos, o no puede tomar nada?" },
-    askChild: { en: "Can the child drink or breastfeed, or are they unable to?", es: "¿El niño puede tomar líquidos o mamar, o no puede?" },
+    ask: { en: "Can you still drink fluids and keep them down?", es: "¿Todavía puede tomar líquidos sin vomitarlos?" },
+    askChild: { en: "Can the child still drink or breastfeed?", es: "¿El niño todavía puede tomar líquidos o mamar?" },
   },
   vomits_everything: {
     label: "Vomits everything",
@@ -85,9 +87,15 @@ export const FINDINGS = {
   severe_bleeding: {
     label: "Heavy bleeding",
     ask: { en: "Is there heavy bleeding that won't stop?", es: "¿Está sangrando mucho y no para?" },
+    said: "Heavy bleeding that is still going on and does not stop with pressure. Bleeding that has stopped or mostly stopped, or a wound that only oozes, is NOT heavy bleeding.",
     seen: "Is there visible blood or an actively bleeding wound?",
   },
-  injury: { label: "Injury", ask: { en: "Were you hurt in an accident or a fall?", es: "¿Se lastimó en un accidente o una caída?" }, seen: "Is there a visible wound, cut, bruise or deformed limb?" },
+  injury: {
+    label: "Injury",
+    ask: { en: "Were you hurt in an accident or a fall?", es: "¿Se lastimó en un accidente o una caída?" },
+    said: "An injury from an accident, fall, blow, cut, burn or bite: a wound, a bruise, a possibly broken bone. Pain that came on after lifting, working or sleeping badly, with no accident, is NOT an injury.",
+    seen: "Is there a visible wound, cut, bruise or deformed limb?",
+  },
   cant_bear_weight: { label: "Cannot use the limb", ask: { en: "Can you put weight on it or move it normally, or not at all?", es: "¿Puede apoyarse o moverlo normalmente, o no puede?" } },
   deformed_limb: { label: "Limb bent or very swollen", ask: { en: "Does the arm or leg look bent, out of shape or very swollen?", es: "¿El brazo o la pierna se ve torcido, deformado o muy hinchado?" } },
   deep_wound: { label: "Deep or gaping wound", ask: { en: "Is the cut deep or wide, or does it gape open when you move?", es: "¿La herida es profunda o ancha, o se abre cuando se mueve?" } },
@@ -144,7 +152,7 @@ export const FINDINGS = {
       es: "Cerca de usted hay personas que se juntan seguido para platicar y apoyarse, con un consejero. ¿Le gustaría que el promotor de salud le presente con ellos?",
     },
   },
-} as const satisfies Record<string, { label: string; ask: Text; askChild?: Text; seen?: string }>;
+} as const satisfies Record<string, { label: string; ask: Text; askChild?: Text; seen?: string; said?: string }>;
 
 export type FindingKey = keyof typeof FINDINGS;
 export const FINDING_KEYS = Object.keys(FINDINGS) as FindingKey[];
@@ -417,8 +425,195 @@ export const INTAKE = {
 export type IntakeField = keyof typeof INTAKE;
 export const INTAKE_FIELDS = Object.keys(INTAKE) as IntakeField[];
 
-// One step of the visit: a finding question, a physical test, or an intake question.
-export type Step = FindingKey | `test:${string}` | `intake:${IntakeField}` | `history:${HistoryField}` | "open" | "free";
+// One step of the visit: a finding question, an open probe, a physical test, or an intake question.
+export type Step = FindingKey | `probe:${string}` | `test:${string}` | `intake:${IntakeField}` | `history:${HistoryField}` | "open" | "free";
+
+// Open, nurse-like prompts, asked before an area's yes/no questions: "tell me more about the
+// pain", "what else have you noticed?", "show the camera where it hurts". The patient answers in
+// their own words; Jev reads every finding out of the whole conversation at once, so one rich
+// answer settles several of the area's questions and the closed ones left over are skipped.
+// `covers` lists the findings the answer usually settles: a probe is only asked while at least
+// two of them are still unknown, and it counts toward the area's question budget like any step.
+export type Probe = { id: string; pathway: string; say: Text; sayChild?: Text; covers: FindingKey[] };
+
+export const PROBES: Probe[] = [
+  // Children under five: the WHO IMCI general danger signs, asked in one breath before any area's
+  // questions (the engine adds it for every child); whatever stays unclear is asked one by one.
+  {
+    id: "child_danger",
+    pathway: "child",
+    covers: ["unable_to_drink", "vomits_everything", "seizure", "very_sleepy"],
+    say: {
+      en: "First, how is the child in themselves: can they still drink or breastfeed, do they vomit everything, have there been any fits, and are they very sleepy or hard to wake?",
+      es: "Primero, ¿cómo está el niño en general: todavía puede tomar líquidos o mamar, vomita todo, ha tenido ataques, y está muy dormido o cuesta despertarlo?",
+    },
+  },
+  {
+    id: "stroke_story",
+    pathway: "stroke",
+    covers: ["sudden_onset", "face_or_arm_weakness", "confused_speech", "balance_problem", "severe_headache"],
+    say: {
+      en: "Tell me what happened: when it started, whether it came on suddenly, and what you noticed first in your face, your arm or your speech.",
+      es: "Cuénteme qué pasó: cuándo empezó, si fue de repente, y qué fue lo primero que notó en la cara, el brazo o el habla.",
+    },
+  },
+  {
+    id: "cardiac_pain",
+    pathway: "cardiac",
+    covers: ["chest_pain", "pain_spreads", "sudden_onset"],
+    say: {
+      en: "Tell me more about the pain: where exactly is it, what does it feel like, and does it move anywhere, like your arm, jaw or back?",
+      es: "Cuénteme más del dolor: dónde exactamente lo siente, cómo es, y si se le pasa a otro lado, como el brazo, la quijada o la espalda.",
+    },
+  },
+  {
+    id: "cardiac_with",
+    pathway: "cardiac",
+    covers: ["sweating", "short_of_breath"],
+    say: {
+      en: "What else have you noticed with it, like sweating or trouble breathing, and is there anything that makes it better or worse, like resting or moving?",
+      es: "¿Qué más ha notado junto con eso, como sudor o que le cueste respirar, y hay algo que lo mejore o lo empeore, como descansar o moverse?",
+    },
+  },
+  {
+    id: "breathing_sound",
+    pathway: "breathing",
+    covers: ["cough", "wheeze", "short_of_breath", "fast_breathing", "long_cough"],
+    say: {
+      en: "Describe the cough and the breathing for me: what does the cough sound like, how long has it been there, and how is the breathing?",
+      es: "Descríbame la tos y la respiración: cómo suena la tos, desde cuándo la tiene, y cómo está la respiración.",
+    },
+    sayChild: {
+      en: "Tell me about the child's cough and breathing: what does the cough sound like, how long has it been there, and how are they breathing?",
+      es: "Cuénteme de la tos y la respiración del niño: cómo suena la tos, desde cuándo la tiene, y cómo está respirando.",
+    },
+  },
+  {
+    id: "breathing_with",
+    pathway: "breathing",
+    covers: ["fever", "unable_to_drink", "chest_indrawing"],
+    say: {
+      en: "What else have you noticed since it started, like a fever, and are you eating and drinking as usual?",
+      es: "¿Qué más ha notado desde que empezó, como calentura, y está comiendo y tomando como siempre?",
+    },
+    sayChild: {
+      en: "What else have you noticed since it started, like a fever? Is the child drinking and feeding as usual, and does the skin pull in under the ribs when they breathe?",
+      es: "¿Qué más ha notado desde que empezó, como calentura? ¿El niño toma y come como siempre, y se le hunde la piel debajo de las costillas al respirar?",
+    },
+  },
+  {
+    id: "fever_state",
+    pathway: "fever",
+    covers: ["very_sleepy", "unable_to_drink", "vomits_everything", "seizure"],
+    say: {
+      en: "How are you in yourself with this fever: awake and able to drink and keep things down, or very sleepy, vomiting everything, or have there been any fits?",
+      es: "¿Cómo se siente en general con esta calentura: está despierto y puede tomar líquidos sin vomitarlos, o está muy dormido, vomita todo, o ha tenido ataques?",
+    },
+    sayChild: {
+      en: "How is the child in themselves with this fever: awake and drinking, or very sleepy, vomiting everything, or have there been any fits?",
+      es: "¿Cómo está el niño con esta calentura: despierto y tomando líquidos, o muy dormido, vomita todo, o ha tenido ataques?",
+    },
+  },
+  {
+    id: "fever_pattern",
+    pathway: "fever",
+    covers: ["chills", "mosquito_bites", "rash", "yellow_eyes", "stiff_neck"],
+    say: {
+      en: "Tell me how the fever goes and what else you have noticed with it: chills or sweats, a stiff neck, spots on the skin or yellow eyes, and whether you sleep under a net.",
+      es: "Cuénteme cómo le da la calentura y qué más ha notado con ella: escalofríos o sudores, cuello tieso, manchas en la piel u ojos amarillos, y si duerme con mosquitero.",
+    },
+  },
+  {
+    id: "stomach_story",
+    pathway: "stomach",
+    covers: ["diarrhea", "vomits_everything", "blood_in_stool", "unable_to_drink", "belly_pain"],
+    say: {
+      en: "Tell me about the diarrhea or vomiting: how many times a day, what it looks like, whether there is blood, and whether you can keep fluids down.",
+      es: "Cuénteme de la diarrea o el vómito: cuántas veces al día, cómo se ve, si hay sangre, y si puede tomar líquidos sin vomitarlos.",
+    },
+    sayChild: {
+      en: "Tell me about the child's diarrhea or vomiting: how many times a day, what it looks like, whether there is blood, and whether they can keep fluids down.",
+      es: "Cuénteme de la diarrea o el vómito del niño: cuántas veces al día, cómo se ve, si hay sangre, y si puede tomar líquidos sin vomitarlos.",
+    },
+  },
+  {
+    id: "stomach_state",
+    pathway: "stomach",
+    covers: ["very_sleepy", "sunken_eyes", "fever"],
+    say: {
+      en: "How are you in yourself: very thirsty, very sleepy, feeling hot, and what else have you noticed?",
+      es: "¿Cómo se siente en general: con mucha sed, muy dormido, con calentura, y qué más ha notado?",
+    },
+    sayChild: {
+      en: "How is the child in themselves: very thirsty, very sleepy, eyes sunken, feeling hot, and what else have you noticed?",
+      es: "¿Cómo está el niño: con mucha sed, muy dormido, los ojos hundidos, con calentura, y qué más ha notado?",
+    },
+  },
+  {
+    id: "pregnancy_story",
+    pathway: "pregnancy",
+    covers: ["severe_bleeding", "severe_headache", "seizure", "fever", "swollen_feet"],
+    say: {
+      en: "Tell me what has been happening with the pregnancy and what worries you: any bleeding, a strong headache or blurry vision, swelling, fever or fits?",
+      es: "Cuénteme qué ha pasado con el embarazo y qué le preocupa: ¿algún sangrado, dolor de cabeza fuerte o visión borrosa, hinchazón, calentura o ataques?",
+    },
+  },
+  {
+    id: "injury_story",
+    pathway: "injury",
+    covers: ["injury", "severe_bleeding", "deformed_limb", "cant_bear_weight", "deep_wound", "dirty_wound"],
+    say: {
+      en: "Tell me how it happened and show the camera where it hurts: is it still bleeding, how deep is the cut, what did it, and can you move it or put weight on it?",
+      es: "Cuénteme cómo pasó y muéstrele a la cámara dónde le duele: ¿sigue sangrando, qué tan profunda es la herida, con qué fue, y puede moverlo o apoyarse?",
+    },
+  },
+  {
+    id: "headache_story",
+    pathway: "headache",
+    covers: ["worst_headache", "severe_headache", "light_hurts", "sudden_onset"],
+    say: {
+      en: "Tell me more about the headache: how it started, where it is, what it feels like, and whether light or noise make it worse.",
+      es: "Cuénteme más del dolor de cabeza: cómo empezó, dónde lo siente, cómo es, y si la luz o el ruido lo empeoran.",
+    },
+  },
+  {
+    id: "headache_with",
+    pathway: "headache",
+    covers: ["fever", "stiff_neck", "face_or_arm_weakness", "chills"],
+    say: {
+      en: "What else have you noticed with it, like fever, a stiff neck or weakness anywhere, and what have you taken for it?",
+      es: "¿Qué más ha notado junto con eso, como calentura, cuello tieso o debilidad en alguna parte, y qué ha tomado para el dolor?",
+    },
+  },
+  {
+    id: "pain_story",
+    pathway: "pain",
+    covers: ["back_pain", "pain_on_bending", "leg_weakness", "injury"],
+    say: {
+      en: "Tell me more about the pain: where exactly it is, what it feels like, whether it goes down a leg, and what makes it better or worse, like bending or lifting.",
+      es: "Cuénteme más del dolor: dónde exactamente lo siente, cómo es, si se le baja a una pierna, y qué lo mejora o lo empeora, como agacharse o cargar.",
+    },
+  },
+  {
+    id: "pain_with",
+    pathway: "pain",
+    covers: ["bladder_control", "fever"],
+    say: {
+      en: "What else have you noticed since it started, like fever or any trouble holding your urine or stool, and what have you taken for it?",
+      es: "¿Qué más ha notado desde que empezó, como calentura o problemas para aguantar la orina o el popó, y qué ha tomado para el dolor?",
+    },
+  },
+  {
+    id: "mental_story",
+    pathway: "mental",
+    covers: ["low_mood", "little_interest", "anxious", "cant_stop_worrying", "trauma_or_loss", "lonely"],
+    say: {
+      en: "Tell me how things have been for you lately: how you have been feeling, how you are sleeping, and whether something hard has happened.",
+      es: "Cuénteme cómo han estado las cosas últimamente: cómo se ha sentido, cómo duerme, y si le ha pasado algo difícil.",
+    },
+  },
+];
+export const probesFor = (pathway: string): Probe[] => PROBES.filter((p) => p.pathway === pathway);
 
 export const OPENING: Text = {
   en: "Thank you. What brings you in today? Tell me what is bothering you the most.",

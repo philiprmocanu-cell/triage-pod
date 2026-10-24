@@ -51,3 +51,6 @@ hardware/pod-firmware/secrets.h
 node_modules
 spacetime/spacetimedb/dist
 /.next-prod/
+
+# mosquito classifier's Python environment (rebuilt from tools/mosquito/requirements.txt)
+tools/mosquito/.venv/
