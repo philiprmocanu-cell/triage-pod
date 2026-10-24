@@ -377,7 +377,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
       const evidence = keys.filter((k) => yes[k] >= YES).map((k) => `${FINDINGS[k].label} (${src(k)})`);
       if (hints[p.id]) evidence.push(`camera: ${hints[p.id].why}`);
       const against = keys.filter((k) => known[k] && yes[k] < 0.3 && asked.has(k)).map((k) => `no ${FINDINGS[k].label.toLowerCase()}`);
-      causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description, evidence, against, early: confidence < 0.8, confident: false });
+      causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description, evidence, against, early: confidence < 0.8, confident: false, asked: answered });
       for (const item of sdef.resources) need.set(item, 1 - (1 - (need.get(item) ?? 0)) * (1 - prob));
     }
   }
@@ -435,7 +435,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // it is past the early stage, at least 70% likely, and backed by two separate findings.
   for (const c of causes) {
     const ruleBacked = c.evidence.some((e) => e.startsWith("safety rule"));
-    c.confident = ruleBacked || (!c.early && c.probability >= CONFIDENT && c.evidence.length >= 2);
+    // A benign (green) condition with one symptom by nature (a tension headache, a cold) counts once
+    // the area's danger questions have been answered "no" three times over.
+    const benignSettled = c.urgency === "green" && (c.asked ?? 0) >= 3 && c.against.length >= 2;
+    c.confident = ruleBacked || (!c.early && c.probability >= CONFIDENT && (c.evidence.length >= 2 || benignSettled));
   }
 
   // Exactly what to send: one treatment course per confident condition, plus what a safety rule
@@ -526,7 +529,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
     return k ? say(SEEN_OPENER_ASKS[k] ?? k, SEEN_OPENERS[k]!) : null;
   };
 
-  if (input.stage === "look") {
+  const wrappingUp = asked.has("volunteer"); // the last question was asked: nothing reopens the visit
+  if (wrappingUp) {
+    next = null;
+  } else if (input.stage === "look") {
     next = intakeOpen ? say("intake:name", INTAKE.name) : seenOpener() ?? say("open", OPENING);
   } else if (intakeOpen && INTAKE_FIELDS.some((f) => !asked.has(`intake:${f}`))) {
     const f = INTAKE_FIELDS.find((x) => !asked.has(`intake:${x}`))!;
@@ -621,7 +627,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     } else if (pick) {
       const f = FINDINGS[pick as FindingKey];
       next = say(pick, isChild && "askChild" in f ? f.askChild : f.ask);
-    } else if (!next && !open.length && medicalSteps < 3) {
+    } else if (!next && !open.length && medicalSteps < 3 && !feelsWell && !input.turns.some((t) => t.role === "pod" && t.english === MORE.en)) {
       next = say(null, MORE);
     }
   }
