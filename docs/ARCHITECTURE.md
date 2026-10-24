@@ -42,8 +42,8 @@ Rules in code override everything (red flags). A condition is named only when a 
 ## 3. One visit, step by step (gated like a nurse)
 
 1. **Look.** The camera scans every 3.5 s: Jev judges 61 traits over the last three pictures (plus a face close-up). Face, skin and eye traits are judged only when a face is close, facing and lit; posture traits (holding chest, cane, bandage) only need the body in view. Nothing the camera sees opens an area by itself: it becomes a question.
-2. **Intake.** Name, village, who the visit is for and age, consent to save. Skipped if already said.
-3. **Open.** "What brings you in today?" Then Claude restates it and asks if that is right. A garbled transcript gets "tell me again in other words".
+2. **Open.** "What brings you in today?" is the first question, like a nurse. Claude restates it and asks if that is right. A garbled transcript gets "tell me again in other words". Someone who says they feel fine gets no screening questions at all.
+3. **Intake comes at the end** ("Before we finish, what's your name?", village, who it was for, consent to save), so the complaint is never delayed. Anything already said is not asked again.
 4. **The gate.** Only what the patient SAID opens an area: a trigger symptom in their words ("fever" opens Fever; "my chest hurts" opens Chest), or Jev's reading of the complaint at 50%+ for that area. At most two areas are open at once; everything else stays closed until another symptom they mention matches it. A headache never opens Injury.
 5. **History.** "Since when" always; "what can't you do" only when no area opened; "how strong, 1-10" only when the story is pain (headache, back, chest, injury, stomach).
 6. **Camera hunches** (at most two signs, two questions each): confirm the sign in the patient's words, then its cause. A "no" closes it.

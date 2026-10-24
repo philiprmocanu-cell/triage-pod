@@ -399,7 +399,7 @@ export type TestId = (typeof TESTS)[number]["id"];
 // Before any medical question: who the patient is. Saved only with consent.
 export const INTAKE = {
   // Greeting in both languages: the patient's answer tells the pod which one to continue in.
-  name: { en: "Before we finish, what's your name?", es: "Hola, soy el asistente de salud. ¿Cómo se llama? Hello, what's your name?" },
+  name: { en: "Before we finish, what's your name?", es: "Antes de terminar, ¿cómo se llama?" },
   community: { en: "Where do you live?", es: "¿En qué comunidad o lugar vive?" },
   who: { en: "Is this visit for you or for someone else, like a child? How old are they?", es: "¿La consulta es para usted o para otra persona, como un niño? ¿Qué edad tiene?" },
   consent: {
