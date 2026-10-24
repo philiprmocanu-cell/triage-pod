@@ -403,10 +403,11 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
 
   // No Wi-Fi pod given: the USB pod (nRF52840 + finger sensor) reaches us through the laptop
   // bridge, which posts its readings and button presses to /api/session once a second.
+  const podHasSensor = useRef(false); // a Wi-Fi pod that reports its own finger sensor
   useEffect(() => {
-    if (podUrl) return;
     let alive = true;
     const tick = async () => {
+      if (podHasSensor.current) return; // the pod's own /vitals feed takes over below
       try {
         const s = await (await fetch("/api/session", { cache: "no-store" })).json();
         if (!alive) return;
@@ -431,9 +432,11 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       alive = false;
       clearInterval(id);
     };
-  }, [podUrl]);
+  }, []);
 
-  // Read the Wi-Fi pod head's finger sensor and button once a second; valid readings go into the visit.
+  // A pod address with its own finger sensor (the Wi-Fi head): read it once a second. A camera-only
+  // pod (the Vision AI board over USB, served at localhost:3419) answers {"sensor": false} and is
+  // left to the USB bridge above for vitals.
   useEffect(() => {
     if (!podUrl) return;
     let alive = true;
@@ -441,6 +444,8 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       try {
         const v = await (await fetch(`${podUrl.replace(/\/$/, "")}/vitals`, { cache: "no-store" })).json();
         if (!alive) return;
+        podHasSensor.current = v.sensor !== false;
+        if (!podHasSensor.current) return; // pictures only; vitals come from the USB bridge
         setPodVitals(v);
         const vitals: Record<string, unknown> = { podConnected: true };
         if (v.spo2 > 0 && v.hr > 0) Object.assign(vitals, { spo2: v.spo2, hr: v.hr });
@@ -448,7 +453,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
         if (podPresses.current !== null && v.presses > podPresses.current) buttonRef.current();
         podPresses.current = v.presses;
       } catch {
-        if (alive) setPodVitals(null);
+        podHasSensor.current = false;
       }
     };
     void tick();
