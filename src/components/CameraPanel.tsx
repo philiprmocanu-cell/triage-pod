@@ -22,9 +22,11 @@ export type CameraHandle = {
 
 export type LiveCamera = CameraSignals & { faceVisible: boolean; hrCoverage: number };
 
-type Props = { onSignals: (s: LiveCamera) => void; smileTest: CameraSignals["smileTest"] };
+// `remote`: address of the wireless pod head (e.g. http://triagepod.local); pictures come from its
+// camera over Wi-Fi instead of a webcam plugged into this computer.
+type Props = { onSignals: (s: LiveCamera) => void; smileTest: CameraSignals["smileTest"]; remote?: string };
 
-export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel({ onSignals, smileTest }, ref) {
+export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel({ onSignals, smileTest, remote }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const droop = useRef(new DroopTracker());
@@ -70,8 +72,13 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
 
     (async () => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
         const video = videoRef.current!;
+        if (remote) {
+          setStatus("Connecting to the pod's camera…");
+          stream = await podStream(remote, () => stopped, setStatus);
+        } else {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
+        }
         video.srcObject = stream;
         await video.play();
         setStatus("Loading face model…");
@@ -178,7 +185,7 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
       stream?.getTracks().forEach((t) => t.stop());
       landmarker?.close();
     };
-  }, []);
+  }, [remote]);
 
   return (
     <div className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-black">
@@ -190,3 +197,39 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
     </div>
   );
 });
+
+// Turn the pod head's pictures (base64 JPEGs over Wi-Fi) into a normal video stream, so the face
+// tracking, the live scan and the tests all work exactly as with a webcam.
+async function podStream(base: string, stopped: () => boolean, setStatus: (s: string) => void): Promise<MediaStream> {
+  const url = base.replace(/\/$/, "");
+  const canvas = document.createElement("canvas");
+  canvas.width = 480;
+  canvas.height = 480;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, 480, 480);
+  const img = new Image();
+  let got = false;
+  const pull = async () => {
+    while (!stopped()) {
+      try {
+        const res = await fetch(`${url}/frame`, { cache: "no-store" });
+        if (res.ok) {
+          img.src = `data:image/jpeg;base64,${await res.text()}`;
+          await img.decode();
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          ctx.drawImage(img, 0, 0);
+          if (!got) setStatus("");
+          got = true;
+        }
+        await new Promise((r) => setTimeout(r, 150)); // at most ~6 pictures a second: the pod's chip is small
+      } catch {
+        setStatus(`Can't reach the pod at ${url} — same Wi-Fi? switched on?`);
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+  };
+  void pull();
+  return canvas.captureStream(10);
+}

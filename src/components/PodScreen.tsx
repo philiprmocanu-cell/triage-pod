@@ -46,7 +46,7 @@ const FRAME_EVERY_MS = 1000;
 const FRAME_KEEP = 12;
 const now = () => performance.now() / 1000;
 
-export default function PodScreen({ kiosk = false }: { kiosk?: boolean }) {
+export default function PodScreen({ kiosk = false, podUrl }: { kiosk?: boolean; podUrl?: string }) {
   const [region, setRegion] = useState(REGIONS[0]);
   const [status, setStatus] = useState<Status>("ready");
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -70,6 +70,10 @@ export default function PodScreen({ kiosk = false }: { kiosk?: boolean }) {
   const [level, setLevel] = useState(0);
   const listenAbort = useRef<AbortController | null>(null);
   const hearRef = useRef<() => Promise<void>>(async () => {});
+  // Wireless pod head: its finger sensor and its button.
+  const [podVitals, setPodVitals] = useState<{ finger: boolean; hr: number; spo2: number; presses: number; camera: boolean } | null>(null);
+  const podPresses = useRef<number | null>(null);
+  const buttonRef = useRef<() => void>(() => {});
   const [typed, setTyped] = useState("");
   const [error, setError] = useState("");
   const cam = useRef<CameraHandle>(null);
@@ -312,6 +316,7 @@ export default function PodScreen({ kiosk = false }: { kiosk?: boolean }) {
 
   const reset = () => {
     listenAbort.current?.abort();
+    fetch("/api/session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) }).catch(() => {});
     setTurns([]);
     setResult(null);
     setSeen({});
@@ -375,6 +380,38 @@ export default function PodScreen({ kiosk = false }: { kiosk?: boolean }) {
 
   const busy = ["looking", "transcribing", "thinking", "speaking", "testing"].includes(status);
   const canAnswer = !busy && status !== "done" && status !== "ready";
+
+  // The pod's button does what Space does: start, or talk.
+  buttonRef.current = () => {
+    if (status === "ready") onStart();
+    else if (status === "idle" || status === "listening") onMic();
+  };
+
+  // Read the pod head's finger sensor and button once a second; valid readings go into the visit.
+  useEffect(() => {
+    if (!podUrl) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const v = await (await fetch(`${podUrl.replace(/\/$/, "")}/vitals`, { cache: "no-store" })).json();
+        if (!alive) return;
+        setPodVitals(v);
+        const vitals: Record<string, unknown> = { podConnected: true };
+        if (v.spo2 > 0 && v.hr > 0) Object.assign(vitals, { spo2: v.spo2, hr: v.hr });
+        fetch("/api/session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vitals }) }).catch(() => {});
+        if (podPresses.current !== null && v.presses > podPresses.current) buttonRef.current();
+        podPresses.current = v.presses;
+      } catch {
+        if (alive) setPodVitals(null);
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 1000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [podUrl]);
 
   // Share the live visit with the health worker's screen (/staff).
   useEffect(() => {
@@ -458,8 +495,22 @@ export default function PodScreen({ kiosk = false }: { kiosk?: boolean }) {
           {error && <p className="mt-6 text-lg text-amber-300">{error}</p>}
         </div>
         <div className="absolute bottom-6 right-6 w-72 overflow-hidden rounded-2xl border border-slate-700">
-          <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} />
+          <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} remote={podUrl} />
         </div>
+        {podUrl && (
+          <div className="absolute bottom-10 left-8 rounded-2xl border border-slate-700 bg-slate-900/90 px-5 py-3">
+            {!podVitals ? (
+              <p className="text-sm text-amber-300">Pod sin conexión · Pod offline</p>
+            ) : podVitals.finger ? (
+              <p className="text-2xl font-semibold tabular-nums">
+                {podVitals.spo2 > 0 ? `Oxígeno ${podVitals.spo2}%` : "Midiendo…"}
+                {podVitals.hr > 0 && <span className="ml-4 text-slate-300">Pulso {podVitals.hr}</span>}
+              </p>
+            ) : (
+              <p className="text-sm text-slate-400">Sensor de dedo listo · Finger sensor ready</p>
+            )}
+          </div>
+        )}
         <p className="absolute bottom-3 left-8 text-xs text-slate-600">Button, clicker or Space: start · talk · N: new patient · F: full screen</p>
       </div>
     );
@@ -525,7 +576,7 @@ export default function PodScreen({ kiosk = false }: { kiosk?: boolean }) {
           ))}
           <QuestionCard turns={turns} why={result?.why ?? null} status={status} />
           <div className="relative">
-            <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} />
+            <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} remote={podUrl} />
             {testClock && (
               <div className="absolute inset-x-0 bottom-0 flex items-center justify-between rounded-b-2xl bg-sky-900/90 px-4 py-3">
                 <span className="font-semibold">{testClock.label}</span>

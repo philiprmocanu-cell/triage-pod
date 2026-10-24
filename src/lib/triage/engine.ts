@@ -505,6 +505,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
     // Network advisories from the outbreak sentinel: screen for what is spreading nearby first.
     for (const adv of advisories) if (complaintKnown && !known[ADVISORY_FIRST[adv.kind]]) order.push(ADVISORY_FIRST[adv.kind]);
     if (isChild && open.length) order.push("unable_to_drink", "vomits_everything", "seizure", "very_sleepy");
+    // The pod head's finger sensor: measure oxygen early whenever breathing, chest, fever or a
+    // stroke is being considered and no reading exists yet.
+    if (vitals.podConnected && vitals.spo2 == null && open.some((p) => ["breathing", "cardiac", "fever", "stroke"].includes(p.id))) order.push("test:finger");
     for (const p of open) order.push(...stepsFor(p.id));
     // Nothing in the tree fits (toothache, ear pain...): ask Claude for one sensible nurse
     // follow-up question, up to three times, before falling back to the mood screen.
@@ -710,6 +713,7 @@ const MORE = { en: "Can you tell me more about how you feel and where it hurts?"
 export async function judgeTest(testId: string, frames: Frame[], region: string) {
   const t = TESTS.find((x) => x.id === testId);
   if (!t) throw new Error(`Unknown test ${testId}`);
+  if (!t.checks.length) return { attempted: true, results: {} }; // measured by a sensor, nothing to judge
   const pics = frames.slice(-8);
   const images: Record<string, string> = {};
   const frameState = pics.map((f, i) => {

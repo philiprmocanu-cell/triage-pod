@@ -43,3 +43,6 @@ next-env.d.ts
 
 # patient registry (health data, never commit)
 /data
+
+# pod Wi-Fi credentials
+hardware/pod-firmware/secrets.h

@@ -1,5 +1,46 @@
 # Build a demo pod tonight
 
+## The wireless pod (freestanding, battery, no cable to the laptop)
+
+The pod is the **eyes, finger sensor and button**. The **laptop is the voice and the brain**:
+it speaks the questions, listens, and runs the triage. They talk over Wi-Fi.
+
+| Part (you already have) | Job |
+|---|---|
+| Seeed XIAO ESP32-S3 | Pod computer: Wi-Fi, reads the sensor, serves the pictures |
+| Grove Vision AI V2 + its camera (ribbon cable) | The pod's eyes (480×480 pictures, about 1–3 a second) |
+| SparkFun MAX30101 (red board) + Qwiic cable | Finger sensor: oxygen + pulse |
+| XIAO's BOOT button | "Talk" button (or Space / a clicker on the laptop) |
+
+| Buy | ~Price | Why |
+|---|---|---|
+| Small USB power bank (5,000 mAh) + short USB-C cable | $15–25 | Powers everything for hours; no soldering, safer than wiring the bare LiPo tonight |
+| Phone hotspot (you have) | $0 | Venue Wi-Fi often blocks devices from talking to each other |
+
+**Wiring**
+1. XIAO on the Vision AI V2 board, like before (the camera talks to the XIAO on pins D6/D7).
+2. Camera ribbon into the Vision AI V2.
+3. Red sensor → XIAO with the Qwiic cable: red/3V3, black/GND, blue/SDA = D4, yellow/SCL = D5.
+4. Power bank → XIAO USB-C. Tape it all inside the box: camera at eye level, sensor on the front ledge
+   with a sign "Ponga su dedo aquí".
+
+**Software (one time)**
+1. Put your hotspot name + password in `hardware/pod-firmware/secrets.h`.
+2. Plug the XIAO into the laptop once and flash it (Claude can do this):
+   `arduino-cli upload -p /dev/cu.usbmodemXXXX -b esp32:esp32:XIAO_ESP32S3:PSRAM=opi hardware/pod-firmware`
+   (compile first with `arduino-cli compile -b esp32:esp32:XIAO_ESP32S3:PSRAM=opi hardware/pod-firmware`).
+3. Unplug, connect the power bank. Laptop on the same hotspot.
+4. Check `http://triagepod.local/vitals` in Chrome on the laptop: it should show `"camera": true`.
+5. Open `http://localhost:3417/kiosk?pod=triagepod.local` (press F for full screen) and
+   `http://localhost:3417/staff` in a second window.
+
+Power-on tip: keep fingers off the sensor for the first second (it measures open air as its zero).
+The oxygen number is a hobby-sensor estimate, not a medical reading — keep a $25 drugstore
+oximeter beside it to show they agree.
+
+---
+
+
 Two screens: the **pod screen** faces the patient (`/kiosk`: questions only, no diagnoses) and the
 **health-worker screen** (`/staff`: live diagnosis, decision path, vitals entry). Everything else
 (`/agents`, `/dashboard`, `/deploy`) is for the judges.

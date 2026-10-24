@@ -2,7 +2,7 @@
 // screen (/staff). One pod per server is enough for a demo; vitals typed by the health worker
 // flow into the next triage step.
 
-export type Vitals = { spo2?: number; tempC?: number; sys?: number; dia?: number; glucose?: number; at?: number };
+export type Vitals = { spo2?: number; hr?: number; tempC?: number; sys?: number; dia?: number; glucose?: number; podConnected?: boolean; at?: number };
 type Session = { state: unknown; vitals: Vitals; updatedAt: number };
 
 const g = globalThis as unknown as { __session?: Session };

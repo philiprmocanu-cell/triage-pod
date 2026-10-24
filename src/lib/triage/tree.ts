@@ -283,6 +283,14 @@ export type Test = {
 
 export const TESTS: Test[] = [
   {
+    id: "finger",
+    label: "Oxygen + pulse (finger sensor)",
+    say: { en: "Please rest your index finger on the red sensor and keep still for fifteen seconds.", es: "Por favor, ponga su dedo índice sobre el sensor rojo y no lo mueva por quince segundos." },
+    prep: 1,
+    seconds: 15,
+    checks: [], // measured by the pod's sensor, not judged from pictures
+  },
+  {
     id: "smile",
     label: "Smile test",
     say: { en: "Please give me a big smile, showing your teeth.", es: "Por favor, sonría grande, enseñando los dientes." },
