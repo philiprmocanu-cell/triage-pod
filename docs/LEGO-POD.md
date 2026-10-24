@@ -66,7 +66,11 @@ The pod gets its eyes back: the **spare Grove Vision AI V2** with the ribbon cam
 
 With the XIAO seated, the breadboard is not needed. The sensor reaches the XIAO's D4/D5 through the vision board's white **Grove port** on its back: plug the Grove cable from the vision board's box into it, cut the other plug off, twist its four wires to the DRV's four wires colour to colour (red–red, black–black, white–white, yellow–yellow), tape each twist. Before power, one meter check: Grove white pin to the XIAO's D4 pin top beeps; Grove red pin to the XIAO's 3V3 pin top beeps. (The pages for this build are not drawn yet; the breadboard booklet still shows the finger side correctly: same four wires, same four XIAO pins.)
 
-Run, before the demo, two terminals:
+Run, before the demo, three terminals (leave all three running):
+
+```bash
+spacetime start
+```
 
 ```bash
 python3 hardware/pod-camera-bridge.py
@@ -76,19 +80,13 @@ python3 hardware/pod-camera-bridge.py
 python3 hardware/pod-serial-bridge.py
 ```
 
-Kiosk: `http://localhost:3418/kiosk?village=Katete&pod=localhost:3419` (the software side confirms the exact address).
+Patient screen (Chrome): `http://localhost:3418/kiosk?village=Katete&pod=localhost:3419` (press F for full screen). Staff screen in a second window: `http://localhost:3418/staff`. The kiosk takes the pictures from the camera bridge and the oxygen/pulse/finger/Talk from the serial bridge.
 
 ## Program, bridge, test
 
 1. USB-C cable from the laptop into the XIAO. Claude loads the program (`hardware/pod-nrf-firmware`, board Seeeduino:nrf52:xiaonRF52840Sense). The program prints one line a second: `{"finger":true,"hr":72,"spo2":98,"presses":0,"sensor":true}`.
-2. In a terminal, before the demo and kept running:
-
-```bash
-python3 hardware/pod-serial-bridge.py
-```
-
-   It finds the pod on USB, posts a reading to the app every second, and prints one line a second (`finger=yes hr=72 spo2=98 presses=0 -> 200`). If it says pyserial is missing: `pip3 install pyserial`.
-3. Chrome: `http://localhost:3418/kiosk?village=Katete`. Finger flat on the dark window for 10 seconds: the kiosk shows oxygen and pulse.
+2. The three terminals from the Camera section above (`spacetime start`, camera bridge, serial bridge). The serial bridge finds the XIAO on USB, posts a reading to the app every second, and prints one line a second (`finger=yes hr=72 spo2=98 presses=0 -> 200`). If it says pyserial is missing: `pip3 install pyserial`.
+3. Chrome: `http://localhost:3418/kiosk?village=Katete&pod=localhost:3419`. Finger flat on the dark window for 10 seconds: the kiosk shows oxygen and pulse.
 
 ## Case
 

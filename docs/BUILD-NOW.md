@@ -10,7 +10,7 @@ Read first, from the Cal Hacks 13.0 Hacker Guide (your Google Doc):
 
 ## The plan in one line
 
-**The finger unit is the watch, rebuilt at your table, no soldering.** The watch's XIAO nRF52840 Sense goes on a breadboard, the red MAX30101 sensor plugs in with a Qwiic-to-pins cable (GND, 3V3, D4, D5), a USB cable to the laptop carries power and the numbers. No camera on the pod: the laptop webcam looks at the patient. A small bridge program on the laptop (`python3 hardware/pod-serial-bridge.py`) feeds the app. Full steps in `docs/LEGO-POD.md`. The old Zoron camera pod and its soldered work stay untouched.
+**The pod is the spare vision board with the watch's XIAO in its back, built at your table, no soldering.** The spare Grove Vision AI V2 with its ribbon camera gives the pictures over its own USB cable; the watch's XIAO nRF52840 Sense plugs into the vision board's back sockets and reads the red MAX30101 sensor (wired through the vision board's Grove port to the DRV board's four wires), sending the numbers over its own USB cable. Two bridge programs on the laptop feed the app. Full steps in `docs/LEGO-POD.md`. The old Zoron camera pod and its soldered work stay untouched.
 
 The pod program (`hardware/pod-nrf-firmware`) is written and compiles. It is **not loaded yet**: that happens the moment the XIAO is plugged into the laptop.
 
@@ -37,7 +37,7 @@ Already on the desk and needed: the watch's XIAO nRF52840 Sense (DRV wires cut o
 2. **Load the pod** (Claude does it, 2 min): plug the XIAO into the laptop with the data cable and say so. No hotspot needed: the pod talks over the cable.
 3. **Print** the three case parts at the station (section 3). Queue the faceplate first.
 4. **Mount:** camera lens through the faceplate hole at eye level; the sensor shelf's tongue through the faceplate slot, red board in the shelf window-up; battery and charger in the base. Tape, don't glue.
-5. **Run:** in a terminal `python3 hardware/pod-serial-bridge.py` (keep it running), then Chrome `http://localhost:3418/kiosk?village=Katete` (press F for full screen) and `http://localhost:3418/staff` in a second window.
+5. **Run:** three terminals, all kept running: `spacetime start`, `python3 hardware/pod-camera-bridge.py`, `python3 hardware/pod-serial-bridge.py`. Then Chrome `http://localhost:3418/kiosk?village=Katete&pod=localhost:3419` (press F for full screen) and `http://localhost:3418/staff` in a second window.
 
 ## 3. What to 3D print (venue station, 3.5 h per print, free PLA)
 
@@ -54,14 +54,14 @@ If the queue is long, print only the shelf and the faceplate and use a cardboard
 ## 4. What is still software (Claude's list, no parts)
 
 - Load `pod-nrf-firmware` onto the XIAO nRF52840 (needs the XIAO plugged into the laptop).
-- Run `python3 hardware/pod-serial-bridge.py` in a terminal before the demo.
+- Before the demo, three terminals: `spacetime start`, `python3 hardware/pod-camera-bridge.py`, `python3 hardware/pod-serial-bridge.py`.
 - Everything the judges hear and see is the laptop app (`src/`, another session's job).
 
 ## 5. If it goes wrong on stage
 
 | Problem | Do this |
 |---|---|
-| Camera not found | The kiosk uses the laptop webcam; allow camera access in Chrome |
+| Camera not found | Is the camera bridge terminal printing `pictures N camera yes`? If `camera NO`: reseat the ribbon (latch down, contacts toward the gold fingers), replug the vision board's USB. Last resort: open the kiosk without `&pod=` and the laptop webcam takes over |
 | Sensor reads nothing | Is the bridge terminal still running and printing? If not, restart it. Else clip the drugstore oximeter on, type the number into `/staff` |
 | USB cable flaky | Swap the cable (data cable, not charge-only); the bridge reconnects by itself |
 | Print not done | Cardboard box with a cut-out at eye level; tape the red sensor window-up to the front at chest height |
