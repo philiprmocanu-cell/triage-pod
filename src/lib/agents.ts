@@ -49,8 +49,8 @@ const ADVISORY_RADIUS_KM = 45;
 const ADVISORY_MS = 3 * 60_000; // demo time: about 3 hours of network time at 60x
 
 const g = globalThis as unknown as { __agents?: AgentState };
-const st = (): AgentState =>
-  (g.__agents ??= {
+const st = (): AgentState => {
+  const s = (g.__agents ??= {
     bus: [],
     seq: 0,
     seenVisits: new Set(),
@@ -63,6 +63,12 @@ const st = (): AgentState =>
     doctorTurn: 0,
     lastShortageNote: 0,
   });
+  // State survives code reloads; fill in any field added since it was created.
+  s.seenProposals ??= new Map();
+  s.seenFlights ??= new Map();
+  s.seenAlerts ??= new Set();
+  return s;
+};
 
 const post = (id: string) => POSTS.find((p) => p.id === id);
 const name = (id: string) => post(id)?.name.replace(/ \(.*\)$/, "") ?? id;
@@ -146,9 +152,10 @@ export function runAgents(ctx: {
     const near = POSTS.filter((p) => km(a.post, p.id) <= ADVISORY_RADIUS_KM).map((p) => p.id);
     send({ from: "Outbreak sentinel", to: "all pods", kind: "alert", text: `${a.text}. Likely ${kind}. Putting ${near.length} nearby posts on watch.` });
     for (const p of near) {
+      const already = s.advisories.some((x) => x.post === p && x.kind === kind && x.until > now);
       s.advisories = s.advisories.filter((x) => !(x.post === p && x.kind === kind));
       s.advisories.push({ post: p, kind, text: ADVICE[kind], until: now + ADVISORY_MS, source: name(a.post) });
-      send({ from: "Outbreak sentinel", to: p, kind: "advisory", text: ADVICE[kind] });
+      if (!already) send({ from: "Outbreak sentinel", to: p, kind: "advisory", text: ADVICE[kind] }); // tell each pod once
     }
   }
   s.advisories = s.advisories.filter((x) => x.until > now);

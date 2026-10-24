@@ -94,3 +94,16 @@ export function coordinatorBriefing(state: Record<string, unknown>): Promise<str
     JSON.stringify(state),
   );
 }
+
+// Reflective listening: say back what the patient told us, so a speech-to-text slip ("tóxica
+// lentura" for "tos y calentura") is caught before the pod reasons on it.
+export async function confirmComplaint(input: { said: string; language: string; locale: string }): Promise<{ text: string; english: string } | "UNCLEAR"> {
+  const out = await ask(
+    `You are the triage nurse voice of a health pod (${input.locale}). The speech-to-text heard the patient describe why they came. If it makes sense, restate it briefly and warmly in the patient's language and regional Spanish if Spanish, then ask if that is right (e.g. "Entiendo que tiene tos y calentura desde hace cuatro días, ¿es así?"). Under 25 words. If the words look garbled, nonsensical or mis-heard, reply only UNCLEAR. Otherwise reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
+    input.said,
+  );
+  if (/^\s*UNCLEAR/i.test(out)) return "UNCLEAR";
+  const text = out.match(/PATIENT:\s*(.+)/i)?.[1]?.trim();
+  const english = out.match(/ENGLISH:\s*(.+)/i)?.[1]?.trim();
+  return text ? { text, english: english ?? text } : "UNCLEAR";
+}

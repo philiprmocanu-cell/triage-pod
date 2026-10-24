@@ -385,6 +385,8 @@ export const OPENING: Text = {
 
 // After the main complaint, a nurse's history questions, before any narrowing down.
 export const HISTORY = {
+  // Text comes from Claude's paraphrase of what the patient said; this is the fallback.
+  confirm: { en: "Let me check I understood you correctly. Is that right?", es: "Déjeme ver si le entendí bien. ¿Es así?" },
   onset: { en: "Since when have you felt like this?", es: "¿Desde cuándo se siente así?" },
   impact: { en: "How is this affecting your day? Is there anything you can't do because of it?", es: "¿Cómo le está afectando en su día? ¿Hay algo que no pueda hacer por esto?" },
   severity: { en: "From 1 to 10, how strong is it right now?", es: "Del 1 al 10, ¿qué tan fuerte es ahorita?" },

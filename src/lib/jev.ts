@@ -44,8 +44,8 @@ export async function jev(
       body: JSON.stringify(body),
     });
     if (res.ok) return (await res.json()).answers;
-    if ((res.status === 429 || res.status === 529) && attempt < 3) {
-      await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
+    if ((res.status === 429 || res.status === 529 || res.status >= 500) && attempt < 4) {
+      await new Promise((r) => setTimeout(r, 300 * 2 ** attempt)); // 0.3, 0.6, 1.2, 2.4 s
       continue;
     }
     throw new Error(`Jev ${res.status}: ${(await res.text()).slice(0, 300)}`);

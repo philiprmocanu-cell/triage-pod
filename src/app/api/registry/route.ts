@@ -46,7 +46,7 @@ export async function POST(req: Request) {
   };
   await updateVisit(record.id, patch);
   await rememberWords(patch.community ?? intake.community, result.lexicon ?? {}); // the community's words, for next time
-  await snapshot(); // the pod reports this patient to the network agents right away
+  await snapshot().catch((e) => console.error("network refresh after visit failed", e)); // report this patient to the network agents
   return NextResponse.json({ ...record, ...patch });
 }
 

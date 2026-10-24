@@ -309,7 +309,11 @@ export async function snapshot() {
   }
 
   // Let the agents react to what changed: new patients, alerts, shortages, flights.
-  runAgents({ now, visits, alerts, flights: s.flights, shortages: shortages.map((x) => ({ post: x.post, label: SKUS.find((k) => k.id === x.sku)!.label, hoursLeft: x.hoursLeft })) });
+  try {
+    runAgents({ now, visits, alerts, flights: s.flights, shortages: shortages.map((x) => ({ post: x.post, label: SKUS.find((k) => k.id === x.sku)!.label, hoursLeft: x.hoursLeft })) });
+  } catch (err) {
+    console.error("agents failed (network keeps running)", err); // never let the agents take down the dashboard or saving a visit
+  }
 
   const last24 = now - (24 * 3600_000) / SIM_SPEED;
   return {

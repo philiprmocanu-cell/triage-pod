@@ -10,7 +10,7 @@
 import { jev, JevQuestion, noulOf, probsOf } from "../jev";
 import { advisoriesFor } from "../agents";
 import { postFor } from "../network";
-import { followUpQuestion, replyToPatient } from "./brain";
+import { confirmComplaint, followUpQuestion, replyToPatient } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { NOTICED, TRAITS, TraitScan } from "./traits";
 import { maxUrgency, runRules } from "./rules";
@@ -242,6 +242,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
     q.repeat_request = { type: "noul", instructions: `${ctx} Is the patient asking the pod to repeat, or saying they did not hear or understand?` };
     q.answered_last = { type: "noul", instructions: `${ctx} Does the patient's reply actually answer what the pod asked or said (any clear answer counts, including yes, no, or "I don't know")?` };
   }
+  if (patientText && lastPod?.asks === "history:confirm") {
+    q.confirm_wrong = { type: "noul", instructions: `The pod restated the problem as: "${lastPod.text}". The patient replied: "${patientText}". Did the patient say the pod understood wrong, or correct it?` };
+  }
   if (intake.consent) {
     q.consent = { type: "noul", instructions: "In `consent_answer`, did the person agree to have their name and health needs saved?" };
   }
@@ -413,6 +416,13 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const emergencySeen = EMERGENCY_SEEN.some((k) => (seen[k] ?? 0) >= YES);
   const intakeOpen = !redRule && !emergencySeen && !asked.has("open");
   const medicalSteps = input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && !t.asks.startsWith("history:") && t.asks !== "open").length;
+  // Confirmation: after each telling of the complaint, say it back once; a "no" means tell it again.
+  const lastOpen = input.turns.map((t) => t.asks).lastIndexOf("open");
+  const answeredOpenNow = Boolean(patientText) && lastPod?.asks === "open";
+  const confirmAfterOpen = lastOpen >= 0 && input.turns.slice(lastOpen + 1).some((t) => t.asks === "history:confirm");
+  const needConfirm = complaintKnown && answeredOpenNow && !confirmAfterOpen;
+  const confirmedWrong = lastPod?.asks === "history:confirm" && noulOf(a.confirm_wrong) >= 0.6;
+  const retells = input.turns.filter((t) => t.role === "pod" && t.asks === "open").length - 1;
   for (const f of ["onset", "impact"] as HistoryField[]) if (noulOf(a[`already_h_${f}`]) >= 0.8) asked.add(`history:${f}`);
   const testDone = (id: string) => id in input.tests || asked.has(`test:${id}`);
   const moodish = (["low_mood", "little_interest", "anxious", "trauma_or_loss", "lonely"] as FindingKey[]).some((k) => yes[k] >= YES);
@@ -469,6 +479,18 @@ export async function step(input: StepInput): Promise<TriageResult> {
         test: { id: def.id, label: def.label, seconds: def.seconds, prep: def.prep },
       };
     }
+  } else if (!redRule && needConfirm) {
+    // Say back what we heard before reasoning on it.
+    const said = patientText ?? [...input.turns].reverse().find((t) => t.role === "patient")?.text ?? "";
+    let c: Awaited<ReturnType<typeof confirmComplaint>> = "UNCLEAR";
+    try {
+      c = await confirmComplaint({ said, language, locale: topKey(probsOf(a.locale)) ?? input.defaultLocale });
+    } catch {
+      c = { text: `${language === "es" ? "Entendí" : "I heard"}: "${said}". ${HISTORY.confirm[language]}`, english: `I heard: "${said}". Is that right?` };
+    }
+    next = c === "UNCLEAR" ? say("open", RETELL) : { asks: "history:confirm", text: c.text, english: c.english };
+  } else if (!redRule && confirmedWrong && retells < 2) {
+    next = say("open", RETELL);
   } else if (!redRule && (["onset", "impact", "severity"] as HistoryField[]).some((f) => !asked.has(`history:${f}`))) {
     const f = (["onset", "impact", "severity"] as HistoryField[]).find((x) => !asked.has(`history:${x}`))!;
     next = say(`history:${f}`, HISTORY[f]);
@@ -593,6 +615,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
         ? "Getting to know the patient first: no assumptions yet"
         : next.asks === "free"
           ? "Following up on what the patient described"
+        : next.asks === "history:confirm"
+          ? "Checking it heard the patient right before reasoning on it"
         : next.asks?.startsWith("history:")
           ? "Understanding the problem before narrowing anything down"
           : next.english.startsWith("[hunch:")
@@ -667,6 +691,7 @@ const CONFIDENT = 0.7;
 
 const HELP_NOW = { en: "We are calling for help now. While it comes, let's do a few quick checks.", es: "Ya estamos pidiendo ayuda. Mientras llega, hagamos unas pruebas rápidas." };
 const SPEECH_AGAIN = { en: "This is just a quick speech check: please say these exact words back to me:", es: "Es solo una prueba rápida del habla: por favor repita exactamente estas palabras:" };
+const RETELL = { en: "Sorry, I didn't catch that well. Could you tell me again, in other words, what is bothering you?", es: "Perdón, no le entendí bien. ¿Me puede contar otra vez, con otras palabras, qué es lo que más le molesta?" };
 const SORRY = { en: "Sorry, I didn't quite understand.", es: "Perdón, no le entendí bien." };
 const CLARO = { en: "Of course.", es: "Claro." };
 const HELP_COMING = { en: "Good question. The health worker and the doctor will explain everything to you.", es: "Buena pregunta. El promotor de salud y el doctor le van a explicar todo." };
