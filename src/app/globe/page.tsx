@@ -95,7 +95,7 @@ export default function GlobePage() {
       // Fly in from space to a view that still shows the curve of the planet and the whole
       // province. (Any closer and the scroll wheel barely zooms: globe.gl scales the zoom step
       // with the distance to the ground.)
-      setTimeout(() => g.pointOfView({ lat: -13.2, lng: 33.3, altitude: 0.38 }, 4200), 700);
+      setTimeout(() => g.pointOfView({ lat: -13.1, lng: 32.7, altitude: 0.2 }, 4200), 700);
       g.controls().autoRotate = false;
       g.controls().zoomSpeed = 1.2;
       globeRef.current = g;
@@ -130,6 +130,8 @@ export default function GlobePage() {
             movers.current.set(key, m);
           }
         }
+        const far = (g.pointOfView()?.altitude ?? 1) > 0.16; // ETA tags only once you zoom in
+        el.current?.classList.toggle("far", far);
         g.htmlElementsData([...villageMarkers.current, ...pops.current, ...movers.current.values()]);
       };
       loop();
@@ -376,6 +378,9 @@ const CSS = `
 @keyframes floatup{0%{opacity:0;margin-top:-10px;scale:.6}12%{opacity:1;margin-top:-34px;scale:1.1}20%{scale:1}75%{opacity:1}100%{opacity:0;margin-top:-80px}}
 .mover{transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px}
 .mover .ic{font-size:20px;filter:drop-shadow(0 0 6px rgba(56,189,248,.9))}
+.far .mover .eta{display:none}
+.far .village .name{font-size:9px;padding:1px 4px}
+.far .village .pin{font-size:14px}
 .mover .eta{font:600 10px/1 ui-monospace,Menlo,monospace;color:#e0f2fe;background:rgba(2,6,23,.8);border:1px solid rgba(56,189,248,.5);padding:2px 5px;border-radius:999px;white-space:nowrap}
 @keyframes feedin{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
 `;
