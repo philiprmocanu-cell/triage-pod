@@ -21,9 +21,9 @@ const TABS = [
 
 export default function Nav() {
   const path = usePathname();
-  if (path.startsWith("/kiosk")) return null;
+  const kiosk = path.startsWith("/kiosk"); // patient screen: keep the tabs, but fade them until the mouse comes near
   return (
-    <nav className="sticky top-0 z-40 flex items-center gap-1 overflow-x-auto border-b border-slate-800/80 bg-[#060b14]/90 px-3 py-1.5 text-xs backdrop-blur">
+    <nav className={`sticky top-0 z-40 flex items-center gap-1 overflow-x-auto border-b border-slate-800/80 bg-[#060b14]/90 px-3 py-1.5 text-xs backdrop-blur transition-opacity ${kiosk ? "opacity-30 hover:opacity-100" : ""}`}>
       <Link href="/" className="mr-2 whitespace-nowrap font-mono text-[11px] uppercase tracking-[0.25em] text-sky-300">
         Triage Pod
       </Link>

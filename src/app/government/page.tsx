@@ -29,6 +29,7 @@ const SHORT: Record<string, string> = {
 type Village = { id: number; name: string; population: number; hub: boolean };
 type Row = { village: Village; cells: Record<string, { have: number; used: number; incoming: number; min: number }>; patients: number; red: number };
 type LogLine = { id: bigint; agent: string; villageId: number; text: string; at: number };
+type SkyPost = { id: string; name: string; rain30Mm: number; wettestDayMm: number; meanTempC: number; malariaRisk: "low" | "medium" | "high"; floodRisk: boolean };
 
 export default function GovernmentPage() {
   const connRef = useRef<DbConnection | null>(null);
@@ -41,6 +42,10 @@ export default function GovernmentPage() {
   const [briefingBusy, setBriefingBusy] = useState(false);
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
   const [pickItem, setPickItem] = useState<string | null>(null);
+  const [sky, setSky] = useState<{ posts: SkyPost[]; source: string } | null>(null);
+  useEffect(() => {
+    fetch("/api/satellite").then((r) => r.json()).then(setSky).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const refresh = (c: DbConnection) => {
@@ -238,6 +243,35 @@ export default function GovernmentPage() {
               </button>
             </div>
             <p className="mt-3 text-sm leading-relaxed text-slate-200">{briefing ?? "One paragraph: where the province stands, what the agents did, and the one decision you need to make today."}</p>
+          </section>
+          <section className="rounded-2xl border border-sky-900/70 bg-sky-950/20 p-4">
+            <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-sky-300">Satellite · last 30 days</p>
+            <p className="mt-1 text-[11px] text-slate-400">{sky?.source ?? "NASA POWER: satellite-derived rain (GPM) and temperature (MERRA-2) for every post. Rain + warm nights now = malaria in 2–6 weeks; a 40 mm day cuts roads."}</p>
+            {sky?.posts?.length ? (
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wider text-slate-500">
+                      <th className="py-1 text-left">post</th><th className="text-right">rain 30d</th><th className="text-right">worst day</th><th className="text-right">temp</th><th className="text-right">malaria</th><th className="text-right">roads</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sky.posts.map((p) => (
+                      <tr key={p.id} className="border-t border-slate-800/60">
+                        <td className="py-1">{p.name.replace(/ \(.*\)$/, "")}</td>
+                        <td className="text-right tabular-nums">{p.rain30Mm} mm</td>
+                        <td className="text-right tabular-nums">{p.wettestDayMm} mm</td>
+                        <td className="text-right tabular-nums">{p.meanTempC}°</td>
+                        <td className={`text-right ${p.malariaRisk === "high" ? "text-red-300" : p.malariaRisk === "medium" ? "text-amber-300" : "text-emerald-300"}`}>{p.malariaRisk}</td>
+                        <td className={`text-right ${p.floodRisk ? "text-amber-300" : "text-slate-400"}`}>{p.floodRisk ? "flood risk" : "clear"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-slate-500">{sky ? "No satellite data right now." : "Loading satellite data…"}</p>
+            )}
           </section>
           <section className="hud flex min-h-[28rem] flex-1 flex-col p-4">
             <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.25em] text-sky-300/90">

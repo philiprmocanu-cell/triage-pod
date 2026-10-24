@@ -63,7 +63,7 @@ export const TRAITS: Trait[] = [
   { id: "anxious", group: "Mood & energy", label: "Anxious or frightened", look: "Does the person look anxious, frightened or tense?", hint: "mental", ask: "anxious" },
   { id: "flat", group: "Mood & energy", label: "Flat, no expression", look: "Is the face strikingly blank and lifeless across all the pictures (dull eyes, no movement at all), well beyond an ordinary calm, neutral or concentrating face?", hint: "mental" },
   { id: "agitated", group: "Mood & energy", label: "Agitated", look: "Does the person look agitated or angry?" },
-  { id: "exhausted", group: "Mood & energy", label: "Exhausted", look: "Does the person look clearly exhausted (heavy eyelids, slumping), not just calm?" },
+  { id: "exhausted", group: "Mood & energy", label: "Exhausted", look: "Does the person look clearly exhausted (heavy eyelids, slumping), not just calm?", ask: "tired" },
   { id: "drowsy", group: "Mood & energy", label: "Drowsy or limp", look: "Does the person look very drowsy, limp, or unable to keep their eyes open?", finding: "very_sleepy" },
   // Nutrition and hydration
   { id: "very_thin", group: "Nutrition", label: "Very thin / wasted", look: "Does the person look severely underweight or wasted?", finding: "very_thin" },

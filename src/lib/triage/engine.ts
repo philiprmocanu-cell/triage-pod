@@ -474,7 +474,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // ---- Next step ----
   const say = (asks: Step | null, t: { en: string; es: string }): TriageResult["next"] => ({ asks, text: t[language], english: t.en });
   const emergencySeen = EMERGENCY_SEEN.some((k) => (seen[k] ?? 0) >= YES);
-  const intakeOpen = !redRule && !emergencySeen && !asked.has("open");
+  // Like a nurse: the complaint comes first; name, village and consent are taken at the end.
+  const intakeLater = !redRule && complaintKnown && INTAKE_FIELDS.some((f) => !asked.has(`intake:${f}`));
   const podTurns = input.turns.filter((t) => t.role === "pod").length;
   const outOfTime = podTurns >= MAX_POD_TURNS; // the visit ends no matter what
   const medicalSteps = outOfTime ? MAX_STEPS : input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && !t.asks.startsWith("history:") && t.asks !== "open").length;
@@ -547,10 +548,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   if (wrappingUp) {
     next = null;
   } else if (input.stage === "look") {
-    next = intakeOpen ? say("intake:name", INTAKE.name) : seenOpener() ?? say("open", OPENING);
-  } else if (intakeOpen && INTAKE_FIELDS.some((f) => !asked.has(`intake:${f}`))) {
-    const f = INTAKE_FIELDS.find((x) => !asked.has(`intake:${x}`))!;
-    next = say(`intake:${f}`, INTAKE[f]);
+    next = seenOpener() ?? say("open", OPENING);
   } else if (!asked.has("open") && !redRule) {
     next = seenOpener() ?? say("open", OPENING);
   } else if (strokeRed && medicalSteps < MAX_STEPS) {
@@ -623,7 +621,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         /* fall through to the screen below */
       }
     }
-    if (!open.length) order.push("low_mood"); // nothing physical found: one mood question; a "yes" opens the mental-health area
+    if (!open.length && !feelsWell) order.push("low_mood"); // nothing physical found: one mood question; a "yes" opens the mental-health area
     else if (age === "older_adult") order.push("lonely"); // older adults are the loneliest group: always ask
     const pick = next ? undefined : order.find((s) => {
       if (s.startsWith("test:")) {
@@ -646,6 +644,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
     }
   }
   if (!next && input.stage === "answer" && !redRule && complaintKnown && !asked.has("history:else") && !outOfTime) next = say("history:else", HISTORY.else);
+  // Intake at the end: name, village, who it was for (if still unclear), consent to save.
+  if (!next && input.stage === "answer" && intakeLater) {
+    const f = INTAKE_FIELDS.find((x) => !asked.has(`intake:${x}`))!;
+    next = say(`intake:${f}`, INTAKE[f]);
+  }
   // Every adult who consented is invited to volunteer for others in their village, once, at the end.
   if (!next && input.stage === "answer" && !redRule && complaintKnown && !asked.has("volunteer") && !isChild && (intake.consent ?? "") !== "" && !facts.self_harm_thoughts) next = say("volunteer", FINDINGS.volunteer.ask);
   const done = input.stage === "answer" && !next;

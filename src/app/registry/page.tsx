@@ -1,4 +1,5 @@
 import Link from "next/link";
+import PeopleList from "@/components/PeopleList";
 import { needsByCommunity, peerGroups, readRegistry } from "@/lib/registry";
 
 export const dynamic = "force-dynamic";
@@ -97,6 +98,7 @@ export default async function RegistryPage() {
             {groups.size === 0 && <p className="text-sm text-slate-400">No one has asked to join a group yet.</p>}
           </section>
         </div>
+      <PeopleList />
       </div>
     </div>
   );

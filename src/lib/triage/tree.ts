@@ -65,6 +65,7 @@ export const FINDINGS = {
     ask: { en: "Have you had many mosquito bites lately, or do you sleep without a mosquito net?", es: "¿Le han picado muchos zancudos últimamente, o duerme sin mosquitero?" },
     seen: "Are there visible insect bite marks (small red bumps) on the person's skin?",
   },
+  tired: { label: "Very tired or weak lately", ask: { en: "Have you been feeling very tired or weak lately, more than usual?", es: "¿Se ha sentido muy cansado o débil últimamente, más de lo normal?" } },
   belly_pain: { label: "Belly pain", ask: { en: "Do you have pain in your belly?", es: "¿Le duele la panza?" } },
   stiff_neck: { label: "Stiff neck", ask: { en: "Does it hurt to bend your neck forward?", es: "¿Le duele al doblar el cuello hacia adelante?" } },
   rash: { label: "Rash or spots", ask: { en: "Is there a rash or red spots on the skin?", es: "¿Tiene ronchas o manchas rojas en la piel?" }, seen: "Is there a visible rash or many red spots on the person's skin?" },
@@ -398,7 +399,7 @@ export type TestId = (typeof TESTS)[number]["id"];
 // Before any medical question: who the patient is. Saved only with consent.
 export const INTAKE = {
   // Greeting in both languages: the patient's answer tells the pod which one to continue in.
-  name: { en: "Hello, I'm the health pod. What's your name?", es: "Hola, soy el asistente de salud. ¿Cómo se llama? Hello, what's your name?" },
+  name: { en: "Before we finish, what's your name?", es: "Hola, soy el asistente de salud. ¿Cómo se llama? Hello, what's your name?" },
   community: { en: "Where do you live?", es: "¿En qué comunidad o lugar vive?" },
   who: { en: "Is this visit for you or for someone else, like a child? How old are they?", es: "¿La consulta es para usted o para otra persona, como un niño? ¿Qué edad tiene?" },
   consent: {
