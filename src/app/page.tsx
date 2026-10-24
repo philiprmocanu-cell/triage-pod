@@ -5,6 +5,7 @@ import Link from "next/link";
 
 const SCREENS = [
   { href: "/kiosk?village=Katete", title: "Patient pod", what: "Camera + voice triage in the patient's language. Asks history first, confirms what the camera noticed, orders exactly what the patient needs.", tag: "pod", icon: "🩺" },
+  { href: "/pod?village=Katete", title: "Pod, operator view", what: "The same visit with the camera, conversation, a typed-answer box for loud rooms, region and accent settings, and the result panel beside it.", tag: "pod", icon: "🎛️" },
   { href: "/staff", title: "Health worker screen", what: "Live mirror of the visit: decision path, confident conditions only, the exact order placed, vitals entry (oxygen, temperature, BP).", tag: "pod", icon: "🧑‍⚕️" },
   { href: "/globe", title: "Live 3D map", what: "Satellite globe of Eastern Province. Every flagged need pops over its village; drones and trucks fly at real speed to the patient's home.", tag: "network", icon: "🌍" },
   { href: "/government", title: "Government view", what: "Provincial Health Office: every post × every item, what pods used, what the AI agents moved and why, and a Claude briefing ending in one decision.", tag: "network", icon: "🏛️" },

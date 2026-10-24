@@ -6,7 +6,8 @@ import { usePathname } from "next/navigation";
 // One row of tabs on every screen except the patient-facing kiosk (which stays full screen).
 const TABS = [
   { href: "/demo", label: "Demo", tone: "text-amber-300" },
-  { href: "/kiosk?village=Katete", label: "Pod", match: "/kiosk" },
+  { href: "/kiosk?village=Katete", label: "Pod (patient)", match: "/kiosk" },
+  { href: "/pod?village=Katete", label: "Pod (operator)", match: "/pod" },
   { href: "/staff", label: "Health worker" },
   { href: "/globe", label: "Live map" },
   { href: "/government", label: "Government" },

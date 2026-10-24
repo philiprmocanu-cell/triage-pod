@@ -622,7 +622,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
     } catch {
       reply = HELP_COMING[language];
     }
-    next = { ...next, text: `${reply} ${next.text}`, english: `[answering the patient] ${next.english}` };
+    // Answer, then come back to the question they side-stepped (a danger-sign question must not
+    // silently count as "no"). If they answered it too, carry on with the next one.
+    const deflected = noulOf(a.answered_last) < 0.3 && lastAsked && !lastAsked.startsWith("test:") ? textFor(lastAsked) : null;
+    if (deflected && lastAsked) next = { asks: lastAsked, text: `${reply} ${deflected[language]}`, english: `[answering the patient] ${deflected.en}` };
+    else next = { ...next, text: `${reply} ${next.text}`, english: `[answering the patient] ${next.english}` };
   }
 
   // Talk back with the patient's own words: what this patient said, on top of what their

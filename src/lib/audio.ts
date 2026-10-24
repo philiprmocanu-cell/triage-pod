@@ -122,15 +122,27 @@ async function toWav(blob: Blob, rate = 16000): Promise<Blob> {
   return new Blob([buf], { type: "audio/wav" });
 }
 
+// Playback never holds the visit hostage: if the browser blocks audio or an output device
+// stalls, the promise still resolves once the clip's own length (plus a margin) has passed.
 export function playBlob(blob: Blob): Promise<void> {
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   return new Promise((resolve) => {
-    audio.onended = audio.onerror = () => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(guard);
       URL.revokeObjectURL(url);
       resolve();
     };
-    audio.play().catch(() => resolve());
+    let guard = setTimeout(finish, 20_000);
+    audio.onloadedmetadata = () => {
+      clearTimeout(guard);
+      guard = setTimeout(finish, (Number.isFinite(audio.duration) ? audio.duration * 1000 : 15_000) + 2_000);
+    };
+    audio.onended = audio.onerror = finish;
+    audio.play().catch(finish);
   });
 }
 
@@ -139,7 +151,14 @@ export function speakWithBrowser(text: string, locale: string): Promise<void> {
     if (!("speechSynthesis" in window)) return resolve();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = locale;
-    u.onend = u.onerror = () => resolve();
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    u.onend = u.onerror = finish;
+    setTimeout(finish, Math.min(30_000, 2_000 + text.length * 90)); // ~11 chars/s plus a margin
     speechSynthesis.speak(u);
   });
 }
