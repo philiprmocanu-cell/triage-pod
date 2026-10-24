@@ -14,42 +14,76 @@
 #include <ArduinoJson.h>
 #include "MAX30105.h"
 #include "spo2_algorithm.h"
+#include "heartRate.h"
 
 static const int TALK_PIN = D0;   // optional: a wire from D0 to GND = "talk" press
+static const uint32_t FINGER_IR = 10000;  // infrared level that means a fingertip is on the window (measured at range 16384: air ~400, finger ~60,000)
 MAX30105 finger;
 
-const int N = 100;  // 4 s at 25 samples/s
+// Oxygen: Maxim's algorithm over 4 s of 25 Hz samples (every 4th raw sample).
+// Pulse: time between heartbeats found in the raw 100 Hz infrared signal, median of the last 8 beats.
+const int N = 100;
 uint32_t irBuf[N], redBuf[N];
-int filled = 0, sinceCalc = 0;
-uint32_t noFingerIR = 0, lastIR = 0;
-int32_t spo2 = 0, heartRate = 0;
+int filled = 0, sinceCalc = 0, decim = 0;
+uint32_t lastIR = 0;
+int32_t spo2 = 0, hrMaxim = 0;
 int8_t spo2Ok = 0, hrOk = 0;
 bool fingerOn = false, sensorOk = false;
 uint32_t presses = 0, lastPress = 0;
 bool talkWas = false;
+uint32_t loops = 0, samples = 0;
+uint32_t lastBeat = 0;
+int beats[8] = {0, 0, 0, 0, 0, 0, 0, 0}; int nBeats = 0, beatIdx = 0;
+int spo2Hist[5] = {0, 0, 0, 0, 0}; int spo2Idx = 0, nSpo2 = 0;
+int hrHist[5] = {0, 0, 0, 0, 0}; int hrIdx = 0, nHr = 0;
+int heartRate = 0;
+
+static int medianOf(int *a, int n) {
+  int b[8]; for (int i = 0; i < n; i++) b[i] = a[i];
+  for (int i = 1; i < n; i++) { int v = b[i], j = i - 1; while (j >= 0 && b[j] > v) { b[j + 1] = b[j]; j--; } b[j + 1] = v; }
+  return b[n / 2];
+}
 
 void readFinger() {
   if (!sensorOk) return;
   finger.check();
-  while (finger.available()) {
+  int budget = 64;                           // never spin here for ever
+  while (finger.available() && budget-- > 0) {
+    samples++;
     uint32_t ir = finger.getFIFOIR(), red = finger.getFIFORed();
     finger.nextSample();
     lastIR = ir;
-    if (filled < N) {
-      irBuf[filled] = ir; redBuf[filled] = red; filled++;
-    } else {
-      memmove(irBuf, irBuf + 1, (N - 1) * sizeof(uint32_t));
-      memmove(redBuf, redBuf + 1, (N - 1) * sizeof(uint32_t));
-      irBuf[N - 1] = ir; redBuf[N - 1] = red;
+    // pulse from beats in the raw signal
+    if (checkForBeat((int32_t)ir)) {
+      uint32_t now = millis();
+      if (lastBeat) {
+        int bpm = 60000 / (int)(now - lastBeat);
+        if (bpm >= 35 && bpm <= 200) { beats[beatIdx] = bpm; beatIdx = (beatIdx + 1) % 8; if (nBeats < 8) nBeats++; }
+      }
+      lastBeat = now;
     }
-    sinceCalc++;
+    // oxygen from every 4th sample
+    if (++decim >= 4) {
+      decim = 0;
+      if (filled < N) { irBuf[filled] = ir; redBuf[filled] = red; filled++; }
+      else {
+        memmove(irBuf, irBuf + 1, (N - 1) * sizeof(uint32_t));
+        memmove(redBuf, redBuf + 1, (N - 1) * sizeof(uint32_t));
+        irBuf[N - 1] = ir; redBuf[N - 1] = red;
+      }
+      sinceCalc++;
+    }
   }
-  fingerOn = lastIR > noFingerIR + 30000;   // a fingertip reflects far more infrared than open air
-  if (!fingerOn) { filled = 0; spo2Ok = hrOk = 0; return; }
-  if (filled == N && sinceCalc >= 25) {     // recompute once a second
+  fingerOn = lastIR > FINGER_IR;             // a fingertip reflects far more infrared than open air (see FINGER_IR)
+  if (!fingerOn) { filled = 0; spo2Ok = 0; nBeats = 0; nSpo2 = 0; nHr = 0; lastBeat = 0; heartRate = 0; return; }
+  if (filled == N && sinceCalc >= 25) {     // recompute oxygen once a second
     sinceCalc = 0;
-    maxim_heart_rate_and_oxygen_saturation(irBuf, N, redBuf, &spo2, &spo2Ok, &heartRate, &hrOk);
+    maxim_heart_rate_and_oxygen_saturation(irBuf, N, redBuf, &spo2, &spo2Ok, &hrMaxim, &hrOk);
+    if (spo2Ok && spo2 > 50 && spo2 <= 100) { spo2Hist[spo2Idx] = spo2; spo2Idx = (spo2Idx + 1) % 5; if (nSpo2 < 5) nSpo2++; }
+    if (hrOk && hrMaxim >= 35 && hrMaxim <= 200) { hrHist[hrIdx] = hrMaxim; hrIdx = (hrIdx + 1) % 5; if (nHr < 5) nHr++; }
   }
+  if (nBeats >= 3 && millis() - lastBeat < 3000) heartRate = medianOf(beats, nBeats);   // median of the last 8 beats: one bad beat cannot move it
+  else heartRate = 0;                                                // no steady beats yet: say 0, never guess
 }
 
 void setup() {
@@ -58,14 +92,12 @@ void setup() {
   Wire.begin();                              // SDA D4, SCL D5
   sensorOk = finger.begin(Wire, I2C_SPEED_FAST);
   if (sensorOk) {
-    finger.setup(60, 4, 2, 100, 411, 4096);  // brightness, averaging, red+IR, 100 Hz, 411 us, range
-    delay(1000);
-    finger.check();
-    noFingerIR = finger.getIR();             // open-air baseline at power-on: keep fingers off for 1 s
+    finger.setup(50, 1, 2, 100, 411, 16384); // brightness, no averaging (raw 100 Hz for beats), red+IR, 411 us, wide range (no clipping)
   }
 }
 
 void loop() {
+  loops++;
   readFinger();
   bool talk = digitalRead(TALK_PIN) == LOW;
   if (talk && !talkWas && millis() - lastPress > 300) { presses++; lastPress = millis(); }
@@ -75,11 +107,13 @@ void loop() {
     lastOut = millis();
     JsonDocument d;
     d["finger"] = fingerOn;
-    d["hr"] = (fingerOn && hrOk && heartRate > 30 && heartRate < 220) ? heartRate : 0;
-    d["spo2"] = (fingerOn && spo2Ok && spo2 > 50) ? spo2 : 0;
+    d["hr"] = fingerOn ? heartRate : 0;
+    d["spo2"] = (fingerOn && nSpo2 >= 3) ? medianOf(spo2Hist, nSpo2) : 0;
     d["presses"] = presses;
     d["sensor"] = sensorOk;
     d["ir"] = lastIR;
+    d["loops"] = loops; d["samples"] = samples; d["hr_maxim"] = (fingerOn && hrOk) ? hrMaxim : 0;
+    loops = samples = 0;
     serializeJson(d, Serial);
     Serial.println();
   }
