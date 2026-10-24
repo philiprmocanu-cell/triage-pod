@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { cartesia, pickVoice, TTS_MODEL } from "@/lib/cartesia";
+import { cartesia, pickVoice, TTS_MODEL, ttsLocale } from "@/lib/cartesia";
 
 export const runtime = "nodejs";
 
@@ -11,7 +11,7 @@ export async function POST(req: Request) {
       model_id: TTS_MODEL,
       transcript: text,
       voice: voice.id,
-      locale,
+      locale: ttsLocale(locale),
       output_format: { container: "wav", encoding: "pcm_s16le", sample_rate: 24000 },
     });
     return new Response(await res.arrayBuffer(), {
