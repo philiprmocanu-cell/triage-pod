@@ -21,39 +21,41 @@ The case files are drawn from guesses. Send these and Claude re-exports the STLs
 |---|---|
 | Red sensor board, long side | 26 mm |
 | Red sensor board, short side | 18 mm |
-| Tallest thing on the **underside** of the red board (a Qwiic plug is about 5 mm; 0 if the back is flat) | 5 mm |
+| Tallest thing on the **underside** of the red board (the back, where the four wires come out of the holes) | 5 mm |
 | Dark window: how far left/right of the board's centre | 0 mm |
 | Camera board (Vision AI V2) width and height | 40 × 20 mm |
 | Lens diameter | 10 mm |
 
 A photo of the red board next to a ruler is enough.
 
-## Part A — Take the red sensor out of the watch (5 min)
+## How the parts are wired today (from the Zoron booklets, nothing guessed)
 
-1. Switch the watch OFF and unplug any USB cable.
-2. Open the watch case. Find the red board (the small one with a dark square window; label says MAX30101).
-3. Look at how it is connected:
-   - **If it is on a 4-wire plug (Qwiic cable, white connectors):** unplug the cable from the watch's other board, leave the cable in the sensor. Done. Go to Part B, "Qwiic route".
-   - **If wires are soldered to it:** cut those four wires about 2 cm from the **other** board (not the sensor), so the sensor keeps long leads. Go to Part B, "soldered route".
-4. Lift the sensor out. The rest of the watch is spare parts now.
+Source: `~/Desktop/Zoron-Camera-Pod/LEGO-Instructions/spec/WIRING.md` and Book 2 (Watch) pages 48–53 and 67–81.
 
-## Part B — Prepare four wires (5 min)
+- **Pod:** the XIAO ESP32-S3 sits in the Vision AI V2's two sockets. Its underside BAT+ / BAT− pads carry the red and black battery wires (switch, charger). The brain board's D1 and GND blobs carry the resistor stick. **Every pin on the XIAO's top face is free**, including D4 and D5. None of this gets touched.
+- **Watch:** the red MAX30101 has the Qwiic cable (black / red / blue / yellow) **soldered into its holes** (GND, 3.3V, SDA, SCL). The other end of that cable is a small white **plug** sitting in the DRV2605L's socket. The DRV2605L is the board with four wires soldered to the top of the XIAO nRF52840's header pins. **The sensor is only plugged in. Nothing on the sensor needs desoldering.**
 
-**Qwiic route (easiest):** take the Qwiic cable in the sensor. Cut off the free white plug. Strip 3 mm from each of the four wires. Colours mean:
-- black = GND
-- red = 3V3
-- blue = SDA (data)
-- yellow = SCL (clock)
+## Part A — Take the red sensor out of the watch (2 min, no iron)
 
-**Soldered route:** the four leads coming out of the sensor are printed on the sensor's edge: `3V3`, `GND`, `SDA`, `SCL`. Follow each wire from its pad and put a bit of tape with the name on it. Strip 3 mm from each end.
+1. Slide the Round Display's ON/OFF switch to OFF.
+2. Find the small white plug at the end of the sensor's four-colour cable, where it enters the DRV2605L board (the board with the buzz motor). Pinch the plug and pull it straight out of the socket. Wiggle, don't yank on the wires.
+3. Lift the red sensor out with its cable. That is the whole removal: no cutting, no iron.
+4. The rest of the watch stays as it is.
 
-Tin each bare end: touch the iron and a little solder to the wire until it turns silver.
+## Part B — Prepare the four wires (5 min)
 
-Leave the wires at least 15 cm long: they have to reach from the shelf on the front of the faceplate, through the wire hole, to the XIAO in the base.
+5. Cut the white plug off the sensor's cable, 5 mm from the plug. You now have four loose wire ends, about 35 mm long, still soldered into the sensor:
+   - black = GND
+   - red = 3V3
+   - blue = SDA (data)
+   - yellow = SCL (clock)
+6. Strip 2 mm from each end and tin it (iron and a little solder on the bare copper until it turns silver). This is watch Book 2, pages 68–75, done once more.
+
+If 35 mm turns out too short to reach from the shelf to the XIAO, extend each wire with a piece of your silicone wire (joint, heat-shrink) before Part C. Measure in the case first.
 
 ## Part C — Solder the four wires to the XIAO ESP32-S3 (10 min)
 
-The XIAO is the small board on top of the Vision AI V2, the one with the USB-C port. Hold it with the **USB-C port pointing up, away from you**. The pins run down both sides. Solder onto the **top of the header pins** (the metal tips sticking up), or onto the gold pads if your XIAO has no headers.
+The XIAO is the small board on top of the Vision AI V2, the one with the USB-C port. Pod switch OFF, battery plug pulled out of the charger. Hold the XIAO with the **USB-C port pointing up, away from you**. The pins run down both sides. Solder each wire **onto the top of the pin's existing joint**, the same technique you used on the watch's XIAO (Book 2, pages 48–53: red to 3V3, black to GND, white to D4, yellow to D5). Same four pin positions, same side of the board. The XIAO can stay seated in its sockets; if you lift it off, its red and black battery wires stay attached, so lift it straight up.
 
 ```
                 USB-C
