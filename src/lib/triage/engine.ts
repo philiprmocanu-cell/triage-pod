@@ -10,7 +10,7 @@
 import { jev, JevQuestion, noulOf, probsOf } from "../jev";
 import { advisoriesFor } from "../agents";
 import { postFor } from "../network";
-import { confirmComplaint, followUpQuestion, replyToPatient } from "./brain";
+import { closingAdvice, confirmComplaint, followUpQuestion, phraseNext, replyToPatient } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { NOTICED, TRAITS, TraitScan } from "./traits";
 import { getVitals } from "../session";
@@ -528,6 +528,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         return !testDone(t.id) && (!t.childOnly || isChild);
       }
       if (s === "wants_peer_group") return !asked.has(s) && moodish;
+      if (s === "self_harm_thoughts") return !known[s] && (yes.low_mood >= YES || yes.little_interest >= YES || yes.trauma_or_loss >= YES);
       if (s === "pregnant" && !pregnancyPossible) return false;
       return !known[s as FindingKey];
     });
@@ -583,6 +584,61 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const lexicon: Lexicon = { ...(await communityLexicon(intake.community)), ...learnFrom(patientWords) };
   if (next && language === "es") next = { ...next, text: speakLike(next.text, lexicon) };
 
+  // Say it like a nurse who has been listening. Safety wording stays exactly as written: tests,
+  // the speech check, the suicide question, re-asks, answers to the patient's own questions and
+  // every closing message.
+  const fixedWording =
+    !next ||
+    done ||
+    redRule ||
+    next.asks === null ||
+    next.asks === "free" ||
+    next.asks === "history:confirm" ||
+    next.asks === "confused_speech" ||
+    next.asks === "self_harm_thoughts" ||
+    next.asks.startsWith("test:") ||
+    next.english.startsWith("[answering") ||
+    next.text.startsWith(SORRY[language]) ||
+    next.text.startsWith(CLARO[language]) ||
+    (input.stage === "look");
+  if (!fixedWording && next && patientText) {
+    const recent = conversation.slice(-5);
+    const phrased = await Promise.race([
+      phraseNext({
+        context: {
+          patient: { name: intake.name, who_the_visit_is_for: intake.who, community: intake.community, age_group: age },
+          main_problem: complaintKnown ? input.turns.slice(openIdx + 1).find((t) => t.role === "patient")?.text ?? patientText : null,
+          patient_just_said: patientText,
+          recent_conversation: recent,
+          camera_noticed: hunches.slice(0, 2).map((h) => TRAITS.find((t) => t.id === h.trait)?.label),
+          learned_words: lexicon,
+        },
+        question: next.text,
+        english: next.english.replace(/^\[hunch:[^\]]*\]\s*/, ""),
+        locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
+      }).catch(() => null),
+      new Promise<null>((r) => setTimeout(() => r(null), 4500)), // never hold the patient up: fall back to the plain question
+    ]);
+    if (phrased) next = { ...next, text: phrased.text, english: next.english.startsWith("[hunch:") ? `${next.english.match(/^\[hunch:[^\]]*\]/)![0]} ${phrased.english}` : phrased.english };
+  }
+
+  if (done && next && !redRule && complaintKnown) {
+    const advice = await Promise.race([
+      closingAdvice({
+        context: {
+          patient_said: conversation.slice(-8),
+          urgency,
+          areas_checked: open.map((p) => p.label),
+          confirmed_findings: findings.filter((f) => f.yes >= YES).map((f) => f.label),
+        },
+        locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
+      }).catch(() => null),
+      new Promise<null>((r) => setTimeout(() => r(null), 7000)), // last message of the visit: worth the wait
+    ]);
+    const tip = advice ?? { text: SAFETY_NET[language], english: SAFETY_NET.en };
+    next = { ...next, text: `${next.text} ${tip.text}`, english: `${next.english} ${tip.english}` };
+  }
+
   // Make the logic visible: why each pathway opened, and where each of its steps stands.
   const label = (st: Step) =>
     st.startsWith("test:") ? `Test: ${TESTS.find((t) => `test:${t.id}` === st)?.label}` : FINDINGS[st as FindingKey]?.label ?? st;
@@ -636,7 +692,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
 
   const redHit = ruleHits.find((h) => h.urgency === "red");
   const sure = causes.find((c) => c.confident);
-  const top = redHit?.label ?? (sure ? `Most likely: ${sure.name}` : ruleHits[0]?.label ?? (complaintKnown ? "Still gathering information" : "No danger signs found so far"));
+  const top =
+    redHit?.label ??
+    (sure ? `Most likely: ${sure.name}` : ruleHits[0]?.label ?? (done ? "No danger signs found; no single cause stands out" : complaintKnown ? "Still gathering information" : "No danger signs found so far"));
   const mental = pathways.find((p) => p.id === "mental");
 
   return {
@@ -702,6 +760,10 @@ const CONFIDENT = 0.7;
 const HELP_NOW = { en: "We are calling for help now. While it comes, let's do a few quick checks.", es: "Ya estamos pidiendo ayuda. Mientras llega, hagamos unas pruebas rápidas." };
 const SPEECH_AGAIN = { en: "This is just a quick speech check: please say these exact words back to me:", es: "Es solo una prueba rápida del habla: por favor repita exactamente estas palabras:" };
 const RETELL = { en: "Sorry, I didn't catch that well. Could you tell me again, in other words, what is bothering you?", es: "Perdón, no le entendí bien. ¿Me puede contar otra vez, con otras palabras, qué es lo que más le molesta?" };
+const SAFETY_NET = {
+  en: "Rest, drink water, and come back right away if it gets much worse, or if you get a high fever, trouble breathing, or weakness on one side.",
+  es: "Descanse, tome agua, y regrese de inmediato si empeora mucho, o si tiene calentura alta, le cuesta respirar o siente debilidad de un lado.",
+};
 const SORRY = { en: "Sorry, I didn't quite understand.", es: "Perdón, no le entendí bien." };
 const CLARO = { en: "Of course.", es: "Claro." };
 const HELP_COMING = { en: "Good question. The health worker and the doctor will explain everything to you.", es: "Buena pregunta. El promotor de salud y el doctor le van a explicar todo." };

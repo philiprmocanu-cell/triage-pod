@@ -1,5 +1,19 @@
 # Build a demo pod tonight
 
+## Rebuild from your two devices
+
+| From | Part | Goes into the triage pod as |
+|---|---|---|
+| Camera pod | XIAO ESP32-S3 | Pod computer (Wi-Fi) — keep it on the Vision AI board |
+| Camera pod | Grove Vision AI V2 + camera + ribbon | Eyes |
+| Camera pod | 1,200 mAh battery + charger board + switch | Power (keep the existing wiring) |
+| Watch | Red MAX30101 sensor | Finger sensor — detach it, solder/jumper 4 wires to the XIAO: 3V3, GND, D4 (SDA), D5 (SCL) |
+| Watch | Round touch screen + XIAO nRF52840 + small battery | Not needed tomorrow (later: a wireless "vitals band" over Bluetooth) |
+| — | XIAO expansion board (small screen) | Not needed (its XIAO socket would need the pod's XIAO) |
+
+Still to get: a USB-C **data** cable, 4 female-to-female jumper wires (or solder + your silicone wire),
+a box with the camera at eye level, a phone hotspot. Optional: drugstore oximeter, ring light.
+
 ## The wireless pod (freestanding, battery, no cable to the laptop)
 
 The pod is the **eyes, finger sensor and button**. The **laptop is the voice and the brain**:

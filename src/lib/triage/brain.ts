@@ -107,3 +107,40 @@ export async function confirmComplaint(input: { said: string; language: string; 
   const english = out.match(/ENGLISH:\s*(.+)/i)?.[1]?.trim();
   return text ? { text, english: english ?? text } : "UNCLEAR";
 }
+
+// Make the next question sound like a nurse who has been listening: a short acknowledgment of
+// what the patient just said, their own words and situation, the same medical question.
+// The triage engine decides WHAT to ask; this only decides HOW to say it.
+export async function phraseNext(input: {
+  context: Record<string, unknown>;
+  question: string; // the protocol question, in the patient's language
+  english: string;
+  locale: string;
+}): Promise<{ text: string; english: string } | null> {
+  const out = await ask(
+    `You are the voice of a warm, experienced triage nurse at a health post (${input.locale}). Rewrite NEXT_QUESTION so it fits this conversation.
+Rules:
+- Start, when it helps, with a very short acknowledgment of what the patient just said (max 6 words, vary it; do not say "I understand" every time). Use their first name now and then.
+- Use the patient's own words and situation (who the visit is for, their work, their child's name) where natural.
+- Keep exactly ONE question with the SAME medical meaning as NEXT_QUESTION: it must still check the same thing and be answerable the same way. Do not merge, add or drop questions.
+- Plain words, under 28 words, in the patient's language and regional variety.
+- Never mention a diagnosis, a probability, or what the answer would mean.
+Reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
+    JSON.stringify({ ...input.context, NEXT_QUESTION: input.question, NEXT_QUESTION_ENGLISH: input.english }),
+  );
+  const text = out.match(/PATIENT:\s*(.+)/i)?.[1]?.trim();
+  const english = out.match(/ENGLISH:\s*(.+)/i)?.[1]?.trim();
+  return text ? { text, english: english ?? text } : null;
+}
+
+// Safety-netting, like a nurse at the end of a visit: one self-care step and exactly when to
+// come back. Only for green and yellow visits; emergencies keep their fixed message.
+export async function closingAdvice(input: { context: Record<string, unknown>; locale: string }): Promise<{ text: string; english: string } | null> {
+  const out = await ask(
+    `You are a triage nurse at a health post (${input.locale}) finishing a visit. In at most 35 words, in the patient's language and regional variety: one practical self-care step that fits what they told you (e.g. water, rest, food), then exactly which warning signs mean they must come back right away. No diagnosis, no medicine doses, no probabilities. Reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
+    JSON.stringify(input.context),
+  );
+  const text = out.match(/PATIENT:\s*(.+)/i)?.[1]?.trim();
+  const english = out.match(/ENGLISH:\s*(.+)/i)?.[1]?.trim();
+  return text ? { text, english: english ?? text } : null;
+}
