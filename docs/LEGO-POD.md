@@ -10,6 +10,7 @@ Where things live:
 - Firmware: `hardware/pod-firmware/pod-firmware.ino` (compiles; not flashed yet). Hotspot name/password go in `hardware/pod-firmware/secrets.h`, which is not committed.
 - Case: `hardware/case/pod-case.scad` plus the three exported files `pod-faceplate.stl`, `pod-sensor_shelf.stl`, `pod-base.stl`.
 - This file is the single source of truth for the physical pod.
+- Picture booklet of the same steps (Lego style, one action per page): `hardware/booklet/Triage Pod — Four Joints.pdf` (also on the Desktop). Pages 1–13 sensor out of the watch, 14–28 the four joints, 29–34 power up and check.
 
 ---
 
