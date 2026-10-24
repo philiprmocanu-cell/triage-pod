@@ -146,6 +146,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // Every question goes in ONE request: Jev answers them all in about a second.
   const q: Record<string, JevQuestion> = {};
   if (hasFrames || conversation.length) {
+    q.sex = {
+      type: "choice",
+      instructions: "Is the patient (the person being described or shown) male or female? Use what is said (name, words like 'embarazada', 'mi esposo') first, then the pictures.",
+      criteria: { female: "Female", male: "Male", unknown: "Cannot tell" },
+    };
     q.age = {
       type: "choice",
       instructions: "How old is the patient (the person being described or shown)? Use what is said first, then the pictures.",
@@ -168,7 +173,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         type: "choice",
         instructions:
           k === "confused_speech"
-            ? 'From the `conversation`: does the patient have slurred or confused speech? If the pod asked them to repeat a sentence, did they repeat it wrongly, leave words out, or jumble them? The conversation may be in Spanish.'
+            ? "From the `conversation`: did the patient or caregiver SAY that the patient's speech has become slurred or that words come out wrong? Only count what they report, not how they answered."
             : `From the \`conversation\`: does the patient have this? "${FINDINGS[k].label}". The conversation may be in Spanish.`,
         criteria: {
           yes: "The patient or caregiver said so, or it clearly follows from what they said.",
@@ -216,6 +221,17 @@ export async function step(input: StepInput): Promise<TriageResult> {
     for (const [f, question] of Object.entries(ALREADY)) {
       if (!intake[f as keyof Intake]) q[`already_${f}`] = { type: "noul", instructions: `From the \`conversation\`: ${question}` };
     }
+  }
+  // Speech test: did they TRY to repeat the sentence, and if so, did it come out garbled?
+  // Transcription slips or answering in another language are not garbled speech.
+  const speechTest = lastPod?.asks === "confused_speech" && Boolean(patientText);
+  if (speechTest) {
+    const ctx = `The pod asked the patient to repeat this sentence: ${lastPod!.text}. The speech-to-text heard: "${patientText}".`;
+    q.speech_attempted = { type: "noul", instructions: `${ctx} Did the patient actually try to repeat the sentence (rather than answering something else, asking a question, or refusing)?` };
+    q.speech_garbled = {
+      type: "noul",
+      instructions: `${ctx} Assuming they tried, is their version clearly garbled: many words missing, jumbled, or replaced by nonsense? Small differences, filler words, a translation into another language, or speech-to-text spelling slips do NOT count.`,
+    };
   }
   // Is the patient answering, asking something back, or asking to hear it again?
   if (patientText && lastPod) {
@@ -272,7 +288,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const said = probsOf(a[`said_${k}`]);
     const s = Math.max(seen[k] ?? 0, tested.get(k) ?? 0);
     let y = Math.max(said.yes ?? 0, s >= YES ? s : 0);
-    if (k === "confused_speech" && speechConfused >= 0.8) y = Math.max(y, speechConfused);
+    if (k === "confused_speech" && speechTest && noulOf(a.speech_attempted) >= 0.7) y = Math.max(y, noulOf(a.speech_garbled) >= 0.75 ? noulOf(a.speech_garbled) : 0);
     yes[k] = y;
     saidYes[k] = said.yes ?? 0;
     known[k] = asked.has(k) || (said.yes ?? 0) + (said.no ?? 0) >= 0.6 || s >= 0.75;
@@ -285,6 +301,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const agePs = probsOf(a.age);
   const age = ((Object.entries(agePs).sort((x, y) => y[1] - x[1])[0]?.[0] as AgeGroup) ?? "adult") as AgeGroup;
   const isChild = age === "newborn" || age === "child";
+  // Only ask about pregnancy when it is possible: not a man, a young child or an older adult.
+  const sexPs = probsOf(a.sex);
+  const pregnancyPossible = (sexPs.male ?? 0) < 0.7 && !isChild && age !== "older_adult";
 
   // No conclusions before the patient has said what brought them in.
   const openIdx = input.turns.findIndex((t) => t.role === "pod" && t.asks === "open");
@@ -340,6 +359,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // Safety rules run on yes/no facts.
   const facts = Object.fromEntries(FINDING_KEYS.map((k) => [k, yes[k] >= YES])) as unknown as Findings;
   facts.age_group = age;
+  facts.weakness_reported = saidYes.face_or_arm_weakness >= YES; // the camera alone never counts as reported weakness
   const ruleHits = runRules(facts, input.camera);
   for (const hit of ruleHits) {
     const p = hit.urgency === "red" ? 0.9 : 0.7;
@@ -466,6 +486,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         return !testDone(t.id) && (!t.childOnly || isChild);
       }
       if (s === "wants_peer_group") return !asked.has(s) && moodish;
+      if (s === "pregnant" && !pregnancyPossible) return false;
       return !known[s as FindingKey];
     });
     if (pick?.startsWith("test:")) {
@@ -487,6 +508,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
   if (patientText && lastPod && !done && !redRule) {
     if (noulOf(a.repeat_request) >= 0.6) {
       next = { asks: lastAsked ?? null, text: `${CLARO[language]} ${stripPrefix(lastPod.text, language)}`, english: lastPod.english ?? lastPod.text };
+    } else if (speechTest && noulOf(a.speech_attempted) < 0.7 && !reAsked) {
+      next = {
+        asks: "confused_speech",
+        text: `${SORRY[language]} ${SPEECH_AGAIN[language]} ${stripPrefix(lastPod!.text, language).replace(/^.*?:\s*/, "")}`,
+        english: `Sorry, I didn't quite understand. ${SPEECH_AGAIN.en}`,
+      };
     } else if (noulOf(a.patient_asked) < 0.6 && noulOf(a.answered_last) < 0.3 && lastAsked && !reAsked && !lastAsked.startsWith("test:")) {
       next = { asks: lastAsked, text: `${SORRY[language]} ${stripPrefix(lastPod.text, language)}`, english: `Sorry, I didn't quite understand. ${lastPod.english ?? ""}` };
     }
@@ -545,6 +572,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const why =
     !next || done
       ? null
+      : strokeRed && (next.asks?.startsWith("test:") || next.asks === "confused_speech")
+        ? "Stroke signs reported → help is being called; quick bedside checks for the doctor"
       : next.asks?.startsWith("intake:") || next.asks === "open"
         ? "Getting to know the patient first: no assumptions yet"
         : next.asks === "free"
@@ -599,7 +628,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
 // Which condition each safety rule points to.
 const RULE_CAUSE: Record<string, string> = {
   stroke_face_droop_camera: "Stroke",
-  stroke_speech_or_weakness: "Stroke",
+  stroke_weakness_reported: "Stroke",
+  stroke_speech: "Stroke",
   stroke_balance: "Stroke",
   cardiac_chest_pain: "Heart attack",
   severe_pneumonia: "Severe pneumonia",
@@ -617,6 +647,7 @@ const RULE_CAUSE: Record<string, string> = {
 const UNSURE = "Not sure yet";
 
 const HELP_NOW = { en: "We are calling for help now. While it comes, let's do a few quick checks.", es: "Ya estamos pidiendo ayuda. Mientras llega, hagamos unas pruebas rápidas." };
+const SPEECH_AGAIN = { en: "This is just a quick speech check: please say these exact words back to me:", es: "Es solo una prueba rápida del habla: por favor repita exactamente estas palabras:" };
 const SORRY = { en: "Sorry, I didn't quite understand.", es: "Perdón, no le entendí bien." };
 const CLARO = { en: "Of course.", es: "Claro." };
 const HELP_COMING = { en: "Good question. The health worker and the doctor will explain everything to you.", es: "Buena pregunta. El promotor de salud y el doctor le van a explicar todo." };

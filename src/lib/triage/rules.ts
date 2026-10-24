@@ -17,31 +17,36 @@ const isChild = (f: Findings) => f.age_group === "newborn" || f.age_group === "c
 
 const RULES: Rule[] = [
   // Stroke (FAST)
+  // The pod cannot hear slurring and a webcam can misread a face, so no single camera or speech
+  // signal is enough: each stroke rule needs the patient's own words or two independent checks.
+  {
+    id: "stroke_weakness_reported",
+    label: "Possible stroke: patient reports one-sided face or arm weakness",
+    urgency: "red",
+    source: "words",
+    resources: ["Emergency transport to hospital with CT", "Blood glucose check"],
+    test: (f) => (f.weakness_reported ? "patient says one side of the face or an arm is weak or numb" : null),
+  },
   {
     id: "stroke_face_droop_camera",
-    label: "Possible stroke: one side of the face is drooping",
+    label: "Possible stroke: uneven smile confirmed twice",
     urgency: "red",
     source: "camera",
     resources: ["Emergency transport to hospital with CT", "Blood glucose check"],
-    // The camera alone never decides a stroke: the smile test, or the on-device droop check
-    // agreeing with Jev's view of the face, is needed.
     test: (f, c) =>
-      c.smileTest === "asymmetric" || (c.droop?.flagged && f.face_or_arm_weakness)
-        ? `Camera: ${c.smileTest === "asymmetric" ? "uneven smile on smile test" : "sustained face asymmetry"}` +
-          (c.droop?.side ? ` (patient's ${c.droop.side} side)` : "")
+      c.smileTest === "asymmetric" && f.face_or_arm_weakness
+        ? `face tracker and Jev both saw an uneven smile${c.droop?.side ? ` (patient's ${c.droop.side} side)` : ""}`
         : null,
   },
   {
-    id: "stroke_speech_or_weakness",
-    label: "Possible stroke: slurred speech or one-sided weakness",
+    id: "stroke_speech",
+    label: "Possible stroke: garbled speech test plus another stroke sign",
     urgency: "red",
     source: "words",
     resources: ["Emergency transport to hospital with CT", "Blood glucose check"],
     test: (f) =>
-      f.confused_speech || f.face_or_arm_weakness
-        ? [f.confused_speech && "slurred/confused speech", f.face_or_arm_weakness && "face/arm weakness"]
-            .filter(Boolean)
-            .join(", ")
+      f.confused_speech && (f.sudden_onset || f.weakness_reported || f.balance_problem)
+        ? ["garbled speech test", f.sudden_onset && "sudden onset", f.weakness_reported && "reported weakness", f.balance_problem && "loss of balance"].filter(Boolean).join(" + ")
         : null,
   },
   // Heart attack
@@ -139,7 +144,7 @@ const RULES: Rule[] = [
     urgency: "red",
     source: "words",
     resources: ["Emergency transport to hospital with CT", "Blood glucose check"],
-    test: (f) => (f.balance_problem && f.sudden_onset ? "sudden unsteadiness" : null),
+    test: (f) => (f.balance_problem && f.sudden_onset && (f.weakness_reported || f.confused_speech || f.severe_headache) ? "sudden unsteadiness + another stroke sign" : null),
   },
   {
     id: "spinal_cord",

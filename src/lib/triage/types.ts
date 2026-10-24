@@ -25,7 +25,7 @@ export type CameraSignals = {
 export type AgeGroup = "newborn" | "child" | "adult" | "older_adult";
 
 // Yes/no facts the rules run on. Jev's probabilities become `true` at 0.6 and above.
-export type Findings = Record<FindingKey, boolean> & { age_group: AgeGroup };
+export type Findings = Record<FindingKey, boolean> & { age_group: AgeGroup; weakness_reported: boolean };
 
 export type RuleHit = {
   id: string;

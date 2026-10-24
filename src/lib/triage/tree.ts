@@ -227,7 +227,7 @@ export const PATHWAYS: Pathway[] = [
     label: "Headache",
     description: "Headache, head pain, migraine",
     triggers: ["headache", "worst_headache"],
-    questions: ["worst_headache", "fever", "stiff_neck", "confused_speech", "face_or_arm_weakness", "light_hurts", "severe_headache", "pregnant"],
+    questions: ["worst_headache", "fever", "stiff_neck", "face_or_arm_weakness", "light_hurts", "severe_headache", "pregnant"],
     subtypes: [
       { name: "Bleeding in the brain", description: "Sudden, worst-ever headache, maybe with vomiting or confusion", urgency: "red", resources: ["Emergency transport to hospital with CT"] },
       { name: "Meningitis", description: "Headache with fever and stiff neck, maybe rash or confusion", urgency: "red", resources: ["Pre-referral antibiotic dose", "Urgent referral"] },
