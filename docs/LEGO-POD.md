@@ -2,6 +2,8 @@
 
 Rule check (Cal Hacks 13.0 Hacker Guide, "Project Submission & Judging"): **"All projects must be started during the event."** There is no written rule against bringing parts, but a pod that was soldered together weeks ago for another project reads as "started before the event". The guide also says no soldering inside the venue. So the clean way is a pod you plug together at your table from stock parts, with no iron at all. That is this plan.
 
+Picture booklet of every step below (Lego style): `hardware/booklet/Triage Pod — Plug-in Build.pdf`, 31 pages, also on the Desktop. Pages 1–12 take apart at home, 13–27 plug together at the table, 28–31 power up.
+
 Nothing from the Zoron pod's soldered work is used: not its brain board, charger, switch, battery or resistor stick. They stay in the old case. The watch is not touched either.
 
 ## What you take from home
