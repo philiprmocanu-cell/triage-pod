@@ -17,7 +17,7 @@ const REGIONS: Region[] = [
   { id: "bo", name: "Rural Bolivia", locale: "es-BO", languages: ["es", "en"] },
   { id: "pe", name: "Andean Peru", locale: "es-PE", languages: ["es", "en"] },
   { id: "mx", name: "Rural Mexico", locale: "es-MX", languages: ["es", "en"] },
-  { id: "us", name: "Test (English)", locale: "en-US", languages: ["en", "es"] },
+  { id: "us", name: "San Francisco (test: no malaria here)", locale: "en-US", languages: ["en", "es"] },
 ];
 
 type Status = "ready" | "looking" | "idle" | "listening" | "transcribing" | "thinking" | "speaking" | "testing" | "done";

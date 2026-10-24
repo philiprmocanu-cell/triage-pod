@@ -32,6 +32,7 @@ import {
   LOCALES,
   OPENING,
   PATHWAYS,
+  Pathway,
   SEEN_OPENER_ASKS,
   SEEN_OPENERS,
   Step,
@@ -87,6 +88,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const t0 = Date.now();
 
   // Pick the real language on the first spoken turn.
+  const epi = epiFor(input.region);
+  // Conditions that cannot occur in this region are never offered to Jev or named.
+  const subtypesOf = (p: Pathway) => p.subtypes.filter((s) => !(NEEDS_EPI[s.name] && !epi[NEEDS_EPI[s.name]]));
   let language: Lang = input.language ?? (input.defaultLocale.startsWith("en") ? "en" : "es");
   let patientText = input.latest?.text ?? null;
   if (input.latest?.candidates) {
@@ -144,7 +148,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const hasFrames = frames.length > 0;
 
   const state = {
-    setting: `Village health post, ${input.region}. A community health worker is present.`,
+    setting: `Health post, ${input.region}. ${epi.note} A community health worker is present.`,
     ...(hasFrames && { frames: frameState }),
     ...(conversation.length && { conversation }),
     ...(input.latest?.speech && {
@@ -211,7 +215,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         type: "choice",
         instructions: `Assume the patient's problem is in this area: ${p.label}. Given the \`conversation\`${hasFrames ? " and the `frames`" : ""}, which of these is most likely?`,
         criteria: {
-          ...Object.fromEntries(p.subtypes.map((s) => [s.name, s.description])),
+          ...Object.fromEntries(subtypesOf(p).map((s) => [s.name, s.description])),
           [UNSURE]: "Not enough information yet to tell these apart",
         },
       };
@@ -227,6 +231,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
     impact: "Has the patient already said how this affects their daily life or what they cannot do?",
   };
   if (conversation.length) for (const [f, question] of Object.entries(ALREADY_HISTORY)) q[`already_h_${f}`] = { type: "noul", instructions: `From the \`conversation\`: ${question}` };
+  if (conversation.length)
+    q.already_complaint = {
+      type: "noul",
+      instructions: "From the `conversation`: has the patient already said what brought them in, a symptom or problem (fever, a cough, a pain, a wound, feeling sad...), even while answering a different question such as their name or where they live?",
+    };
   if (conversation.length)
     q.no_complaint = {
       type: "noul",
@@ -331,8 +340,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
 
   // No conclusions before the patient has said what brought them in.
   const openIdx = input.turns.findIndex((t) => t.role === "pod" && t.asks === "open");
+  const saidEarly = openIdx < 0 && noulOf(a.already_complaint) >= 0.8; // told us during intake: don't ask again
+  if (saidEarly) asked.add("open");
   const complaintKnown =
-    openIdx >= 0 && (input.turns.slice(openIdx + 1).some((t) => t.role === "patient") || (Boolean(patientText) && lastPod?.asks === "open"));
+    saidEarly || (openIdx >= 0 && (input.turns.slice(openIdx + 1).some((t) => t.role === "patient") || (Boolean(patientText) && lastPod?.asks === "open")));
 
   // Pathways: opened by the main complaint or by a confirmed symptom. Camera hunches only add
   // questions; they never open a pathway by themselves.
@@ -343,7 +354,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
       id: p.id,
       label: p.label,
       probability: complaintKnown ? Math.max(complaint[p.id] ?? 0, ...p.triggers.map((k) => yes[k])) : 0,
-      subtypes: p.subtypes
+      subtypes: subtypesOf(p)
         .map((s) => ({ name: s.name, probability: sub[s.name] ?? 0, urgency: s.urgency }))
         .sort((x, y) => y.probability - x.probability),
     };
@@ -357,7 +368,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const stepsFor = (id: string): Step[] => {
     const def = PATHWAYS.find((d) => d.id === id)!;
     const confirmed = def.triggers.some((k) => saidYes[k] >= YES);
-    return confirmed || def.questions.includes(def.triggers[0]) ? def.questions : [def.triggers[0], ...def.questions];
+    const steps = confirmed || def.questions.includes(def.triggers[0]) ? def.questions : [def.triggers[0], ...def.questions];
+    return epi.malaria ? steps : steps.filter((st) => st !== "mosquito_bites"); // no bed-net question where there is no malaria
   };
 
   // Sub-classifications become likely causes; supplies add up across them.
@@ -390,7 +402,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // Measured vitals (typed in by the health worker) join the safety rules.
   const vitals = getVitals();
   if (vitals.tempC != null && vitals.tempC >= 38) facts.fever = true;
-  const ruleHits = [...vitalsRules(vitals, facts), ...runRules(facts, input.camera)].sort((x, y) => URGENCY_RANK_LOCAL[y.urgency] - URGENCY_RANK_LOCAL[x.urgency]);
+  const ruleHits = [...vitalsRules(vitals, facts), ...runRules(facts, input.camera)]
+    .filter((h) => epi.malaria || !/malaria/i.test(h.id)) // no malaria testing where there is no malaria
+    .sort((x, y) => URGENCY_RANK_LOCAL[y.urgency] - URGENCY_RANK_LOCAL[x.urgency]);
   for (const hit of ruleHits) {
     const p = hit.urgency === "red" ? 0.9 : 0.7;
     for (const item of hit.resources) {
@@ -640,7 +654,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // answer: send what safely covers its likely causes rather than nothing.
   const topOpen = open[0];
   const verdict: TriageResult["verdict"] = redRule ? "emergency" : confidentCause ? "likely" : done && topOpen && topOpen.probability >= OPEN ? "uncertain" : "nothing_found";
-  if (verdict === "uncertain") for (const s of COVER_KIT[topOpen!.id] ?? []) addOrder(orders, { ...s, for: `uncertain: ${topOpen!.label}` });
+  if (verdict === "uncertain") for (const s of (COVER_KIT[topOpen!.id] ?? []).filter((x) => epi.malaria || !/malaria/i.test(x.item))) addOrder(orders, { ...s, for: `uncertain: ${topOpen!.label}` });
+  // Nothing malaria-related leaves the shelf where there is no malaria, whatever a condition's kit says.
+  if (!epi.malaria) for (let i = orders.length - 1; i >= 0; i--) if (/malaria|artesunate|antimalarial/i.test(orders[i].item)) orders.splice(i, 1);
   const nothingNeeded = urgency === "green" && !orders.length && !resources.some((r) => r.probability >= 0.5);
   if (done) next = say(null, ruleHits.some((h) => h.id === "suicide_risk") ? CLOSING_SUICIDE_RISK : verdict === "uncertain" ? CLOSING_UNSURE : nothingNeeded ? CLOSING_WELL : CLOSING[urgency]);
 
@@ -888,6 +904,17 @@ const RULE_PATHWAY: Record<string, string> = {
   cardiac_chest_pain: "cardiac",
   spinal_cord: "pain",
 };
+
+// What can exist where. Malaria and dengue do not happen in San Francisco; TB is everywhere but
+// far likelier in some places. The region name comes from the screen's region picker.
+type Epi = { malaria: boolean; dengue: boolean; tb: "high" | "low"; note: string };
+function epiFor(region: string): Epi {
+  const r = region.toLowerCase();
+  if (/zambia|malawi|mozambique|uganda|sierra|liberia|niger|chad|mali|congo|madagascar|angola|guinea/.test(r)) return { malaria: true, dengue: false, tb: "high", note: "Malaria is common here all year; TB is common." };
+  if (/guatemala|honduras|nicaragua|bolivia|peru|mexico|haiti/.test(r)) return { malaria: true, dengue: true, tb: "high", note: "Malaria and dengue occur in the lowlands; TB is common." };
+  return { malaria: false, dengue: false, tb: "low", note: "No malaria or dengue transmission here; TB is rare." };
+}
+const NEEDS_EPI: Record<string, keyof Epi> = { Malaria: "malaria", "Severe malaria": "malaria", Dengue: "dengue" };
 
 const UNSURE = "Not sure yet";
 const URGENCY_RANK_LOCAL: Record<Urgency, number> = { green: 0, yellow: 1, red: 2 };

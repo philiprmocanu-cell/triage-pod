@@ -36,7 +36,9 @@ export async function listenForUtterance(opts: {
   onLevel?: (level: number, speaking: boolean) => void;
   signal?: AbortSignal;
 }): Promise<Blob | null> {
-  const { waitMs = 12000, silenceMs = 1300, maxMs = 25000, onLevel, signal } = opts;
+  // silenceMs: how long the patient must be quiet before the pod answers. People pause mid-sentence
+  // to think, so 2.2 s; a short "no" still ends quickly because spokeMs is small.
+  const { waitMs = 12000, silenceMs = 2200, maxMs = 40000, onLevel, signal } = opts;
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   // Chrome starts an AudioContext "suspended" when no user gesture is on record: the level meter
   // then reads silence forever and the pod gives up after waitMs. Resume it (the Start click
@@ -84,7 +86,8 @@ export async function listenForUtterance(opts: {
         if (now - t0 > 7000) return resolve("speech");
         return void requestAnimationFrame(step);
       }
-      if (speechAt && spokeMs > 250 && now - lastVoice > silenceMs) return resolve("speech");
+      const quietFor = spokeMs < 1500 ? silenceMs * 0.7 : silenceMs; // a one-word answer needs less waiting
+      if (speechAt && spokeMs > 250 && now - lastVoice > quietFor) return resolve("speech");
       if (!speechAt && now - t0 > waitMs) return resolve("none");
       if (now - t0 > maxMs) return resolve(speechAt ? "speech" : "none");
       requestAnimationFrame(step);
