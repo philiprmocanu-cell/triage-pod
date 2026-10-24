@@ -73,3 +73,15 @@ export async function replyToPatient(input: {
     JSON.stringify({ patient_question: input.question, urgency: input.urgency, what_the_pod_is_considering: input.likely, recent_conversation: input.conversation.slice(-6) }),
   );
 }
+
+// For complaints the triage tree does not cover: one follow-up question a nurse would ask next.
+export async function followUpQuestion(input: { conversation: Record<string, string>[]; language: string; locale: string }): Promise<{ text: string; english: string } | null> {
+  const out = await ask(
+    `You are the triage nurse voice of a health pod at a rural health post (${input.locale}). Read the conversation and write the ONE most useful next question a careful nurse would ask to understand this complaint better (where exactly, what makes it better or worse, other symptoms, danger signs). Never diagnose. Under 20 words, plain and warm. Reply with exactly two lines: "PATIENT: <question in the patient's language and regional Spanish if Spanish>" and "ENGLISH: <the same in English>". If enough is known already, reply "DONE".`,
+    JSON.stringify({ conversation: input.conversation.slice(-10) }),
+  );
+  if (/^\s*DONE/i.test(out)) return null;
+  const text = out.match(/PATIENT:\s*(.+)/i)?.[1]?.trim();
+  const english = out.match(/ENGLISH:\s*(.+)/i)?.[1]?.trim();
+  return text ? { text, english: english ?? text } : null;
+}

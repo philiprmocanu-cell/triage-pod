@@ -34,6 +34,12 @@ export const FINDINGS = {
     label: "Slurred or confused speech",
     ask: { en: "Please repeat after me: \"Today the sky is blue and the river is calm.\"", es: "Por favor, repita después de mí: \"Hoy el cielo está azul y el río está tranquilo.\"" },
   },
+  headache: { label: "Headache", ask: { en: "Do you have a headache?", es: "¿Le duele la cabeza?" } },
+  worst_headache: {
+    label: "Sudden, worst-ever headache",
+    ask: { en: "Did the headache start suddenly, like a blow, and is it the worst you have ever had?", es: "¿El dolor de cabeza empezó de golpe, como un golpe fuerte, y es el peor que ha tenido en su vida?" },
+  },
+  light_hurts: { label: "Light or noise hurts", ask: { en: "Does light or noise make it worse?", es: "¿La luz o el ruido le molestan más?" } },
   severe_headache: { label: "Severe headache or blurred vision", ask: { en: "Do you have a very strong headache or blurry vision?", es: "¿Tiene un dolor de cabeza muy fuerte o ve borroso?" } },
   seizure: { label: "Seizure / convulsions", ask: { en: "Has there been a seizure or shaking fit?", es: "¿Ha tenido convulsiones o ataques?" } },
   unable_to_drink: {
@@ -217,6 +223,21 @@ export const PATHWAYS: Pathway[] = [
     ],
   },
   {
+    id: "headache",
+    label: "Headache",
+    description: "Headache, head pain, migraine",
+    triggers: ["headache", "worst_headache"],
+    questions: ["worst_headache", "fever", "stiff_neck", "confused_speech", "face_or_arm_weakness", "light_hurts", "severe_headache", "pregnant"],
+    subtypes: [
+      { name: "Bleeding in the brain", description: "Sudden, worst-ever headache, maybe with vomiting or confusion", urgency: "red", resources: ["Emergency transport to hospital with CT"] },
+      { name: "Meningitis", description: "Headache with fever and stiff neck, maybe rash or confusion", urgency: "red", resources: ["Pre-referral antibiotic dose", "Urgent referral"] },
+      { name: "High blood pressure", description: "Headache with blurred vision, older age or known high pressure", urgency: "yellow", resources: ["Blood pressure check", "Doctor review"] },
+      { name: "Fever headache (malaria or infection)", description: "Headache with fever, no stiff neck", urgency: "yellow", resources: ["Malaria rapid test", "Paracetamol"] },
+      { name: "Migraine", description: "Throbbing headache, light hurts, maybe nausea, has happened before", urgency: "green", resources: ["Paracetamol", "Home care advice"] },
+      { name: "Tension headache", description: "Pressing headache from stress, tiredness or not eating, no danger signs", urgency: "green", resources: ["Paracetamol", "Home care advice"] },
+    ],
+  },
+  {
     id: "pain",
     label: "Back / joint pain",
     description: "Back pain, joint pain, pain when moving or bending, weak legs",
@@ -355,12 +376,21 @@ export type IntakeField = keyof typeof INTAKE;
 export const INTAKE_FIELDS = Object.keys(INTAKE) as IntakeField[];
 
 // One step of the visit: a finding question, a physical test, or an intake question.
-export type Step = FindingKey | `test:${string}` | `intake:${IntakeField}` | "open";
+export type Step = FindingKey | `test:${string}` | `intake:${IntakeField}` | `history:${HistoryField}` | "open" | "free";
 
 export const OPENING: Text = {
-  en: "Thank you. Now, what is bothering you today?",
-  es: "Gracias. Ahora, ¿qué le pasa hoy?",
+  en: "Thank you. What brings you in today? Tell me what is bothering you the most.",
+  es: "Gracias. ¿Qué le trae hoy por aquí? Cuénteme qué es lo que más le molesta.",
 };
+
+// After the main complaint, a nurse's history questions, before any narrowing down.
+export const HISTORY = {
+  onset: { en: "Since when have you felt like this?", es: "¿Desde cuándo se siente así?" },
+  impact: { en: "How is this affecting your day? Is there anything you can't do because of it?", es: "¿Cómo le está afectando en su día? ¿Hay algo que no pueda hacer por esto?" },
+  severity: { en: "From 1 to 10, how strong is it right now?", es: "Del 1 al 10, ¿qué tan fuerte es ahorita?" },
+  else: { en: "Is there anything else that worries you, or anything else you feel?", es: "¿Hay algo más que le preocupe o que sienta?" },
+} as const;
+export type HistoryField = keyof typeof HISTORY;
 
 export const CLOSING: Record<Urgency, Text> = {
   red: {

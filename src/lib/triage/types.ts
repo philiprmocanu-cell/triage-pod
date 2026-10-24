@@ -36,7 +36,7 @@ export type RuleHit = {
   resources: string[];
 };
 
-export type Cause = { name: string; pathway: string; probability: number; urgency: Urgency; why: string; evidence: string[]; against: string[] };
+export type Cause = { name: string; pathway: string; probability: number; urgency: Urgency; why: string; evidence: string[]; against: string[]; early: boolean };
 
 export type Resource = {
   item: string;
@@ -95,6 +95,7 @@ export type TriageResult = {
     steps: { step: string; label: string; status: "yes" | "no" | "unclear" | "next" | "waiting" }[];
   }[];
   why: string | null; // why the pod is asking the current question
+  complaint_known: boolean; // false until the patient has said what brought them in
   peer_group: { wants: boolean; category: string | null };
   jev_ms: number;
 };

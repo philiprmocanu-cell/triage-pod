@@ -23,8 +23,10 @@ const RULES: Rule[] = [
     urgency: "red",
     source: "camera",
     resources: ["Emergency transport to hospital with CT", "Blood glucose check"],
-    test: (_f, c) =>
-      c.droop?.flagged || c.smileTest === "asymmetric"
+    // The camera alone never decides a stroke: the smile test, or the on-device droop check
+    // agreeing with Jev's view of the face, is needed.
+    test: (f, c) =>
+      c.smileTest === "asymmetric" || (c.droop?.flagged && f.face_or_arm_weakness)
         ? `Camera: ${c.smileTest === "asymmetric" ? "uneven smile on smile test" : "sustained face asymmetry"}` +
           (c.droop?.side ? ` (patient's ${c.droop.side} side)` : "")
         : null,
@@ -106,6 +108,22 @@ const RULES: Rule[] = [
     source: "words",
     resources: ["Blood pressure check", "Urgent referral to maternity unit"],
     test: (f) => (f.pregnant && f.severe_headache ? "pregnant + severe headache/blurred vision" : null),
+  },
+  {
+    id: "thunderclap_headache",
+    label: "Sudden worst-ever headache (possible bleeding in the brain)",
+    urgency: "red",
+    source: "words",
+    resources: ["Emergency transport to hospital with CT"],
+    test: (f) => (f.worst_headache ? "sudden, worst-ever headache" : null),
+  },
+  {
+    id: "meningitis_signs",
+    label: "Headache or fever with stiff neck (possible meningitis)",
+    urgency: "red",
+    source: "words",
+    resources: ["Pre-referral antibiotic dose", "Urgent referral"],
+    test: (f) => (f.stiff_neck && (f.fever || f.headache) ? "stiff neck + " + (f.fever ? "fever" : "headache") : null),
   },
   {
     id: "suicide_risk",

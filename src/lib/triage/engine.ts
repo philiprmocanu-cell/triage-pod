@@ -8,9 +8,9 @@
 // Code then opens pathways, picks the next step, applies the safety rules and adds up supplies.
 
 import { jev, JevQuestion, noulOf, probsOf } from "../jev";
-import { replyToPatient } from "./brain";
+import { followUpQuestion, replyToPatient } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
-import { TRAITS, TraitScan } from "./traits";
+import { NOTICED, TRAITS, TraitScan } from "./traits";
 import { maxUrgency, runRules } from "./rules";
 import {
   CLOSING,
@@ -18,6 +18,8 @@ import {
   FINDING_KEYS,
   FINDINGS,
   FindingKey,
+  HISTORY,
+  HistoryField,
   INTAKE,
   INTAKE_FIELDS,
   Lang,
@@ -47,7 +49,7 @@ import type {
   Urgency,
 } from "./types";
 
-const MAX_STEPS = 8; // medical questions + tests after the opening question
+const MAX_STEPS = 10; // medical questions + tests after the history questions
 const MAX_FRAMES = 6;
 const YES = 0.6; // probability at which a finding counts as present
 const OPEN = 0.3; // probability at which a pathway is explored
@@ -193,7 +195,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
       q[`sub_${p.id}`] = {
         type: "choice",
         instructions: `Assume the patient's problem is in this area: ${p.label}. Given the \`conversation\`${hasFrames ? " and the `frames`" : ""}, which of these is most likely?`,
-        criteria: Object.fromEntries(p.subtypes.map((s) => [s.name, s.description])),
+        criteria: {
+          ...Object.fromEntries(p.subtypes.map((s) => [s.name, s.description])),
+          [UNSURE]: "Not enough information yet to tell these apart",
+        },
       };
     }
   }
@@ -202,6 +207,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
     community: "Has the patient already said which community, village or town they are from?",
     who: "Has the patient already said who the visit is for and that person's age?",
   };
+  const ALREADY_HISTORY: Record<string, string> = {
+    onset: "Has the patient already said since when or for how long they have felt this way?",
+    impact: "Has the patient already said how this affects their daily life or what they cannot do?",
+  };
+  if (conversation.length) for (const [f, question] of Object.entries(ALREADY_HISTORY)) q[`already_h_${f}`] = { type: "noul", instructions: `From the \`conversation\`: ${question}` };
   if (conversation.length) {
     for (const [f, question] of Object.entries(ALREADY)) {
       if (!intake[f as keyof Intake]) q[`already_${f}`] = { type: "noul", instructions: `From the \`conversation\`: ${question}` };
@@ -224,14 +234,19 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // the on-device face-droop check.
   const seen: Seen = { ...input.seen };
   if (hasFrames && !scanning && noulOf(a.person_visible) >= 0.5) for (const k of visible) seen[k] = Math.max(seen[k] ?? 0, noulOf(a[`seen_${k}`]));
-  // The live scan: traits tied to a finding count as seen; the others only hint at a pathway.
+  // The live scan (already smoothed over several scans): traits tied to a finding count as seen.
+  // Everything the camera notices is also a hunch to ask about, never a conclusion on its own.
   const hints: Record<string, { p: number; why: string }> = {};
+  const hunches: { trait: string; pathway: string | null; finding: FindingKey | null; p: number }[] = [];
   for (const t of TRAITS) {
     const p = input.traits?.[t.id] ?? 0;
     if (t.finding) seen[t.finding] = Math.max(seen[t.finding] ?? 0, p);
-    if (t.hint && p >= 0.6 && p * 0.6 > (hints[t.hint]?.p ?? 0)) hints[t.hint] = { p: p * 0.6, why: t.label.toLowerCase() };
+    if (t.hint && p >= 0.6 && p > (hints[t.hint]?.p ?? 0)) hints[t.hint] = { p, why: t.label.toLowerCase() };
+    if (p >= 0.6 && NOTICED[t.id]) hunches.push({ trait: t.id, pathway: t.hint ?? null, finding: t.finding ?? null, p });
   }
-  if (input.camera.droop?.flagged || input.camera.smileTest === "asymmetric") seen.face_or_arm_weakness = Math.max(seen.face_or_arm_weakness ?? 0, 0.95);
+  if (input.camera.droop?.flagged) hunches.push({ trait: "face_droop", pathway: "stroke", finding: "face_or_arm_weakness", p: 0.8 });
+  if (input.camera.smileTest === "asymmetric") seen.face_or_arm_weakness = Math.max(seen.face_or_arm_weakness ?? 0, 0.95);
+  hunches.sort((x, y) => y.p - x.p);
 
   // Physical test results count like things seen.
   const tested = new Map<FindingKey, number>();
@@ -250,6 +265,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const speechConfused = noulOf(a.speech_confused);
 
   const yes = {} as Record<FindingKey, number>;
+  const saidYes = {} as Record<FindingKey, number>;
   const known = {} as Record<FindingKey, boolean>;
   const findings: FindingState[] = [];
   for (const k of FINDING_KEYS) {
@@ -258,6 +274,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     let y = Math.max(said.yes ?? 0, s >= YES ? s : 0);
     if (k === "confused_speech" && speechConfused >= 0.8) y = Math.max(y, speechConfused);
     yes[k] = y;
+    saidYes[k] = said.yes ?? 0;
     known[k] = asked.has(k) || (said.yes ?? 0) + (said.no ?? 0) >= 0.6 || s >= 0.75;
     if (k !== "wants_peer_group" && (y >= 0.3 || asked.has(k))) {
       const fromSaid = (said.yes ?? 0) >= 0.3, fromSeen = s >= YES;
@@ -269,14 +286,20 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const age = ((Object.entries(agePs).sort((x, y) => y[1] - x[1])[0]?.[0] as AgeGroup) ?? "adult") as AgeGroup;
   const isChild = age === "newborn" || age === "child";
 
-  // Pathways: opened by the main complaint or by any trigger finding.
-  const complaint = probsOf(a.complaint);
+  // No conclusions before the patient has said what brought them in.
+  const openIdx = input.turns.findIndex((t) => t.role === "pod" && t.asks === "open");
+  const complaintKnown =
+    openIdx >= 0 && (input.turns.slice(openIdx + 1).some((t) => t.role === "patient") || (Boolean(patientText) && lastPod?.asks === "open"));
+
+  // Pathways: opened by the main complaint or by a confirmed symptom. Camera hunches only add
+  // questions; they never open a pathway by themselves.
+  const complaint = complaintKnown ? probsOf(a.complaint) : {};
   const pathways: PathwayState[] = PATHWAYS.map((p) => {
     const sub = probsOf(a[`sub_${p.id}`]);
     return {
       id: p.id,
       label: p.label,
-      probability: Math.max(complaint[p.id] ?? 0, hints[p.id]?.p ?? 0, ...p.triggers.map((k) => yes[k])),
+      probability: complaintKnown ? Math.max(complaint[p.id] ?? 0, ...p.triggers.map((k) => yes[k])) : 0,
       subtypes: p.subtypes
         .map((s) => ({ name: s.name, probability: sub[s.name] ?? 0, urgency: s.urgency }))
         .sort((x, y) => y.probability - x.probability),
@@ -287,17 +310,20 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // about its main symptom ("I see you holding your chest" -> "do you have chest pain?").
   const stepsFor = (id: string): Step[] => {
     const def = PATHWAYS.find((d) => d.id === id)!;
-    const confirmed = def.triggers.some((k) => yes[k] >= YES);
+    const confirmed = def.triggers.some((k) => saidYes[k] >= YES);
     return confirmed || def.questions.includes(def.triggers[0]) ? def.questions : [def.triggers[0], ...def.questions];
   };
 
   // Sub-classifications become likely causes; supplies add up across them.
   const causes: Cause[] = [];
   const need = new Map<string, number>();
-  for (const p of open) {
+  for (const p of complaintKnown ? open : []) {
     const def = PATHWAYS.find((d) => d.id === p.id)!;
+    // Confidence grows with every answered question or finished test in this pathway.
+    const answered = stepsFor(p.id).filter((st) => (st.startsWith("test:") ? st.slice(5) in input.tests : asked.has(st) || saidYes[st as FindingKey] >= YES)).length;
+    const confidence = Math.min(1, 0.35 + 0.15 * answered);
     for (const s of p.subtypes) {
-      const prob = p.probability * s.probability;
+      const prob = p.probability * s.probability * confidence;
       if (prob < 0.05) continue;
       const sdef = def.subtypes.find((d) => d.name === s.name)!;
       const keys = [...new Set([...def.triggers, ...def.questions.filter((q): q is FindingKey => !q.startsWith("test:"))])];
@@ -305,7 +331,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
       const evidence = keys.filter((k) => yes[k] >= YES).map((k) => `${FINDINGS[k].label} (${src(k)})`);
       if (hints[p.id]) evidence.push(`camera: ${hints[p.id].why}`);
       const against = keys.filter((k) => known[k] && yes[k] < 0.3 && asked.has(k)).map((k) => `no ${FINDINGS[k].label.toLowerCase()}`);
-      causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description, evidence, against });
+      causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description, evidence, against, early: confidence < 0.8 });
       for (const item of sdef.resources) need.set(item, 1 - (1 - (need.get(item) ?? 0)) * (1 - prob));
     }
   }
@@ -335,11 +361,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const p = hit.urgency === "red" ? 0.95 : 0.8;
     if (c) {
       c.probability = Math.max(c.probability, p);
+      c.early = false;
       c.evidence.unshift(`safety rule: ${hit.evidence}`);
     } else {
       const path = PATHWAYS.find((d) => d.subtypes.some((x) => x.name === name))!;
       const sub = path.subtypes.find((x) => x.name === name)!;
-      causes.push({ name, pathway: path.label, probability: p, urgency: sub.urgency, why: sub.description, evidence: [`safety rule: ${hit.evidence}`], against: [] });
+      causes.push({ name, pathway: path.label, probability: p, urgency: sub.urgency, why: sub.description, evidence: [`safety rule: ${hit.evidence}`], against: [], early: false });
     }
   }
   causes.sort((x, y) => y.probability - x.probability);
@@ -354,11 +381,35 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const say = (asks: Step | null, t: { en: string; es: string }): TriageResult["next"] => ({ asks, text: t[language], english: t.en });
   const emergencySeen = EMERGENCY_SEEN.some((k) => (seen[k] ?? 0) >= YES);
   const intakeOpen = !redRule && !emergencySeen && !asked.has("open");
-  const medicalSteps = input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && t.asks !== "open").length;
+  const medicalSteps = input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && !t.asks.startsWith("history:") && t.asks !== "open").length;
+  for (const f of ["onset", "impact"] as HistoryField[]) if (noulOf(a[`already_h_${f}`]) >= 0.8) asked.add(`history:${f}`);
   const testDone = (id: string) => id in input.tests || asked.has(`test:${id}`);
   const moodish = (["low_mood", "little_interest", "anxious", "trauma_or_loss", "lonely"] as FindingKey[]).some((k) => yes[k] >= YES);
 
   let next: TriageResult["next"] = null;
+  // Explore what the camera noticed, at most two hunches: "I see you holding your chest. Do you
+  // have pain or pressure in your chest?"
+  const hunchTurns = input.turns.filter((t) => t.role === "pod" && t.english?.startsWith("[hunch:"));
+  const hunchAsked = hunchTurns.length;
+  const hunchUsed = new Set(hunchTurns.map((t) => t.english!.slice(7, t.english!.indexOf("]"))));
+  const nextHunch = (): TriageResult["next"] => {
+    if (!complaintKnown || hunchAsked >= 2) return null;
+    for (const h of hunches) {
+      if (hunchUsed.has(h.trait)) continue;
+      const path = h.pathway ? PATHWAYS.find((d) => d.id === h.pathway) : PATHWAYS.find((d) => h.finding && (d.triggers.includes(h.finding) || d.questions.includes(h.finding)));
+      if (path && open.some((o) => o.id === path.id)) continue; // already being explored
+      const step: Step | undefined = h.trait === "face_droop" ? "test:smile" : path?.triggers.find((k) => !known[k]) ?? (h.finding && !known[h.finding] ? h.finding : undefined);
+      if (!step || asked.has(step) || (step.startsWith("test:") && testDone(step.slice(5)))) continue;
+      const n = NOTICED[h.trait];
+      if (step.startsWith("test:")) {
+        const t = TESTS.find((x) => `test:${x.id}` === step)!;
+        return { asks: step, text: `${n[language]} ${t.say[language]}`, english: `[hunch:${h.trait}] ${n.en} ${t.say.en}`, test: { id: t.id, label: t.label, seconds: t.seconds, prep: t.prep } };
+      }
+      const f = FINDINGS[step as FindingKey];
+      return { asks: step, text: `${n[language]} ${f.ask[language]}`, english: `[hunch:${h.trait}] ${n.en} ${f.ask.en}` };
+    }
+    return null;
+  };
   const seenOpener = () => {
     const k = (Object.keys(SEEN_OPENERS) as FindingKey[]).filter((f) => (seen[f] ?? 0) >= YES).sort((x, y) => (seen[y] ?? 0) - (seen[x] ?? 0))[0];
     return k ? say(SEEN_OPENER_ASKS[k] ?? k, SEEN_OPENERS[k]!) : null;
@@ -387,13 +438,29 @@ export async function step(input: StepInput): Promise<TriageResult> {
         test: { id: def.id, label: def.label, seconds: def.seconds, prep: def.prep },
       };
     }
+  } else if (!redRule && (["onset", "impact", "severity"] as HistoryField[]).some((f) => !asked.has(`history:${f}`))) {
+    const f = (["onset", "impact", "severity"] as HistoryField[]).find((x) => !asked.has(`history:${x}`))!;
+    next = say(`history:${f}`, HISTORY[f]);
+  } else if (!redRule && medicalSteps < MAX_STEPS && nextHunch()) {
+    next = nextHunch();
   } else if (!redRule && medicalSteps < MAX_STEPS) {
     const order: Step[] = [];
     if (isChild && open.length) order.push("unable_to_drink", "vomits_everything", "seizure", "very_sleepy");
     for (const p of open) order.push(...stepsFor(p.id));
+    // Nothing in the tree fits (toothache, ear pain...): ask Claude for one sensible nurse
+    // follow-up question, up to three times, before falling back to the mood screen.
+    const freeAsked = input.turns.filter((t) => t.role === "pod" && t.asks === "free").length;
+    if (!open.length && complaintKnown && freeAsked < 3) {
+      try {
+        const q = await followUpQuestion({ conversation, language, locale: topKey(probsOf(a.locale)) ?? input.defaultLocale });
+        if (q) next = { asks: "free", text: q.text, english: q.english };
+      } catch {
+        /* fall through to the screen below */
+      }
+    }
     if (!open.length) order.push("low_mood", "little_interest", "lonely"); // nothing physical found: screen mood and loneliness
     else if (age === "older_adult") order.push("lonely"); // older adults are the loneliest group: always ask
-    const pick = order.find((s) => {
+    const pick = next ? undefined : order.find((s) => {
       if (s.startsWith("test:")) {
         const t = TESTS.find((x) => `test:${x.id}` === s)!;
         return !testDone(t.id) && (!t.childOnly || isChild);
@@ -407,10 +474,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
     } else if (pick) {
       const f = FINDINGS[pick as FindingKey];
       next = say(pick, isChild && "askChild" in f ? f.askChild : f.ask);
-    } else if (!open.length && medicalSteps < 3) {
+    } else if (!next && !open.length && medicalSteps < 3) {
       next = say(null, MORE);
     }
   }
+  if (!next && input.stage === "answer" && !redRule && complaintKnown && !asked.has("history:else")) next = say("history:else", HISTORY.else);
   const done = input.stage === "answer" && !next;
   if (done) next = say(null, ruleHits.some((h) => h.id === "suicide_risk") ? CLOSING_SUICIDE_RISK : CLOSING[urgency]);
 
@@ -478,7 +546,13 @@ export async function step(input: StepInput): Promise<TriageResult> {
     !next || done
       ? null
       : next.asks?.startsWith("intake:") || next.asks === "open"
-        ? "Getting to know the patient first"
+        ? "Getting to know the patient first: no assumptions yet"
+        : next.asks === "free"
+          ? "Following up on what the patient described"
+        : next.asks?.startsWith("history:")
+          ? "Understanding the problem before narrowing anything down"
+          : next.english.startsWith("[hunch:")
+            ? "The camera noticed something: asking instead of assuming"
         : nextPath
           ? `${nextPath.label} is open (${openedBy(nextPath.id).join(", ") || "complaint"}) → checking ${label(next.asks as Step).toLowerCase()}${stepsFor(nextPath.id).indexOf(next.asks as Step) < 2 ? " first" : ""}`
           : isChild && ["unable_to_drink", "vomits_everything", "seizure", "very_sleepy"].includes(next.asks ?? "")
@@ -513,6 +587,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     lexicon,
     tree,
     why,
+    complaint_known: complaintKnown,
     peer_group: {
       wants: yes.wants_peer_group >= YES && !facts.self_harm_thoughts,
       category: mental && mental.probability >= OPEN ? (mental.subtypes[0]?.name ?? null) : null,
@@ -532,10 +607,14 @@ const RULE_CAUSE: Record<string, string> = {
   suicide_risk: "Suicide risk",
   spinal_cord: "Spinal cord compression",
   pregnancy_danger: "Pre-eclampsia",
+  thunderclap_headache: "Bleeding in the brain",
+  meningitis_signs: "Meningitis",
   dehydration: "Some dehydration",
   dysentery: "Dysentery",
   kidney_infection: "Kidney infection",
 };
+
+const UNSURE = "Not sure yet";
 
 const HELP_NOW = { en: "We are calling for help now. While it comes, let's do a few quick checks.", es: "Ya estamos pidiendo ayuda. Mientras llega, hagamos unas pruebas rápidas." };
 const SORRY = { en: "Sorry, I didn't quite understand.", es: "Perdón, no le entendí bien." };

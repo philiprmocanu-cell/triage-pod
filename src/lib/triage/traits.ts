@@ -79,3 +79,29 @@ export const TRAITS: Trait[] = [
 ];
 
 export type TraitScan = Record<string, number>; // trait id -> probability seen
+
+// How the pod mentions a hunch before asking about it ("I notice you look tired. ...").
+export const NOTICED: Record<string, { en: string; es: string }> = {
+  face_droop: { en: "I notice one side of your face looks a little different.", es: "Noto que un lado de su cara se ve un poco diferente." },
+  sweaty: { en: "I notice you are sweating.", es: "Noto que está sudando." },
+  pale: { en: "You look a bit pale.", es: "Le noto un poco pálido." },
+  flushed: { en: "Your face looks a little red.", es: "Le noto la cara un poco roja." },
+  red_eyes: { en: "Your eyes look a little red.", es: "Le noto los ojos un poco rojos." },
+  yellow_eyes: { en: "Your eyes look a little yellow.", es: "Le noto los ojos un poco amarillos." },
+  tearful: { en: "You seem upset, and that's okay.", es: "Le noto afligido, y está bien." },
+  sad: { en: "You seem a little down.", es: "Le noto un poco decaído." },
+  anxious: { en: "You seem a little worried.", es: "Le noto un poco preocupado." },
+  exhausted: { en: "You look tired.", es: "Le noto cansado." },
+  drowsy: { en: "You look very sleepy.", es: "Le noto con mucho sueño." },
+  coughing: { en: "I heard you cough.", es: "Le escuché toser." },
+  mouth_breathing: { en: "I notice you are breathing through your mouth.", es: "Noto que respira por la boca." },
+  labored: { en: "It looks a little hard for you to breathe.", es: "Parece que le cuesta un poco respirar." },
+  holding_chest: { en: "I see you holding your chest.", es: "Veo que se toca el pecho." },
+  holding_head: { en: "I see you holding your head.", es: "Veo que se toca la cabeza." },
+  holding_belly: { en: "I see you holding your belly.", es: "Veo que se toca la panza." },
+  holding_back: { en: "I see you holding your back.", es: "Veo que se toca la espalda." },
+  grimace: { en: "It looks like something hurts.", es: "Parece que algo le duele." },
+  tremor: { en: "I notice you are shaking a little.", es: "Noto que está temblando un poco." },
+  wound: { en: "I see a wound.", es: "Veo una herida." },
+  rash: { en: "I see some spots on your skin.", es: "Veo unas manchas en su piel." },
+};

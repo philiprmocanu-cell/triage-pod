@@ -64,7 +64,7 @@ export default function PodScreen() {
   const [testClock, setTestClock] = useState<{ label: string; left: number } | null>(null);
   const [teaching, setTeaching] = useState(false);
   const [scanNow, setScanNow] = useState<TraitScan>({});
-  const [scanMax, setScanMax] = useState<TraitScan>({});
+  const [scanAvg, setScanMax] = useState<TraitScan>({});
   const [scanMs, setScanMs] = useState<number | null>(null);
   const [autoStart, setAutoStart] = useState(true);
   const [level, setLevel] = useState(0);
@@ -184,7 +184,7 @@ export default function PodScreen() {
           latest,
           frames: recentFrames(askedAt.current),
           seen,
-          traits: scanMax,
+          traits: scanAvg,
           tests: cur.tests,
           intake: cur.intake,
           camera: { ...cameraSnapshot(), smileTest: cur.smile ?? smileTest },
@@ -245,7 +245,7 @@ export default function PodScreen() {
       setStatus(r.done ? "done" : "idle");
       if (!r.done && services.cartesia) void hearRef.current(); // listen for the answer, no tapping
     },
-    [turns, tests, intake, seen, scanMax, cameraSnapshot, language, locale, region, speak, runTest, smileTest, services.cartesia],
+    [turns, tests, intake, seen, scanAvg, cameraSnapshot, language, locale, region, speak, runTest, smileTest, services.cartesia],
   );
 
   const run = useCallback(async (fn: () => Promise<void>) => {
@@ -349,7 +349,8 @@ export default function PodScreen() {
           const d = await res.json();
           if (d.person >= 0.5) {
             setScanNow(d.traits);
-            setScanMax((m) => Object.fromEntries(TRAITS.map((x) => [x.id, Math.max(m[x.id] ?? 0, d.traits[x.id] ?? 0)])));
+            // Smoothed over scans: one flicker (a single 80% reading) only reaches 40%.
+            setScanMax((m) => Object.fromEntries(TRAITS.map((x) => [x.id, 0.5 * (m[x.id] ?? 0) + 0.5 * (d.traits[x.id] ?? 0)])));
             setScanMs(d.ms);
           }
         }
@@ -500,7 +501,7 @@ export default function PodScreen() {
         </section>
 
         <section className="space-y-4">
-          <ResultPanel result={result} tests={tests} intake={intake} saved={saved} voiceInfo={voiceInfo} scan={scanMax} scanMs={scanMs} faceVisible={faceVisible} />
+          <ResultPanel result={result} tests={tests} intake={intake} saved={saved} voiceInfo={voiceInfo} scan={scanAvg} scanMs={scanMs} faceVisible={faceVisible} />
         </section>
       </main>
     </div>
@@ -528,7 +529,7 @@ function Conversation({ turns }: { turns: Turn[] }) {
             {t.role === "pod" ? (t.asks?.startsWith("test:") ? "Pod · physical test" : "Pod") : "Patient"}
           </p>
           <p>{t.text}</p>
-          {t.english && t.english !== t.text && <p className="text-sm italic text-slate-400">{t.english}</p>}
+          {t.english && t.english !== t.text && <p className="text-sm italic text-slate-400">{plain(t.english)}</p>}
         </div>
       ))}
     </div>
@@ -566,9 +567,9 @@ function ResultPanel({
   scanMs: number | null;
   faceVisible: boolean;
 }) {
-  const seenTraits = TRAITS.filter((t) => (scan[t.id] ?? 0) >= 0.5).sort((a, b) => (scan[b.id] ?? 0) - (scan[a.id] ?? 0));
+  const seenTraits = TRAITS.filter((t) => (scan[t.id] ?? 0) >= 0.6).sort((a, b) => (scan[b.id] ?? 0) - (scan[a.id] ?? 0));
   const cameraCard = (
-    <Card title={`Camera sees → could mean · ${TRAITS.length} traits checked${scanMs ? ` · ${scanMs} ms` : ""}`}>
+    <Card title={`Camera noticed → worth asking about · ${TRAITS.length} traits checked${scanMs ? ` · ${scanMs} ms` : ""}`}>
       {!faceVisible && !Object.keys(scan).length ? (
         <p className="text-sm text-slate-400">Waiting for someone to sit in front of the camera.</p>
       ) : seenTraits.length ? (
@@ -623,13 +624,20 @@ function ResultPanel({
       </div>
 
       <Card title="Most likely conditions">
-        {top.length === 0 && <p className="text-sm text-slate-400">Listening to the patient — conditions appear after the first answer.</p>}
+        {top.length === 0 && (
+          <p className="text-sm text-slate-400">
+            {result.complaint_known
+              ? "Not enough information yet — the pod is asking more questions."
+              : "No assumptions yet. The pod first asks what brought the patient in."}
+          </p>
+        )}
         {top.map((c, i) => (
           <div key={c.name} className={`rounded-xl p-3 ${i === 0 ? "bg-slate-800" : "mt-2 bg-slate-800/50"}`}>
             <div className="flex items-baseline justify-between gap-2">
               <p className={i === 0 ? "text-xl font-bold" : "font-semibold"}>
                 {c.name}
                 <span className={`ml-2 rounded px-1.5 py-0.5 align-middle text-xs ${URGENCY_STYLE[c.urgency].cls}`}>{c.urgency}</span>
+                {c.early && <span className="ml-1 rounded bg-slate-700 px-1.5 py-0.5 align-middle text-xs text-slate-300">early guess</span>}
               </p>
               <span className={`tabular-nums ${i === 0 ? "text-2xl font-bold" : "text-slate-300"}`}>{Math.round(c.probability * 100)}%</span>
             </div>
@@ -774,8 +782,10 @@ function QuestionCard({ turns, why, status }: { turns: Turn[]; why: string | nul
         {isTest ? "Do this now" : status === "done" ? "Pod says" : status === "listening" ? "Your turn — just talk" : "Pod is asking"}
       </p>
       <p className="mt-1 text-2xl font-semibold leading-snug">{q.text}</p>
-      {q.english && q.english !== q.text && <p className="mt-1 text-sm italic text-slate-300">{q.english}</p>}
+      {q.english && q.english !== q.text && <p className="mt-1 text-sm italic text-slate-300">{plain(q.english)}</p>}
       {why && <p className="mt-2 text-xs text-sky-300">Why: {why}</p>}
     </div>
   );
 }
+
+const plain = (english: string) => english.replace(/^\[(hunch|answering the patient)\]\s*/, "");
