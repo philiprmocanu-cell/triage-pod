@@ -8,6 +8,16 @@ Read first, from the Cal Hacks 13.0 Hacker Guide (your Google Doc):
 - Venue Wi-Fi "Cal Hacks 13.0" / "hackers!". Venue Wi-Fi usually blocks devices from seeing each other: use your phone hotspot for pod ↔ laptop.
 - Submit on Devpost by **Sunday 9:00 AM**; judging 10:30–12:30 at your table; live demo required.
 
+## Update: you can solder at home
+
+That opens the simpler build, and it is the one to do:
+
+**One-board pod.** Put a finger sensor on the camera pod's XIAO ESP32-S3 with four wires (3V3, GND, D4 = SDA, D5 = SCL). The firmware for exactly this is already written and compiles (`hardware/pod-firmware`): camera, finger sensor, BOOT button as Talk, Wi-Fi. No watch firmware to write tonight. The watch stays whole and can join later over Bluetooth as a second screen.
+
+**Order now (one item):** a **MAX30102 heart-rate/oxygen module** (the "GY-MAX30102" boards, ~$8–10, Amazon same-day in SF). Same chip family as the red sensor in your watch, same library, same four wires; it means you do not pull the watch apart. If you would rather not wait for it, unsolder the red sensor from the watch instead and use that.
+
+Four solder joints at home, before you come back to the venue (no soldering allowed there). Everything else below still applies.
+
 ## The plan in one line
 
 Nothing gets unwired. The **camera pod** stays as it is (XIAO ESP32-S3 on the Vision AI V2 + 1200 mAh battery) and talks to the laptop over Wi-Fi. The **watch** stays as it is (XIAO nRF52840 Sense + round touch screen + red MAX30101 sensor + small battery) and talks to the laptop over Bluetooth. The laptop is the voice and the brain. The two boxes never need a wire between them.

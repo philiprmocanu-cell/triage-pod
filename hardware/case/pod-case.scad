@@ -4,6 +4,7 @@
 // Export STL (F6 then File > Export). 0.28 mm layers, 15% infill, no supports needed.
 
 part = "faceplate"; // faceplate | watch_shelf | base
+lettering = false;  // true engraves "Finger here / TRIAGE POD" on the faceplate
 
 // ---- measure these (mm) ----
 camera_board_w   = 40;   // Grove Vision AI V2 board width  (measure yours)
@@ -34,10 +35,10 @@ module faceplate() {
     translate([face_w / 2, face_h - 30, -1]) cylinder(d = lens_d, h = wall + 2);
     // slot the watch shelf hooks into
     translate([face_w / 2 - 25, 70, -1]) cube([50, 3.2, wall + 2]);
-    // "Finger here" lettering, 0.6 mm deep, below the shelf
-    translate([face_w / 2, 52, wall - 0.6]) linear_extrude(1) text("Ponga su dedo aqui", size = 6, halign = "center", font = "Liberation Sans:style=Bold");
-    translate([face_w / 2, 42, wall - 0.6]) linear_extrude(1) text("Finger here", size = 5, halign = "center");
-    translate([face_w / 2, 12, wall - 0.6]) linear_extrude(1) text("TRIAGE POD", size = 7, halign = "center", font = "Liberation Sans:style=Bold");
+    // optional lettering, 0.6 mm deep, below the shelf
+    if (lettering) translate([face_w / 2, 52, wall - 0.6]) linear_extrude(1) text("Ponga su dedo aqui", size = 6, halign = "center", font = "Liberation Sans:style=Bold");
+    if (lettering) translate([face_w / 2, 42, wall - 0.6]) linear_extrude(1) text("Finger here", size = 5, halign = "center");
+    if (lettering) translate([face_w / 2, 12, wall - 0.6]) linear_extrude(1) text("TRIAGE POD", size = 7, halign = "center", font = "Liberation Sans:style=Bold");
   }
   // camera board pocket rails on the back
   translate([face_w / 2 - camera_board_w / 2 - wall, face_h - 30 - camera_board_h / 2 - wall, wall])
