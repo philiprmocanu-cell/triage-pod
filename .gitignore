@@ -50,3 +50,4 @@ hardware/pod-firmware/secrets.h
 # SpacetimeDB module build output and packages
 node_modules
 spacetime/spacetimedb/dist
+/.next-prod/

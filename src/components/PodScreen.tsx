@@ -22,6 +22,13 @@ const REGIONS: Region[] = [
 
 type Status = "ready" | "looking" | "idle" | "listening" | "transcribing" | "thinking" | "speaking" | "testing" | "done";
 
+// Every n-th picture, so a burst covers the whole window with the newest one last.
+function pickSpread<T>(list: T[], n: number): T[] {
+  if (list.length <= n) return list;
+  const step = list.length / n;
+  return Array.from({ length: n }, (_, i) => list[Math.min(list.length - 1, Math.floor((i + 1) * step) - 1)]);
+}
+
 const STATUS_TEXT: Record<Status, string> = {
   ready: "Patient sits in front of the pod, then press Start",
   looking: "Looking at the patient…",
@@ -43,8 +50,10 @@ const URGENCY_STYLE: Record<Urgency, { label: string; cls: string }> = {
 const DELIVERY: Record<string, string> = { on_site: "In kit", drone: "Drone", road: "Road" };
 
 
-const FRAME_EVERY_MS = 1000;
-const FRAME_KEEP = 12;
+const FRAME_EVERY_MS = 100; // 10 pictures a second: Jev sees movement, almost video
+const FRAME_KEEP = 40; // the last four seconds
+const SCAN_EVERY_MS = 2000;
+const SCAN_FRAMES = 8; // pictures per scan, spread over the last two seconds
 const now = () => performance.now() / 1000;
 
 export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: boolean; podUrl?: string; village?: string }) {
@@ -91,7 +100,9 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     const id = setInterval(() => {
       const b64 = cam.current?.capture(480);
       if (!b64) return;
-      frames.current.push({ t: now(), b64, face: cam.current?.captureFace() ?? undefined });
+      // The face close-up is dearer to make: one every third picture is plenty.
+      const face = frames.current.length % 3 === 0 ? (cam.current?.captureFace() ?? undefined) : undefined;
+      frames.current.push({ t: now(), b64, face });
       if (frames.current.length > FRAME_KEEP) frames.current.shift();
     }, FRAME_EVERY_MS);
     return () => clearInterval(id);
@@ -350,7 +361,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
         const res = await fetch("/api/scan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frames: frames.current.slice(-3).map((f) => ({ secondsAgo: t - f.t, b64: f.b64, face: f.face })) }),
+          body: JSON.stringify({ frames: pickSpread(frames.current.slice(-SCAN_FRAMES * 3), SCAN_FRAMES).map((f) => ({ secondsAgo: t - f.t, b64: f.b64, face: f.face })) }),
         });
         if (res.ok) {
           const d = await res.json();
@@ -365,7 +376,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       } finally {
         scanning.current = false;
       }
-    }, 3500);
+    }, SCAN_EVERY_MS);
     return () => clearInterval(id);
   }, [faceVisible, services.jev, status]);
 

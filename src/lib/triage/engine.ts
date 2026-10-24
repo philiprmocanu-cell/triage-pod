@@ -723,7 +723,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         english: next.english.replace(/^\[hunch:[^\]]*\]\s*/, ""),
         locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
       }).catch(() => null),
-      new Promise<null>((r) => setTimeout(() => r(null), 4500)), // never hold the patient up: fall back to the plain question
+      new Promise<null>((r) => setTimeout(() => r(null), 2500)), // never hold the patient up: fall back to the plain question
     ]);
     if (phrased) next = { ...next, text: phrased.text, english: next.english.startsWith("[hunch:") ? `${next.english.match(/^\[hunch:[^\]]*\]/)![0]} ${phrased.english}` : phrased.english };
   }
@@ -736,6 +736,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
           urgency,
           areas_checked: open.map((p) => p.label),
           confirmed_findings: findings.filter((f) => f.yes >= YES).map((f) => f.label),
+          verdict,
+          likely: causes.find((c) => c.confident)?.name ?? null,
+          sending: orders.map((o) => `${o.qty} ${o.item}`),
         },
         locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
       }).catch(() => null),

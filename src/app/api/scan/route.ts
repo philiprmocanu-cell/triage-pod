@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   if (!frames?.length) return NextResponse.json({ error: "No pictures" }, { status: 400 });
   const t0 = Date.now();
   const images: Record<string, string> = {};
-  const seq = frames.slice(-3).map((f, i) => {
+  const seq = frames.slice(-10).map((f, i) => {
     const ref = `scan-${t0}-${i}-5e8a`;
     images[ref] = f.b64;
     if (f.face) images[`${ref}-face`] = f.face;

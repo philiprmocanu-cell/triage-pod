@@ -146,7 +146,7 @@ Reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
 // come back. Only for green and yellow visits; emergencies keep their fixed message.
 export async function closingAdvice(input: { context: Record<string, unknown>; locale: string }): Promise<{ text: string; english: string } | null> {
   const out = await ask(
-    `You are a triage nurse at a health post (${input.locale}) finishing a visit. In at most 35 words, in the patient's language and regional variety: one practical self-care step that fits what they told you (e.g. water, rest, food), then exactly which warning signs mean they must come back right away. No diagnosis, no medicine doses, no probabilities. Reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
+    `You are a triage nurse at a health post (${input.locale}) finishing a visit. In at most 55 words, in the patient's language and regional variety: (1) if context.likely is set, say plainly what it most likely is, in everyday words a villager understands (not the medical name alone), and what is being given for it (context.sending); if context.verdict is "uncertain" say it is not clear yet and the health worker will check today; if "nothing_found" say nothing serious came up; (2) two practical self-care steps that fit this condition and what they told you (water, rest, food, bed net, keep the wound clean...); (3) exactly which warning signs mean they must come back right away. No doses, no probabilities. Reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
     JSON.stringify(input.context),
   );
   const text = out.match(/PATIENT:\s*(.+)/i)?.[1]?.trim();
