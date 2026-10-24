@@ -104,6 +104,7 @@ export default function DemoPage() {
       <footer className="px-6 pb-8 text-xs text-slate-500">
         <p className="font-semibold text-slate-400">If something breaks</p>
         <ul className="mt-1 list-disc space-y-1 pl-5">
+          <li><b>Show the demo from the fast build:</b> <code>npm run build:demo</code> once, then <code>npm run demo</code> → <code>http://localhost:3418</code>. Pages switch instantly there; <code>:3417</code> is the development server and compiles each page on first visit.</li>
           <li>Map or government view says "offline": run <code>spacetime start</code> in a terminal, then reload.</li>
           <li>Pod does not hear you: press Space (or the pod button) before speaking, or type the answer in the box.</li>
           <li>Camera says "come a little closer": sit about 50 cm away, facing it, with light on your face.</li>

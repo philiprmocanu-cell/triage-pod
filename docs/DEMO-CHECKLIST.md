@@ -45,10 +45,11 @@ Not done yet: flashing the firmware onto the XIAO and testing it on the real boa
 ## 3. At the venue (10 minutes)
 
 1. Phone hotspot on; laptop joins it; power the pod.
-2. Start the app if it isn't running:
-   `cd ~/code/triage-pod && npm run dev -- --port 3417`
-3. Chrome window 1 (patient): `http://localhost:3417/kiosk?pod=triagepod.local` → press **F**.
-4. Chrome window 2 (you): `http://localhost:3417/staff`.
+2. Start the database and the fast demo build (pages switch instantly):
+   `spacetime start` in one terminal; in another `cd ~/code/triage-pod && npm run build:demo && npm run demo`
+   (the `-- --port 3417` dev server is for changing code, not for showing).
+3. Chrome window 1 (patient): `http://localhost:3418/kiosk?village=Katete&pod=triagepod.local` → press **F**.
+4. Chrome window 2 (you): `http://localhost:3418/staff`; a third for `http://localhost:3418/globe`.
 5. Allow the microphone. Turn the laptop volume up. Do one full test visit.
 6. Clear the test visits: delete `data/registry.json` (it holds tonight's test patients).
 
