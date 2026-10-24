@@ -12,6 +12,7 @@ import TeachAccent from "./TeachAccent";
 type Region = { id: string; name: string; locale: string; languages: string[] };
 
 const REGIONS: Region[] = [
+  { id: "zm", name: "Rural Zambia (Eastern Province)", locale: "en-US", languages: ["en", "es"] },
   { id: "gt", name: "Rural Guatemala", locale: "es-GT", languages: ["es", "en"] },
   { id: "bo", name: "Rural Bolivia", locale: "es-BO", languages: ["es", "en"] },
   { id: "pe", name: "Andean Peru", locale: "es-PE", languages: ["es", "en"] },
@@ -46,7 +47,7 @@ const FRAME_EVERY_MS = 1000;
 const FRAME_KEEP = 12;
 const now = () => performance.now() / 1000;
 
-export default function PodScreen({ kiosk = false, podUrl }: { kiosk?: boolean; podUrl?: string }) {
+export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: boolean; podUrl?: string; village?: string }) {
   const [region, setRegion] = useState(REGIONS[0]);
   const [status, setStatus] = useState<Status>("ready");
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -66,6 +67,7 @@ export default function PodScreen({ kiosk = false, podUrl }: { kiosk?: boolean; 
   const [scanNow, setScanNow] = useState<TraitScan>({});
   const [scanAvg, setScanMax] = useState<TraitScan>({});
   const [scanMs, setScanMs] = useState<number | null>(null);
+  const [tooFar, setTooFar] = useState(false); // someone is there, but not close or facing enough to judge
   const [autoStart, setAutoStart] = useState(true);
   const [level, setLevel] = useState(0);
   const listenAbort = useRef<AbortController | null>(null);
@@ -231,7 +233,7 @@ export default function PodScreen({ kiosk = false, podUrl }: { kiosk?: boolean; 
         fetch("/api/registry", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ intake: nextIntake, result: r, turns: nextTurns, region: region.name }),
+          body: JSON.stringify({ intake: nextIntake, result: r, turns: nextTurns, region: region.name, village }),
         })
           .then((x) => x.json())
           .then((d) => setSaved({ name: d.name, community: d.community, handover: d.handover }))
@@ -352,7 +354,8 @@ export default function PodScreen({ kiosk = false, podUrl }: { kiosk?: boolean; 
         });
         if (res.ok) {
           const d = await res.json();
-          if (d.person >= 0.5) {
+          setTooFar(!d.judged && d.person >= 0.5);
+          if (d.judged) {
             setScanNow(d.traits);
             // Smoothed over scans: one flicker (a single 80% reading) only reaches 40%.
             setScanMax((m) => Object.fromEntries(TRAITS.map((x) => [x.id, 0.5 * (m[x.id] ?? 0) + 0.5 * (d.traits[x.id] ?? 0)])));
@@ -455,15 +458,22 @@ export default function PodScreen({ kiosk = false, podUrl }: { kiosk?: boolean; 
       <div className="fixed inset-0 flex flex-col bg-slate-950 text-slate-100">
         <div className="flex items-center justify-between px-8 py-4 text-sm text-slate-400">
           <span className="font-semibold tracking-wide text-slate-300">TRIAGE POD</span>
-          <span>{result?.network?.advisories[0] ? `⚠ ${result.network.advisories[0].text}` : "Un promotor de salud está con usted · A health worker is with you"}</span>
+          <span>{result?.network?.advisories[0] ? `⚠ ${result.network.advisories[0].text}` : region.languages[0] === "en" ? "A health worker is with you" : "Un promotor de salud está con usted · A health worker is with you"}</span>
         </div>
         <div className="flex flex-1 flex-col items-center justify-center px-12 text-center">
           {status === "ready" ? (
             <>
-              <p className="text-5xl font-semibold leading-tight">Bienvenido. Siéntese frente a la cámara.</p>
-              <p className="mt-4 text-2xl text-slate-400">Welcome. Please sit in front of the camera.</p>
+              {region.languages[0] === "en" ? (
+                <p className="text-5xl font-semibold leading-tight">Welcome. Please sit in front of the camera.</p>
+              ) : (
+                <>
+                  <p className="text-5xl font-semibold leading-tight">Bienvenido. Siéntese frente a la cámara.</p>
+                  <p className="mt-4 text-2xl text-slate-400">Welcome. Please sit in front of the camera.</p>
+                </>
+              )}
+              {tooFar && <p className="mt-6 text-3xl text-amber-300">{region.languages[0] === "en" ? "Come a little closer, facing the screen" : "Acérquese un poco, mirando la pantalla · Come a little closer"}</p>}
               <button onClick={onStart} className="mt-10 rounded-3xl bg-sky-600 px-12 py-6 text-3xl font-semibold hover:bg-sky-500">
-                Empezar · Start
+                {region.languages[0] === "en" ? "Start" : "Empezar · Start"}
               </button>
             </>
           ) : (
@@ -627,7 +637,7 @@ export default function PodScreen({ kiosk = false, podUrl }: { kiosk?: boolean; 
                 </div>
               )}
               <div className="flex items-center justify-between gap-2">
-                <p className="text-lg">{STATUS_TEXT[status]}</p>
+                <p className="text-lg">{tooFar && status === "ready" ? "Patient too far or side-on: the camera won't judge until they sit close, facing it" : STATUS_TEXT[status]}</p>
                 <label className="flex items-center gap-1.5 text-xs text-slate-400">
                   <input type="checkbox" checked={autoStart} onChange={(e) => setAutoStart(e.target.checked)} />
                   auto-start

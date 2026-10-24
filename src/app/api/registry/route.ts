@@ -3,6 +3,7 @@ import { addVisit, readRegistry, updateVisit, VisitRecord } from "@/lib/registry
 import { handover, readIntake } from "@/lib/triage/brain";
 import { rememberWords } from "@/lib/triage/dialect";
 import { snapshot } from "@/lib/network";
+import { needsFrom, reportVisit } from "@/lib/spacetime";
 import type { Intake, TriageResult, Turn } from "@/lib/triage/types";
 
 export const runtime = "nodejs";
@@ -14,7 +15,7 @@ export async function GET() {
 // Save a finished visit. The record is written at once; Claude fills in the clean name,
 // community and the doctor's handover note a few seconds later.
 export async function POST(req: Request) {
-  const { intake, result, turns, region } = (await req.json()) as { intake: Intake; result: TriageResult; turns: Turn[]; region: string };
+  const { intake, result, turns, region, village } = (await req.json()) as { intake: Intake; result: TriageResult; turns: Turn[]; region: string; village?: string };
   const consent = (result.consent ?? 0) >= 0.5;
   const record: VisitRecord = {
     id: crypto.randomUUID(),
@@ -47,6 +48,14 @@ export async function POST(req: Request) {
   await updateVisit(record.id, patch);
   await rememberWords(patch.community ?? intake.community, result.lexicon ?? {}); // the community's words, for next time
   await snapshot().catch((e) => console.error("network refresh after visit failed", e)); // report this patient to the network agents
+  // The live map: anything this patient needs is ordered to their home, under their name.
+  await reportVisit({
+    village: village ?? patch.community ?? "Katete",
+    patientName: patch.name ?? "Patient",
+    urgency: result.urgency,
+    summary: result.reason,
+    needs: needsFrom(result.resources),
+  }).catch((e) => console.error("SpacetimeDB report failed (is `spacetime start` running?)", e));
   return NextResponse.json({ ...record, ...patch });
 }
 

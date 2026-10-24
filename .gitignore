@@ -46,3 +46,7 @@ next-env.d.ts
 
 # pod Wi-Fi credentials
 hardware/pod-firmware/secrets.h
+
+# SpacetimeDB module build output and packages
+node_modules
+spacetime/spacetimedb/dist

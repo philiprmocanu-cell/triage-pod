@@ -373,7 +373,7 @@ export type TestId = (typeof TESTS)[number]["id"];
 // Before any medical question: who the patient is. Saved only with consent.
 export const INTAKE = {
   // Greeting in both languages: the patient's answer tells the pod which one to continue in.
-  name: { en: "Hello, I'm the health pod. What's your name? Hola, ¿cómo se llama?", es: "Hola, soy el asistente de salud. ¿Cómo se llama? Hello, what's your name?" },
+  name: { en: "Hello, I'm the health pod. What's your name?", es: "Hola, soy el asistente de salud. ¿Cómo se llama? Hello, what's your name?" },
   community: { en: "Where do you live?", es: "¿En qué comunidad o lugar vive?" },
   who: { en: "Is this visit for you or for someone else, like a child? How old are they?", es: "¿La consulta es para usted o para otra persona, como un niño? ¿Qué edad tiene?" },
   consent: {
@@ -416,6 +416,12 @@ export const CLOSING: Record<Urgency, Text> = {
     en: "Thank you. The health worker will give you what you need here.",
     es: "Gracias. El promotor de salud le va a dar lo que necesita aquí.",
   },
+};
+
+// Closing when nothing was found and nothing is needed.
+export const CLOSING_WELL: Text = {
+  en: "Thank you. Nothing worrying came up today, and you don't need any treatment right now.",
+  es: "Gracias. Hoy no encontramos nada preocupante, y por ahora no necesita ningún tratamiento.",
 };
 
 // Closing when someone has said they have thought about ending their life: warm, not alarming.

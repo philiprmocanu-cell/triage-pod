@@ -18,6 +18,7 @@ import { maxUrgency, runRules, vitalsRules } from "./rules";
 import {
   CLOSING,
   CLOSING_SUICIDE_RISK,
+  CLOSING_WELL,
   FINDING_KEYS,
   FINDINGS,
   FindingKey,
@@ -220,6 +221,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
     impact: "Has the patient already said how this affects their daily life or what they cannot do?",
   };
   if (conversation.length) for (const [f, question] of Object.entries(ALREADY_HISTORY)) q[`already_h_${f}`] = { type: "noul", instructions: `From the \`conversation\`: ${question}` };
+  if (conversation.length)
+    q.no_complaint = {
+      type: "noul",
+      instructions: "From the `conversation`: does the patient say nothing is wrong, that they feel well and came only for a check-up, with no symptom, pain or worry at all?",
+    };
   if (conversation.length) {
     for (const [f, question] of Object.entries(ALREADY)) {
       if (!intake[f as keyof Intake]) q[`already_${f}`] = { type: "noul", instructions: `From the \`conversation\`: ${question}` };
@@ -428,6 +434,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const confirmedWrong = lastPod?.asks === "history:confirm" && noulOf(a.confirm_wrong) >= 0.6;
   const retells = input.turns.filter((t) => t.role === "pod" && t.asks === "open").length - 1;
   for (const f of ["onset", "impact"] as HistoryField[]) if (noulOf(a[`already_h_${f}`]) >= 0.8) asked.add(`history:${f}`);
+  // "Just a check-up, I feel fine": no problem to time, rate or weigh, so skip straight to the screening questions.
+  const feelsWell = noulOf(a.no_complaint) >= 0.8 && !Object.values(yes).some((p) => p >= YES);
+  if (feelsWell) for (const f of ["onset", "impact", "severity"] as HistoryField[]) asked.add(`history:${f}`);
   const testDone = (id: string) => id in input.tests || asked.has(`test:${id}`);
   const moodish = (["low_mood", "little_interest", "anxious", "trauma_or_loss", "lonely"] as FindingKey[]).some((k) => yes[k] >= YES);
 
@@ -544,7 +553,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
   }
   if (!next && input.stage === "answer" && !redRule && complaintKnown && !asked.has("history:else")) next = say("history:else", HISTORY.else);
   const done = input.stage === "answer" && !next;
-  if (done) next = say(null, ruleHits.some((h) => h.id === "suicide_risk") ? CLOSING_SUICIDE_RISK : CLOSING[urgency]);
+  const nothingNeeded = urgency === "green" && !resources.some((r) => r.probability >= 0.5);
+  if (done) next = say(null, ruleHits.some((h) => h.id === "suicide_risk") ? CLOSING_SUICIDE_RISK : nothingNeeded ? CLOSING_WELL : CLOSING[urgency]);
 
   const lastAsked = lastPod?.asks;
   const reAsked = (lastPod?.text ?? "").startsWith(SORRY[language]);
