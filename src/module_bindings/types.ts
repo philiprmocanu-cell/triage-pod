@@ -44,6 +44,19 @@ export const Need = __t.object("Need", {
 });
 export type Need = __Infer<typeof Need>;
 
+export const Patient = __t.object("Patient", {
+  id: __t.u32(),
+  name: __t.string(),
+  villageId: __t.u32(),
+  ageMonths: __t.u32(),
+  sex: __t.string(),
+  pregnant: __t.bool(),
+  notes: __t.string(),
+  vaccinesGiven: __t.string(),
+  lastVisit: __t.string(),
+});
+export type Patient = __Infer<typeof Patient>;
+
 export const Pop = __t.object("Pop", {
   villageId: __t.u32(),
   text: __t.string(),

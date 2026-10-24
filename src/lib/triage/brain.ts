@@ -90,7 +90,7 @@ export async function followUpQuestion(input: { conversation: Record<string, str
 // The coordinator agent: a short briefing of the whole pod network for the health team.
 export function coordinatorBriefing(state: Record<string, unknown>): Promise<string> {
   return ask(
-    "You coordinate a network of AI triage pods at rural health posts in Alta Verapaz, Guatemala. Write a 4-sentence briefing for the regional health team in plain English: what is happening (outbreaks, emergencies), what the agents already did (referrals, deliveries, doctor reviews), and the one decision a human should make now. No headings, no bullet points.",
+    "You coordinate a network of AI triage pods at rural health posts in Eastern Province, Zambia. Write a 4-sentence briefing for the regional health team in plain English: what is happening (outbreaks, emergencies), what the agents already did (referrals, deliveries, doctor reviews), and the one decision a human should make now. No headings, no bullet points.",
     JSON.stringify(state),
   );
 }

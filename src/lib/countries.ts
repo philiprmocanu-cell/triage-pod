@@ -12,6 +12,11 @@ export type Country = {
 };
 
 export const COUNTRIES: Country[] = [
+  { iso3: "ZMB", name: "Zambia", region: "Africa", official: "English", local: "Chewa/Nyanja, Bemba, Tonga, Lozi", podLanguage: "en", partners: [
+    { name: "Zambia Medicines and Medical Supplies Agency (ZAMMSA)", what: "National medical stores; the hub-to-post distribution gap the pod network is built around.", url: "https://www.zammsa.co.zm" },
+    { name: "Zipline Zambia", what: "Drone delivery of medicines and vaccines already flying from Zambian distribution centres.", url: "https://www.flyzipline.com" },
+    { name: "Eastern Provincial Health Office (Chipata)", what: "Owns the posts in the demo; the government view is written for this office.", url: "https://www.moh.gov.zm" },
+  ] },
   { iso3: "GTM", name: "Guatemala", region: "Latin America", official: "Spanish", local: "Q'eqchi', K'iche', Kaqchikel, Mam", podLanguage: "es", partners: [
     { name: "TulaSalud", what: "Cobán-based NGO working with the Ministry of Health in Alta Verapaz; phone-equipped community health workers (Kawok app). Best first pilot partner.", url: "https://tula.org/contact" },
     { name: "Wuqu' Kawoq / Maya Health Alliance", what: "Tecpán; care in Mayan languages; ran an mHealth trial; has its own US-registered ethics board (IRB).", url: "https://mayahealth.org" },

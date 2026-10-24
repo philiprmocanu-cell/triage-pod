@@ -59,7 +59,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-6 py-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Supply dashboard · Alta Verapaz, Guatemala</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Supply dashboard · Eastern Province, Zambia</h1>
           <p className="text-xs text-slate-400">
             Demand comes from AI triage at every pod. Demo network, approximate locations, running {data.simSpeed}× real time.
           </p>

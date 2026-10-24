@@ -26,6 +26,14 @@ export const STOCK_ITEMS = [
   "IV fluids",
   "Blood (O negative)",
   "Therapeutic food (RUTF)",
+  "Malaria vaccine (R21)",
+  "Measles-rubella vaccine",
+  "Pentavalent vaccine",
+  "PCV vaccine",
+  "Rotavirus vaccine",
+  "Polio vaccine (OPV)",
+  "BCG vaccine",
+  "HPV vaccine",
 ] as const;
 export type StockItem = (typeof STOCK_ITEMS)[number];
 

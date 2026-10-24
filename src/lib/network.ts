@@ -8,7 +8,7 @@
 // by road otherwise; flooded roads force drones, and oxygen (too heavy to fly) is flagged so the
 // patient is sent to a post that has it.
 //
-// Demo data: approximate locations in Alta Verapaz, Guatemala. State lives in server memory.
+// Demo data: approximate locations in Eastern Province, Zambia. State lives in server memory.
 
 import { runAgents } from "./agents";
 import { readRegistry, VisitRecord } from "./registry";
@@ -16,16 +16,18 @@ import { readRegistry, VisitRecord } from "./registry";
 export type Post = { id: string; name: string; lat: number; lng: number; hub?: boolean; population: number; oxygen: boolean };
 
 export const POSTS: Post[] = [
-  { id: "coban", name: "Cobán (hub + drone base)", lat: 15.4708, lng: -90.3711, hub: true, population: 212000, oxygen: true },
-  { id: "chamelco", name: "San Juan Chamelco", lat: 15.4256, lng: -90.3297, population: 61000, oxygen: false },
-  { id: "carcha", name: "San Pedro Carchá", lat: 15.4775, lng: -90.3121, population: 235000, oxygen: true },
-  { id: "tactic", name: "Tactic", lat: 15.3175, lng: -90.3528, population: 40000, oxygen: false },
-  { id: "tamahu", name: "Tamahú", lat: 15.3071, lng: -90.2348, population: 20000, oxygen: false },
-  { id: "lanquin", name: "Lanquín", lat: 15.5747, lng: -89.9811, population: 30000, oxygen: false },
-  { id: "senahu", name: "Senahú", lat: 15.4167, lng: -89.8167, population: 70000, oxygen: false },
-  { id: "chisec", name: "Chisec", lat: 15.8128, lng: -90.2903, population: 85000, oxygen: false },
-  { id: "fray", name: "Fray Bartolomé de las Casas", lat: 15.8434, lng: -89.8656, population: 70000, oxygen: false },
-  { id: "santacruz", name: "Santa Cruz Verapaz", lat: 15.3733, lng: -90.43, population: 35000, oxygen: false },
+  { id: "chipata", name: "Chipata (hub + drone base)", lat: -13.633, lng: 32.65, hub: true, population: 127000, oxygen: true },
+  { id: "katete", name: "Katete", lat: -14.05, lng: 32.05, population: 26000, oxygen: false },
+  { id: "petauke", name: "Petauke", lat: -14.25, lng: 31.32, population: 31000, oxygen: true },
+  { id: "sinda", name: "Sinda", lat: -14.217, lng: 31.767, population: 12000, oxygen: false },
+  { id: "nyimba", name: "Nyimba", lat: -14.55, lng: 30.817, population: 9000, oxygen: false },
+  { id: "lundazi", name: "Lundazi", lat: -12.283, lng: 33.167, population: 17000, oxygen: true },
+  { id: "chadiza", name: "Chadiza", lat: -14.067, lng: 32.433, population: 8000, oxygen: false },
+  { id: "mfuwe", name: "Mfuwe (Mambwe)", lat: -13.083, lng: 31.783, population: 10000, oxygen: false },
+  { id: "vubwi", name: "Vubwi", lat: -13.983, lng: 32.883, population: 6000, oxygen: false },
+  { id: "chama", name: "Chama", lat: -11.217, lng: 33.167, population: 15000, oxygen: false },
+  { id: "lumezi", name: "Lumezi", lat: -12.8, lng: 32.75, population: 7000, oxygen: false },
+  { id: "kasenengwa", name: "Kasenengwa", lat: -13.88, lng: 32.17, population: 6500, oxygen: false },
 ];
 
 export type Sku = { id: string; label: string; kg: number; drone: boolean; critical: number; match: RegExp };
@@ -131,15 +133,25 @@ function simVisit(post: string, t: number, r: () => number, kind?: "malaria" | "
   return { id: `sim-${++visitSeq}`, post, t, needs, kind: k, fever: k === "malaria" || (k === "respiratory" && r() < 0.5), red: r() < 0.06, source: "sim" };
 }
 
-const g = globalThis as unknown as { __network?: State };
-const state = () => (g.__network ??= initialState());
+const g = globalThis as unknown as { __network?: State; __networkPosts?: string };
+// State survives code reloads; if the list of posts changed (new country), start over.
+const state = () => {
+  const key = POSTS.map((p) => p.id).join(",");
+  if (!g.__network || g.__networkPosts !== key) {
+    g.__network = initialState();
+    g.__networkPosts = key;
+    const a = globalThis as unknown as { __agents?: unknown };
+    a.__agents = undefined;
+  }
+  return g.__network;
+};
 
 // Pod visits come from the registry; their community decides which post they belong to.
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 export function postFor(community: string | null | undefined): string {
-  if (!community) return "coban";
+  if (!community) return "katete";
   const c = norm(community);
-  return POSTS.find((p) => norm(p.name).split(/[ (]/).some((w) => w.length > 3 && c.includes(w)))?.id ?? "coban";
+  return POSTS.find((p) => norm(p.name).split(/[ (]/).some((w) => w.length > 3 && c.includes(w)))?.id ?? "katete";
 }
 function podVisit(r: VisitRecord): Visit {
   const needs: Record<string, number> = {};

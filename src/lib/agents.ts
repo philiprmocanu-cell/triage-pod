@@ -44,7 +44,7 @@ type AgentState = {
   lastShortageNote: number;
 };
 
-const DOCTORS = ["Dra. Morales (Cobán)", "Dr. Xol (remote)", "Dra. Pérez (remote)"];
+const DOCTORS = ["Dr. Banda (Chipata General)", "Dr. Mwale (remote)", "Dr. Phiri (remote)"];
 const ADVISORY_RADIUS_KM = 45;
 const ADVISORY_MS = 3 * 60_000; // demo time: about 3 hours of network time at 60x
 

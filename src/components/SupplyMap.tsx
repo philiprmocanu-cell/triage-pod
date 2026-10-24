@@ -36,7 +36,7 @@ export default function SupplyMap({ posts, flights, selected, onSelect }: { post
       const leaflet = await import("leaflet");
       if (cancelled || !el.current || map.current) return;
       L.current = leaflet;
-      map.current = leaflet.map(el.current, { zoomControl: false, attributionControl: true }).fitBounds([[15.28, -90.47], [15.87, -89.78]], { padding: [30, 30] });
+      map.current = leaflet.map(el.current, { zoomControl: false, attributionControl: true }).fitBounds([[-14.7, 30.6], [-11.0, 33.4]], { padding: [30, 30] });
       // Satellite imagery underneath, place names on top.
       leaflet
         .tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {

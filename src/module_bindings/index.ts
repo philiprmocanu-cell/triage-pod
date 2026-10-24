@@ -35,6 +35,8 @@ import {
 
 // Import all reducer arg schemas
 import AllocateReducer from "./allocate_reducer";
+import OrderVaccinesReducer from "./order_vaccines_reducer";
+import RecordDoseReducer from "./record_dose_reducer";
 import ReportVisitReducer from "./report_visit_reducer";
 import ResetDemoReducer from "./reset_demo_reducer";
 import SetAgentsReducer from "./set_agents_reducer";
@@ -45,6 +47,7 @@ import SetSimulationReducer from "./set_simulation_reducer";
 // Import all table schema definitions
 import AgentLogRow from "./agent_log_table";
 import DeliveryOrderRow from "./delivery_order_table";
+import PatientRow from "./patient_table";
 import PopRow from "./pop_table";
 import SettingsRow from "./settings_table";
 import StockRow from "./stock_table";
@@ -77,6 +80,20 @@ const tablesSchema = __schema({
       { name: 'delivery_order_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, DeliveryOrderRow),
+  patient: __table({
+    name: 'patient',
+    indexes: [
+      { accessor: 'id', name: 'patient_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'villageId', name: 'patient_village_id_idx_btree', algorithm: 'btree', columns: [
+        'villageId',
+      ] },
+    ],
+    constraints: [
+      { name: 'patient_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, PatientRow),
   pop: __table({
     name: 'pop',
     indexes: [
@@ -137,6 +154,8 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("allocate", AllocateReducer),
+  __reducerSchema("order_vaccines", OrderVaccinesReducer),
+  __reducerSchema("record_dose", RecordDoseReducer),
   __reducerSchema("report_visit", ReportVisitReducer),
   __reducerSchema("reset_demo", ResetDemoReducer),
   __reducerSchema("set_agents", SetAgentsReducer),

@@ -30,7 +30,7 @@ type FeedItem = { id: number; at: string; text: string; tone: "need" | "move" | 
 type Marker =
   | { kind: "village"; v: Village; lat: number; lng: number }
   | { kind: "pop"; id: number; lat: number; lng: number; text: string; tone: string }
-  | { kind: "mover"; id: string; lat: number; lng: number; icon: string };
+  | { kind: "mover"; id: string; lat: number; lng: number; icon: string; label: string };
 
 let feedSeq = 0;
 
@@ -118,9 +118,10 @@ export default function GlobePage() {
             const a = villages.current.get(o.fromVillageId), b = villages.current.get(o.toVillageId);
             if (!a || !b) continue;
             const t = Math.min(1, Number(nowUs - o.departedAt.microsSinceUnixEpoch) / 1e6 / o.travelSeconds);
-            const m = movers.current.get(key) ?? { kind: "mover" as const, id: key, lat: a.lat, lng: a.lng, icon: o.mode === "drone" ? "🛩️" : "🚚" };
+            const m = movers.current.get(key) ?? { kind: "mover" as const, id: key, lat: a.lat, lng: a.lng, icon: o.mode === "drone" ? "🛩️" : "🚚", label: "" };
             m.lat = a.lat + (b.lat - a.lat) * t;
             m.lng = a.lng + (b.lng - a.lng) * t;
+            m.label = `${o.item} · ${Math.max(1, Math.round(o.etaMinutes * (1 - t)))} min`;
             movers.current.set(key, m);
           }
         }
@@ -239,7 +240,7 @@ export default function GlobePage() {
         <p className="text-xs uppercase tracking-[0.25em] text-sky-300">Pod network · live</p>
         <h1 className="text-2xl font-bold">Eastern Province, Zambia</h1>
         <p className="mt-1 text-sm text-slate-300">
-          The medicine is in Chipata. The village posts run out. Every pod visit turns a flagged need into a delivery to that patient&apos;s home.
+          The medicine is in Chipata. The village posts run out. Every pod visit turns a flagged need into a delivery to that patient&apos;s home. Drones fly at 100 km/h, trucks at 40: one second here is one real minute.
         </p>
         <div className="pointer-events-auto mt-4 grid grid-cols-5 gap-2 text-center">
           <Kpi label="patients" value={kpi.visits} />
@@ -260,6 +261,9 @@ export default function GlobePage() {
           </Link>
           <Link href="/government" className="rounded-lg border border-emerald-700 bg-emerald-950/70 px-3 py-1.5 text-emerald-200 hover:bg-emerald-900">
             Government view
+          </Link>
+          <Link href="/patients" className="rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-1.5 hover:bg-slate-800">
+            Patients
           </Link>
           <span className={`self-center ${connected === "live" ? "text-emerald-300" : "text-amber-300"}`}>
             ● {connected === "live" ? "SpacetimeDB live" : connected === "connecting" ? "connecting…" : "SpacetimeDB offline — run `spacetime start`"}
@@ -339,7 +343,7 @@ function markerEl(d: Marker, onPick: (v: Village) => void): HTMLElement {
     n.textContent = d.text;
   } else {
     n.className = "mover";
-    n.textContent = d.icon;
+    n.innerHTML = `<span class="ic">${d.icon}</span><span class="eta">${d.label}</span>`;
   }
   return n;
 }
@@ -365,6 +369,8 @@ const CSS = `
 .blink{animation:blink 1.2s steps(2,start) infinite}
 @keyframes blink{to{visibility:hidden}}
 @keyframes floatup{0%{opacity:0;margin-top:-10px;scale:.6}12%{opacity:1;margin-top:-34px;scale:1.1}20%{scale:1}75%{opacity:1}100%{opacity:0;margin-top:-80px}}
-.mover{transform:translate(-50%,-50%);font-size:20px;filter:drop-shadow(0 0 6px rgba(56,189,248,.9))}
+.mover{transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px}
+.mover .ic{font-size:20px;filter:drop-shadow(0 0 6px rgba(56,189,248,.9))}
+.mover .eta{font:600 10px/1 ui-monospace,Menlo,monospace;color:#e0f2fe;background:rgba(2,6,23,.8);border:1px solid rgba(56,189,248,.5);padding:2px 5px;border-radius:999px;white-space:nowrap}
 @keyframes feedin{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
 `;

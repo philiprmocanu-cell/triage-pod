@@ -78,6 +78,23 @@ const pop = table(
   }
 );
 
+// People the posts know: age, pregnancy and which vaccine doses they already had, so the pod and
+// the immunisation planner can tell exactly who is due what.
+const patient = table(
+  { name: 'patient', public: true },
+  {
+    id: t.u32().primaryKey(),
+    name: t.string(),
+    villageId: t.u32().index('btree'),
+    ageMonths: t.u32(),
+    sex: t.string(), // f | m
+    pregnant: t.bool(),
+    notes: t.string(), // chronic conditions, in plain words
+    vaccinesGiven: t.string(), // comma-separated dose codes: BCG,OPV0,PENTA1,...
+    lastVisit: t.string(), // free text
+  }
+);
+
 const agentLog = table(
   { name: 'agent_log', public: true },
   {
@@ -108,7 +125,7 @@ const tickTimer = table(
   }
 );
 
-const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, agentLog, settings, tickTimer });
+const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, patient, agentLog, settings, tickTimer });
 export default spacetimedb;
 
 const Need = t.object('Need', { item: t.string(), qty: t.u32() });
@@ -134,6 +151,7 @@ const ITEMS = [
   'Malaria rapid test', 'Antimalarial (ACT)', 'Rectal artesunate', 'Amoxicillin', 'Ceftriaxone (pre-referral)',
   'Oral rehydration salts', 'Zinc', 'Paracetamol', 'Salbutamol inhaler', 'Oxygen cylinder', 'Aspirin', 'Glucose gel',
   'Wound dressing kit', 'Tetanus vaccine', 'IV fluids', 'Blood (O negative)', 'Therapeutic food (RUTF)',
+  'Malaria vaccine (R21)', 'Measles-rubella vaccine', 'Pentavalent vaccine', 'PCV vaccine', 'Rotavirus vaccine', 'Polio vaccine (OPV)', 'BCG vaccine', 'HPV vaccine',
 ];
 const HEAVY = new Set(['Oxygen cylinder', 'IV fluids']); // by road, not drone
 const HUB_ONLY = new Set(['Oxygen cylinder', 'IV fluids', 'Blood (O negative)']); // posts don't keep these
@@ -142,7 +160,80 @@ const MIN_STOCK: Record<string, number> = {
   'Malaria rapid test': 6, 'Antimalarial (ACT)': 4, 'Rectal artesunate': 2, 'Amoxicillin': 4, 'Ceftriaxone (pre-referral)': 2,
   'Oral rehydration salts': 6, 'Zinc': 4, 'Paracetamol': 6, 'Salbutamol inhaler': 1, 'Aspirin': 2, 'Glucose gel': 2,
   'Wound dressing kit': 3, 'Tetanus vaccine': 2, 'Therapeutic food (RUTF)': 7,
+  'Malaria vaccine (R21)': 4, 'Measles-rubella vaccine': 4, 'Pentavalent vaccine': 4, 'PCV vaccine': 4, 'Rotavirus vaccine': 3, 'Polio vaccine (OPV)': 4, 'BCG vaccine': 2, 'HPV vaccine': 2,
 };
+const VACCINE_ITEMS = new Set(['Malaria vaccine (R21)', 'Measles-rubella vaccine', 'Pentavalent vaccine', 'PCV vaccine', 'Rotavirus vaccine', 'Polio vaccine (OPV)', 'BCG vaccine', 'HPV vaccine', 'Tetanus vaccine']);
+
+// Zambia's routine schedule (simplified): dose code, age it is due (months), the stock item.
+// Keep identical to SCHEDULE in src/lib/vaccines.ts.
+const SCHEDULE: { code: string; label: string; months: number; item: string; who?: 'girl' | 'pregnant' }[] = [
+  { code: 'BCG', label: 'BCG', months: 0, item: 'BCG vaccine' },
+  { code: 'OPV0', label: 'Polio 0', months: 0, item: 'Polio vaccine (OPV)' },
+  { code: 'OPV1', label: 'Polio 1', months: 1.5, item: 'Polio vaccine (OPV)' },
+  { code: 'PENTA1', label: 'Pentavalent 1', months: 1.5, item: 'Pentavalent vaccine' },
+  { code: 'PCV1', label: 'PCV 1', months: 1.5, item: 'PCV vaccine' },
+  { code: 'ROTA1', label: 'Rotavirus 1', months: 1.5, item: 'Rotavirus vaccine' },
+  { code: 'OPV2', label: 'Polio 2', months: 2.5, item: 'Polio vaccine (OPV)' },
+  { code: 'PENTA2', label: 'Pentavalent 2', months: 2.5, item: 'Pentavalent vaccine' },
+  { code: 'PCV2', label: 'PCV 2', months: 2.5, item: 'PCV vaccine' },
+  { code: 'ROTA2', label: 'Rotavirus 2', months: 2.5, item: 'Rotavirus vaccine' },
+  { code: 'OPV3', label: 'Polio 3', months: 3.5, item: 'Polio vaccine (OPV)' },
+  { code: 'PENTA3', label: 'Pentavalent 3', months: 3.5, item: 'Pentavalent vaccine' },
+  { code: 'PCV3', label: 'PCV 3', months: 3.5, item: 'PCV vaccine' },
+  { code: 'R21-1', label: 'Malaria (R21) 1', months: 5, item: 'Malaria vaccine (R21)' },
+  { code: 'R21-2', label: 'Malaria (R21) 2', months: 6, item: 'Malaria vaccine (R21)' },
+  { code: 'R21-3', label: 'Malaria (R21) 3', months: 7, item: 'Malaria vaccine (R21)' },
+  { code: 'MR1', label: 'Measles-rubella 1', months: 9, item: 'Measles-rubella vaccine' },
+  { code: 'MR2', label: 'Measles-rubella 2', months: 18, item: 'Measles-rubella vaccine' },
+  { code: 'R21-4', label: 'Malaria (R21) booster', months: 18, item: 'Malaria vaccine (R21)' },
+  { code: 'HPV', label: 'HPV (girls, 14 y)', months: 168, item: 'HPV vaccine', who: 'girl' },
+  { code: 'TT1', label: 'Tetanus (pregnancy) 1', months: 0, item: 'Tetanus vaccine', who: 'pregnant' },
+  { code: 'TT2', label: 'Tetanus (pregnancy) 2', months: 0, item: 'Tetanus vaccine', who: 'pregnant' },
+];
+
+// A roster for the demo: infants mid-schedule, toddlers missing boosters, pregnant women, elders.
+const PATIENTS = [
+  { id: 1, name: 'Mwila Banda', villageId: 2, ageMonths: 6, sex: 'm', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1,OPV2,PENTA2,PCV2,ROTA2,OPV3,PENTA3,PCV3,R21-1', lastVisit: 'Fever 2 weeks ago, malaria negative' },
+  { id: 2, name: 'Thandiwe Zulu', villageId: 2, ageMonths: 20, sex: 'f', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1,OPV2,PENTA2,PCV2,ROTA2,OPV3,PENTA3,PCV3,R21-1,R21-2,R21-3,MR1', lastVisit: 'Weighed last month, growing well' },
+  { id: 3, name: 'Mercy Banda', villageId: 2, ageMonths: 360, sex: 'f', pregnant: true, notes: '2nd pregnancy, 24 weeks', vaccinesGiven: 'TT1', lastVisit: 'Antenatal visit 3 weeks ago' },
+  { id: 4, name: 'Joseph Daka', villageId: 4, ageMonths: 660, sex: 'm', pregnant: false, notes: 'High blood pressure, on amlodipine', vaccinesGiven: '', lastVisit: 'Blood pressure check last month' },
+  { id: 5, name: 'Chanda Phiri', villageId: 3, ageMonths: 2, sex: 'm', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1', lastVisit: 'Cough 1 week ago' },
+  { id: 6, name: 'Agnes Phiri', villageId: 3, ageMonths: 336, sex: 'f', pregnant: false, notes: 'Mother of Chanda', vaccinesGiven: '', lastVisit: '' },
+  { id: 7, name: 'Esther Lungu', villageId: 12, ageMonths: 9, sex: 'f', pregnant: false, notes: 'Low weight for age', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1,OPV2,PENTA2,PCV2,ROTA2', lastVisit: 'RUTF started 2 weeks ago' },
+  { id: 8, name: 'Peter Ngoma', villageId: 7, ageMonths: 300, sex: 'm', pregnant: false, notes: 'Asthma', vaccinesGiven: '', lastVisit: 'Inhaler refill' },
+  { id: 9, name: 'Grace Mwanza', villageId: 6, ageMonths: 336, sex: 'f', pregnant: true, notes: '1st pregnancy, 30 weeks', vaccinesGiven: '', lastVisit: 'First antenatal visit' },
+  { id: 10, name: 'Ruth Sakala', villageId: 5, ageMonths: 348, sex: 'f', pregnant: false, notes: 'Mother of Precious', vaccinesGiven: '', lastVisit: '' },
+  { id: 11, name: 'Precious Nyirenda', villageId: 5, ageMonths: 36, sex: 'f', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1,OPV2,PENTA2,PCV2,ROTA2,OPV3,PENTA3,PCV3,MR1', lastVisit: 'Diarrhea, ORS given' },
+  { id: 12, name: 'Kondwani Mvula', villageId: 8, ageMonths: 7, sex: 'm', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1,OPV2,PENTA2,PCV2,ROTA2,OPV3,PENTA3,PCV3', lastVisit: 'Missed the 5-month visit' },
+  { id: 13, name: 'Bwalya Mbewe', villageId: 2, ageMonths: 600, sex: 'm', pregnant: false, notes: 'Smoker', vaccinesGiven: '', lastVisit: '' },
+  { id: 14, name: 'Mutale Tembo', villageId: 11, ageMonths: 168, sex: 'f', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,OPV2,PENTA2,PCV2,OPV3,PENTA3,PCV3,MR1,MR2', lastVisit: 'School health day' },
+  { id: 15, name: 'Chileshe Mumba', villageId: 9, ageMonths: 1, sex: 'f', pregnant: false, notes: 'Born at home', vaccinesGiven: '', lastVisit: 'Not yet seen' },
+  { id: 16, name: 'Natasha Chirwa', villageId: 10, ageMonths: 19, sex: 'f', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1,OPV2,PENTA2,PCV2,ROTA2,OPV3,PENTA3,PCV3,R21-1,R21-2,R21-3,MR1', lastVisit: 'Fever, malaria positive, treated' },
+  { id: 17, name: 'Lackson Zimba', villageId: 10, ageMonths: 780, sex: 'm', pregnant: false, notes: 'Diabetes', vaccinesGiven: '', lastVisit: 'Glucose check' },
+  { id: 18, name: 'Beatrice Nkhoma', villageId: 4, ageMonths: 264, sex: 'f', pregnant: true, notes: '3rd pregnancy, 12 weeks', vaccinesGiven: 'TT1,TT2', lastVisit: 'Antenatal booking' },
+  { id: 19, name: 'Gift Mulenga', villageId: 7, ageMonths: 5, sex: 'm', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1,OPV2,PENTA2,PCV2,ROTA2,OPV3,PENTA3,PCV3', lastVisit: 'Weighed, well' },
+  { id: 20, name: 'Memory Phiri', villageId: 12, ageMonths: 168, sex: 'f', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,OPV2,PENTA2,PCV2,OPV3,PENTA3,PCV3,MR1,MR2', lastVisit: '' },
+  { id: 21, name: 'Isaac Mwale', villageId: 6, ageMonths: 10, sex: 'm', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1,OPV2,PENTA2,PCV2,ROTA2,OPV3,PENTA3,PCV3,R21-1,R21-2', lastVisit: 'Cough, settled' },
+  { id: 22, name: 'Dorothy Soko', villageId: 8, ageMonths: 420, sex: 'f', pregnant: false, notes: 'HIV, on treatment', vaccinesGiven: '', lastVisit: 'ART refill' },
+  { id: 23, name: 'Emmanuel Tembo', villageId: 11, ageMonths: 8, sex: 'm', pregnant: false, notes: '', vaccinesGiven: 'BCG,OPV0,OPV1,PENTA1,PCV1,ROTA1,OPV2,PENTA2,PCV2,ROTA2,OPV3,PENTA3,PCV3,R21-1', lastVisit: 'Missed the 6-month visit' },
+  { id: 24, name: 'Violet Kunda', villageId: 9, ageMonths: 228, sex: 'f', pregnant: true, notes: '1st pregnancy, 36 weeks', vaccinesGiven: 'TT1', lastVisit: 'Antenatal visit' },
+];
+
+// Doses are given one at a time per vaccine (four weeks apart): the earliest due dose of each.
+function nextDoses(due: { code: string; label: string; months: number; item: string }[]) {
+  const seen = new Set<string>();
+  return due.filter((d) => (seen.has(d.item) ? false : (seen.add(d.item), true)));
+}
+
+function dueFor(p: { ageMonths: number; sex: string; pregnant: boolean; vaccinesGiven: string }) {
+  const given = new Set(p.vaccinesGiven.split(',').map((s) => s.trim()).filter(Boolean));
+  return SCHEDULE.filter((d) => {
+    if (given.has(d.code)) return false;
+    if (d.who === 'pregnant') return p.pregnant;
+    if (d.who === 'girl') return p.sex === 'f' && p.ageMonths >= d.months && p.ageMonths < 180;
+    return p.ageMonths >= d.months && p.ageMonths < 60; // routine childhood doses only
+  });
+}
 const MALARIA_ITEMS = new Set(['Malaria rapid test', 'Antimalarial (ACT)', 'Rectal artesunate']);
 const DEMAND_WINDOW_US = 120_000_000n; // demo seconds that stand for "the last two weeks"
 const AGENTS_EVERY_US = 10_000_000n;
@@ -179,6 +270,7 @@ function seed(ctx: any) {
       ctx.db.stock.insert({ id: 0n, villageId: v.id, item, qty });
     }
   }
+  for (const p of PATIENTS) ctx.db.patient.insert(p);
   ctx.db.settings.insert({ id: 1, simulate: true, simEverySeconds: 6, agents: false, lastAgentsRun: ctx.timestamp }); // the officer switches the agents on
   ctx.db.tickTimer.insert({ scheduledId: 0n, scheduledAt: ScheduleAt.interval(1_000_000n) });
   log(ctx, 'Supply allocator', 0, 'Online. Watching stock at 11 posts against what pods are flagging.');
@@ -202,8 +294,10 @@ function short(name: string) {
 function placeOrder(ctx: any, o: { visitId: bigint; kind: string; patientName: string; to: any; from: any; item: string; qty: number }) {
   const km = distanceKm(o.from, o.to);
   const mode = o.from.id === o.to.id ? 'walk' : HEAVY.has(o.item) ? 'road' : 'drone';
+  // Drone 100 km/h straight line; truck 40 km/h on roads about 1.5× the straight distance.
+  // On screen one second stands for one real minute, so a 70 km drone hop takes 42 s.
   const etaMinutes = Math.max(5, Math.round(mode === 'walk' ? 20 : mode === 'drone' ? (km / 100) * 60 : ((km * 1.5) / 40) * 60));
-  const travelSeconds = mode === 'walk' ? 4 : Math.min(14, Math.max(5, Math.round(km / 12)));
+  const travelSeconds = Math.min(240, etaMinutes);
   ctx.db.deliveryOrder.insert({
     id: 0n, visitId: o.visitId, kind: o.kind, patientName: o.patientName, toVillageId: o.to.id, fromVillageId: o.from.id, item: o.item, qty: o.qty,
     mode, status: 'ordered', travelSeconds, etaMinutes, createdAt: ctx.timestamp, departedAt: undefined, deliveredAt: undefined,
@@ -221,12 +315,23 @@ function sourceFor(ctx: any, home: any, item: string, qty: number) {
 }
 
 // One patient, one or more flagged needs -> "+1" bubbles and orders to the patient's home.
-function recordVisit(ctx: any, villageId: number, patientName: string, urgency: string, summary: string, needs: { item: string; qty: number }[], fromPod: boolean) {
+function recordVisit(ctx: any, villageId: number, patientName: string, urgency: string, summary: string, needsIn: { item: string; qty: number }[], fromPod: boolean) {
+  let needs = needsIn;
   const home = ctx.db.village.id.find(villageId);
   if (!home) throw new Error(`Unknown village ${villageId}`);
   const v = ctx.db.visit.insert({ id: 0n, villageId, patientName, urgency, summary, fromPod, createdAt: ctx.timestamp });
   if (urgency === 'red') ctx.db.pop.insert({ villageId, text: `🚨 ${patientName}: emergency`, kind: 'alert' });
   if (fromPod) log(ctx, 'Pod', villageId, `${short(home.name)}: ${patientName}, ${urgency.toUpperCase()} — ${summary}${needs.length ? ` → needs ${needs.map((n) => `${n.qty} ${n.item}`).join(', ')}` : ' → nothing needed'}`);
+  // A known patient who is due a vaccine gets it with the same delivery.
+  if (fromPod) {
+    const profile = [...ctx.db.patient.iter()].find((p: any) => p.name.toLowerCase() === patientName.toLowerCase());
+    const due = profile ? dueFor(profile) : [];
+    if (due.length) {
+      const next = nextDoses(due);
+      for (const d of next) if (!needs.some((n) => n.item === d.item)) needs = [...needs, { item: d.item, qty: 1 }];
+      log(ctx, 'Immunisation planner', villageId, `${patientName} is due ${next.map((d) => d.label).join(', ')} → added to this delivery.`);
+    }
+  }
   for (const need of needs) {
     ctx.db.pop.insert({ villageId, text: `+${need.qty} ${need.item}`, kind: 'need' });
     const from = sourceFor(ctx, home, need.item, need.qty);
@@ -276,12 +381,17 @@ function runAgents(ctx: any) {
     }
   }
 
+  // Immunisation planner: doses due in each village, by item.
+  const dueByVillage = new Map<string, number>();
+  for (const p of ctx.db.patient.iter()) for (const d of nextDoses(dueFor(p))) dueByVillage.set(`${p.villageId}|${d.item}`, (dueByVillage.get(`${p.villageId}|${d.item}`) ?? 0) + 1);
+
   // Supply allocator: every post should hold its minimum plus what it is actually using.
   for (const v of posts) {
     for (const item of ITEMS) {
       if (HUB_ONLY.has(item)) continue;
       const used = demand.get(`${v.id}|${item}`) ?? 0;
-      let target = Math.max(MIN_STOCK[item] ?? 3, Math.ceil(used * 1.5));
+      const due = dueByVillage.get(`${v.id}|${item}`) ?? 0;
+      let target = Math.max(MIN_STOCK[item] ?? 3, Math.ceil(used * 1.5), VACCINE_ITEMS.has(item) ? due + 1 : 0);
       if (hot.has(v.id) && MALARIA_ITEMS.has(item)) target *= 3;
       const have = stockRow(ctx, v.id, item)?.qty ?? 0;
       const onWay = incoming.get(`${v.id}|${item}`) ?? 0;
@@ -298,8 +408,8 @@ function runAgents(ctx: any) {
       }
       const { mode, etaMinutes } = placeOrder(ctx, { visitId: 0n, kind: 'restock', patientName: `${short(v.name)} health post`, to: v, from, item, qty: shortBy });
       ctx.db.pop.insert({ villageId: v.id, text: `+${shortBy} ${item} (restock)`, kind: 'restock' });
-      const why = used ? `used ${used} this period, has ${have}` : `has ${have}, below the ${MIN_STOCK[item] ?? 3} every post must hold`;
-      log(ctx, 'Supply allocator', v.id, `${short(v.name)}: ${why}${hot.has(v.id) && MALARIA_ITEMS.has(item) ? ', cluster nearby' : ''} → ${shortBy} ${item} by ${mode} from ${short(from.name)}${idle ? ' (idle stock, closer than the hub)' : ''}, ~${etaMinutes} min.`);
+      const why = due && VACCINE_ITEMS.has(item) ? `${due} patient${due > 1 ? 's' : ''} due, has ${have}` : used ? `used ${used} this period, has ${have}` : `has ${have}, below the ${MIN_STOCK[item] ?? 3} every post must hold`;
+      log(ctx, due && VACCINE_ITEMS.has(item) ? 'Immunisation planner' : 'Supply allocator', v.id, `${short(v.name)}: ${why}${hot.has(v.id) && MALARIA_ITEMS.has(item) ? ', cluster nearby' : ''} → ${shortBy} ${item} by ${mode} from ${short(from.name)}${idle ? ' (idle stock, closer than the hub)' : ''}, ~${etaMinutes} min.`);
     }
   }
 }
@@ -317,6 +427,24 @@ export const reportVisit = spacetimedb.reducer(
     recordVisit(ctx, v!.id, patientName || 'Patient', urgency, summary, needs, true);
   }
 );
+
+// From the profiles page: send everything this patient is due to their home.
+export const orderVaccines = spacetimedb.reducer({ patientId: t.u32() }, (ctx, { patientId }) => {
+  const p = ctx.db.patient.id.find(patientId);
+  if (!p) return;
+  const next = nextDoses(dueFor(p));
+  if (!next.length) return;
+  recordVisit(ctx, p.villageId, p.name, 'green', `vaccination: ${next.map((d) => d.label).join(', ')}`, next.map((d) => ({ item: d.item, qty: 1 })), true);
+});
+
+// A dose was given: record it on the profile.
+export const recordDose = spacetimedb.reducer({ patientId: t.u32(), code: t.string() }, (ctx, { patientId, code }) => {
+  const p = ctx.db.patient.id.find(patientId);
+  if (!p) return;
+  const given = new Set(p.vaccinesGiven.split(',').filter(Boolean));
+  given.add(code);
+  ctx.db.patient.id.update({ ...p, vaccinesGiven: [...given].join(',') });
+});
 
 export const setSimulation = spacetimedb.reducer({ on: t.bool() }, (ctx, { on }) => {
   const s = ctx.db.settings.id.find(1);
@@ -342,6 +470,7 @@ export const resetDemo = spacetimedb.reducer((ctx) => {
   for (const s of [...ctx.db.stock.iter()]) ctx.db.stock.id.delete(s.id);
   for (const v of [...ctx.db.village.iter()]) ctx.db.village.id.delete(v.id);
   for (const l of [...ctx.db.agentLog.iter()]) ctx.db.agentLog.id.delete(l.id);
+  for (const p of [...ctx.db.patient.iter()]) ctx.db.patient.id.delete(p.id);
   for (const s of [...ctx.db.settings.iter()]) ctx.db.settings.id.delete(s.id);
   for (const tm of [...ctx.db.tickTimer.iter()]) ctx.db.tickTimer.scheduledId.delete(tm.scheduledId);
   seed(ctx);

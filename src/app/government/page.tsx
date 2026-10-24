@@ -16,12 +16,14 @@ const MIN_STOCK: Record<string, number> = {
   "Malaria rapid test": 6, "Antimalarial (ACT)": 4, "Rectal artesunate": 2, Amoxicillin: 4, "Ceftriaxone (pre-referral)": 2,
   "Oral rehydration salts": 6, Zinc: 4, Paracetamol: 6, "Salbutamol inhaler": 1, Aspirin: 2, "Glucose gel": 2,
   "Wound dressing kit": 3, "Tetanus vaccine": 2, "Therapeutic food (RUTF)": 7,
+  "Malaria vaccine (R21)": 4, "Measles-rubella vaccine": 4, "Pentavalent vaccine": 4, "PCV vaccine": 4, "Rotavirus vaccine": 3, "Polio vaccine (OPV)": 4, "BCG vaccine": 2, "HPV vaccine": 2,
 };
 const HUB_ONLY = new Set(["Oxygen cylinder", "IV fluids", "Blood (O negative)"]);
 const SHORT: Record<string, string> = {
   "Malaria rapid test": "mRDT", "Antimalarial (ACT)": "ACT", "Rectal artesunate": "Artesun.", Amoxicillin: "Amox", "Ceftriaxone (pre-referral)": "Ceftri.",
   "Oral rehydration salts": "ORS", Zinc: "Zinc", Paracetamol: "Para", "Salbutamol inhaler": "Salbut.", "Oxygen cylinder": "O₂", Aspirin: "Aspirin",
   "Glucose gel": "Glucose", "Wound dressing kit": "Dressing", "Tetanus vaccine": "Tetanus", "IV fluids": "IV", "Blood (O negative)": "Blood", "Therapeutic food (RUTF)": "RUTF",
+  "Malaria vaccine (R21)": "R21 vx", "Measles-rubella vaccine": "MR vx", "Pentavalent vaccine": "Penta vx", "PCV vaccine": "PCV vx", "Rotavirus vaccine": "Rota vx", "Polio vaccine (OPV)": "OPV", "BCG vaccine": "BCG", "HPV vaccine": "HPV",
 };
 
 type Village = { id: number; name: string; population: number; hub: boolean };
@@ -161,6 +163,9 @@ export default function GovernmentPage() {
             <Link href="/globe" className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-1.5 hover:bg-slate-800">
               3D map
             </Link>
+            <Link href="/patients" className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-1.5 hover:bg-slate-800">
+              Patients &amp; vaccines
+            </Link>
           </div>
         </div>
         <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-7">
@@ -201,7 +206,7 @@ export default function GovernmentPage() {
                     {r.red > 0 && <span className="ml-1 text-red-400">({r.red}🚨)</span>}
                   </td>
                   {STOCK_ITEMS.map((item) => {
-                    const c = r.cells[item];
+                    const c = r.cells[item] ?? { have: 0, used: 0, incoming: 0, min: 0 };
                     const level = r.village.hub || c.min === 0 ? "hub" : c.have === 0 ? "out" : c.have < c.min ? "low" : "ok";
                     return (
                       <td key={item} className={`cell ${level} ${pickItem === item ? "picked" : ""}`} title={`${item}: ${c.have} on the shelf, ${c.used} used this period, ${c.incoming} on the way, must hold ${c.min}`}>
@@ -241,11 +246,11 @@ export default function GovernmentPage() {
             </p>
             <div className="flex-1 space-y-1 overflow-auto">
               {log.map((l) => (
-                <div key={String(l.id)} className={`feed ${l.agent === "Outbreak sentinel" ? "t-alert" : l.agent === "Pod" ? "t-live" : l.text.startsWith("⚠") ? "t-need" : "t-agent"}`}>
+                <div key={String(l.id)} className={`feed ${l.agent === "Outbreak sentinel" ? "t-alert" : l.agent === "Pod" ? "t-live" : l.agent === "Immunisation planner" ? "t-vax" : l.text.startsWith("⚠") ? "t-need" : "t-agent"}`}>
                   <span className="stamp">
                     {new Date(l.at).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                     <br />
-                    <b>{l.agent === "Supply allocator" ? "ALLOC" : l.agent === "Outbreak sentinel" ? "SENTINEL" : "POD"}</b>
+                    <b>{l.agent === "Supply allocator" ? "ALLOC" : l.agent === "Outbreak sentinel" ? "SENTINEL" : l.agent === "Immunisation planner" ? "VACCINE" : "POD"}</b>
                   </span>
                   <span className="msg">
                     {l.villageId ? <span className="text-slate-400">{vname(l.villageId)} · </span> : null}
@@ -289,7 +294,7 @@ const CSS = `
 .feed{display:grid;grid-template-columns:4.2rem 1fr;gap:.5rem;align-items:start;padding:.4rem .6rem .4rem .7rem;border-left:2px solid var(--c);background:linear-gradient(90deg,color-mix(in srgb,var(--c) 14%,transparent),transparent 70%);font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#e2e8f0}
 .feed .stamp{color:color-mix(in srgb,var(--c) 85%,white);font-size:10px;letter-spacing:.04em;padding-top:1px}
 .feed .msg{text-shadow:0 0 12px color-mix(in srgb,var(--c) 45%,transparent)}
-.t-need{--c:#fbbf24}.t-alert{--c:#ef4444}.t-live{--c:#c084fc}.t-agent{--c:#2dd4bf}
+.t-need{--c:#fbbf24}.t-alert{--c:#ef4444}.t-live{--c:#c084fc}.t-agent{--c:#2dd4bf}.t-vax{--c:#60a5fa}
 .blink{animation:blink 1.2s steps(2,start) infinite}
 @keyframes blink{to{visibility:hidden}}
 `;

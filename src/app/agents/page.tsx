@@ -61,7 +61,7 @@ export default function AgentsPage() {
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-6 py-4">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Pod network · agents</h1>
-          <p className="text-xs text-slate-400">Every pod talks to the network; the network agents act and talk back. Live, Alta Verapaz demo network.</p>
+          <p className="text-xs text-slate-400">Every pod talks to the network; the network agents act and talk back. Live, Eastern Province (Zambia) demo network.</p>
         </div>
         <div className="flex flex-wrap gap-2 text-sm">
           <Link href="/" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">Pod</Link>
