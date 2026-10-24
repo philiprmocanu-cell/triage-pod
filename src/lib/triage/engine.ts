@@ -8,6 +8,8 @@
 // Code then opens pathways, picks the next step, applies the safety rules and adds up supplies.
 
 import { jev, JevQuestion, noulOf, probsOf } from "../jev";
+import { advisoriesFor } from "../agents";
+import { postFor } from "../network";
 import { followUpQuestion, replyToPatient } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { NOTICED, TRAITS, TraitScan } from "./traits";
@@ -271,6 +273,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
   }
 
   const asked = new Set(input.turns.filter((t) => t.role === "pod" && t.asks).map((t) => t.asks!));
+  const podPost = postFor(intake.community);
+  const advisories = advisoriesFor(podPost);
   for (const f of INTAKE_FIELDS) if (intake[f]) asked.add(`intake:${f}`); // answered earlier, maybe unasked
   for (const f of ["community", "who"] as const) {
     if (noulOf(a[`already_${f}`]) >= 0.8) {
@@ -472,6 +476,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
     next = nextHunch();
   } else if (!redRule && medicalSteps < MAX_STEPS) {
     const order: Step[] = [];
+    // Network advisories from the outbreak sentinel: screen for what is spreading nearby first.
+    for (const adv of advisories) if (complaintKnown && !known[ADVISORY_FIRST[adv.kind]]) order.push(ADVISORY_FIRST[adv.kind]);
     if (isChild && open.length) order.push("unable_to_drink", "vomits_everything", "seizure", "very_sleepy");
     for (const p of open) order.push(...stepsFor(p.id));
     // Nothing in the tree fits (toothache, ear pain...): ask Claude for one sensible nurse
@@ -579,6 +585,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const why =
     !next || done
       ? null
+      : advisories.some((adv) => ADVISORY_FIRST[adv.kind] === next!.asks)
+        ? `Network alert: ${advisories.find((adv) => ADVISORY_FIRST[adv.kind] === next!.asks)!.source} has a cluster → screening for it first`
       : strokeRed && (next.asks?.startsWith("test:") || next.asks === "confused_speech")
         ? "Stroke signs reported → help is being called; quick bedside checks for the doctor"
       : next.asks?.startsWith("intake:") || next.asks === "open"
@@ -625,6 +633,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     tree,
     why,
     complaint_known: complaintKnown,
+    network: { post: podPost, advisories: advisories.map((x) => ({ kind: x.kind, text: x.text, source: x.source })) },
     peer_group: {
       wants: yes.wants_peer_group >= YES && !facts.self_harm_thoughts,
       category: mental && mental.probability >= OPEN ? (mental.subtypes[0]?.name ?? null) : null,
@@ -653,6 +662,7 @@ const RULE_CAUSE: Record<string, string> = {
 };
 
 const UNSURE = "Not sure yet";
+const ADVISORY_FIRST: Record<"malaria" | "diarrhea" | "respiratory", FindingKey> = { malaria: "fever", diarrhea: "diarrhea", respiratory: "cough" };
 const CONFIDENT = 0.7;
 
 const HELP_NOW = { en: "We are calling for help now. While it comes, let's do a few quick checks.", es: "Ya estamos pidiendo ayuda. Mientras llega, hagamos unas pruebas rápidas." };

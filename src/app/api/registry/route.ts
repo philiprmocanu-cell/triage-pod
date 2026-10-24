@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { addVisit, readRegistry, updateVisit, VisitRecord } from "@/lib/registry";
 import { handover, readIntake } from "@/lib/triage/brain";
 import { rememberWords } from "@/lib/triage/dialect";
+import { snapshot } from "@/lib/network";
 import type { Intake, TriageResult, Turn } from "@/lib/triage/types";
 
 export const runtime = "nodejs";
@@ -45,6 +46,7 @@ export async function POST(req: Request) {
   };
   await updateVisit(record.id, patch);
   await rememberWords(patch.community ?? intake.community, result.lexicon ?? {}); // the community's words, for next time
+  await snapshot(); // the pod reports this patient to the network agents right away
   return NextResponse.json({ ...record, ...patch });
 }
 

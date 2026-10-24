@@ -387,6 +387,9 @@ export default function PodScreen() {
           <Link href="/dashboard" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
             Dashboard
           </Link>
+          <Link href="/agents" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
+            Agents
+          </Link>
           <Link href="/registry" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
             Registry
           </Link>
@@ -426,6 +429,11 @@ export default function PodScreen() {
 
       <main className="grid gap-6 p-6 md:grid-cols-[1fr_1fr]">
         <section className="space-y-4">
+          {result?.network?.advisories.map((a, i) => (
+            <div key={i} className="rounded-xl border border-red-700 bg-red-950/60 px-4 py-2 text-sm">
+              <span className="font-semibold">Network alert</span> (cluster in {a.source}): {a.text}
+            </div>
+          ))}
           <QuestionCard turns={turns} why={result?.why ?? null} status={status} />
           <div className="relative">
             <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} />

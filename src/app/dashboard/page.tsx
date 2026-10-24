@@ -71,6 +71,9 @@ export default function Dashboard() {
           <Link href="/registry" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
             Registry
           </Link>
+          <Link href="/agents" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
+            Agents
+          </Link>
           <button onClick={() => act({ type: "reset" })} className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
             Reset demo
           </button>

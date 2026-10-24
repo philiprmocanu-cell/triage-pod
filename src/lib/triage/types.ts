@@ -96,6 +96,7 @@ export type TriageResult = {
   }[];
   why: string | null; // why the pod is asking the current question
   complaint_known: boolean; // false until the patient has said what brought them in
+  network: { post: string; advisories: { kind: string; text: string; source: string }[] }; // what the network agents told this pod
   peer_group: { wants: boolean; category: string | null };
   jev_ms: number;
 };

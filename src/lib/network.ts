@@ -10,6 +10,7 @@
 //
 // Demo data: approximate locations in Alta Verapaz, Guatemala. State lives in server memory.
 
+import { runAgents } from "./agents";
 import { readRegistry, VisitRecord } from "./registry";
 
 export type Post = { id: string; name: string; lat: number; lng: number; hub?: boolean; population: number; oxygen: boolean };
@@ -53,7 +54,18 @@ const ROAD_KMH = 35;
 const HORIZON_H = 48;
 const SIM_SPEED = 60; // the demo runs 60x faster than real time
 
-type Visit = { post: string; t: number; needs: Record<string, number>; fever?: boolean; red?: boolean; source: "pod" | "sim" };
+export type Visit = {
+  id: string;
+  post: string;
+  t: number;
+  needs: Record<string, number>;
+  kind?: string; // what brought them in, e.g. "malaria", "respiratory"
+  fever?: boolean;
+  red?: boolean;
+  source: "pod" | "sim";
+  summary?: string; // short description for agents (real pod visits)
+};
+let visitSeq = 0;
 export type Flight = {
   id: string;
   from: string;
@@ -116,7 +128,7 @@ function simVisit(post: string, t: number, r: () => number, kind?: "malaria" | "
     const pick = SKUS[Math.floor(r() * SKUS.length)];
     if (pick.id !== "oxygen" && pick.id !== "blood") needs[pick.id] = 0.4 + r() * 0.5;
   }
-  return { post, t, needs, fever: k === "malaria" || (k === "respiratory" && r() < 0.5), red: r() < 0.06, source: "sim" };
+  return { id: `sim-${++visitSeq}`, post, t, needs, kind: k, fever: k === "malaria" || (k === "respiratory" && r() < 0.5), red: r() < 0.06, source: "sim" };
 }
 
 const g = globalThis as unknown as { __network?: State };
@@ -124,7 +136,7 @@ const state = () => (g.__network ??= initialState());
 
 // Pod visits come from the registry; their community decides which post they belong to.
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-function postFor(community: string | null): string {
+export function postFor(community: string | null | undefined): string {
   if (!community) return "coban";
   const c = norm(community);
   return POSTS.find((p) => norm(p.name).split(/[ (]/).some((w) => w.length > 3 && c.includes(w)))?.id ?? "coban";
@@ -136,7 +148,17 @@ function podVisit(r: VisitRecord): Visit {
     if (sku) needs[sku.id] = Math.max(needs[sku.id] ?? 0, res.probability);
   }
   const fever = /malaria|fever|pneumonia/i.test(r.causes.map((c) => c.name).join(" "));
-  return { post: postFor(r.community), t: new Date(r.createdAt).getTime(), needs, fever, red: r.urgency === "red", source: "pod" };
+  return {
+    id: r.id,
+    post: postFor(r.community),
+    t: new Date(r.createdAt).getTime(),
+    needs,
+    kind: r.causes[0]?.name,
+    fever,
+    red: r.urgency === "red",
+    source: "pod",
+    summary: `${r.patient ?? r.ageGroup}, ${r.urgency.toUpperCase()}: ${r.reason}`,
+  };
 }
 
 function km(a: Post, b: Post) {
@@ -285,6 +307,9 @@ export async function snapshot() {
     const worst = shortages.filter((x) => x.post === p.id);
     status[p.id] = worst.some((x) => x.have === 0 && x.need >= 1) ? "out" : worst.length ? "low" : "ok";
   }
+
+  // Let the agents react to what changed: new patients, alerts, shortages, flights.
+  runAgents({ now, visits, alerts, flights: s.flights, shortages: shortages.map((x) => ({ post: x.post, label: SKUS.find((k) => k.id === x.sku)!.label, hoursLeft: x.hoursLeft })) });
 
   const last24 = now - (24 * 3600_000) / SIM_SPEED;
   return {
