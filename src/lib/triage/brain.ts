@@ -104,6 +104,25 @@ export function provincialBriefing(state: Record<string, unknown>): Promise<stri
   );
 }
 
+// The patient's own words for everyday medical things, whatever dialect they speak. The pod
+// reuses them in its questions and remembers them for the village.
+export async function extractWords(input: { conversation: unknown[]; language: "en" | "es" }): Promise<Record<string, string>> {
+  const keys =
+    input.language === "es"
+      ? { child: "a child / their child", fever: "fever", poop: "stool / poop", belly: "the belly or stomach", dizzy: "dizzy", talk: "to talk" }
+      : { child_en: "a child / their child", fever_en: "fever", diarrhea_en: "diarrhoea", belly_en: "the belly or stomach", dizzy_en: "dizzy", hurts_en: "hurts / pain" };
+  const out = await ask(
+    `From the patient's own words in the conversation, list the exact word or short phrase THEY used for each of these things, only if they actually said one (any dialect or slang, e.g. "patojo", "wawa", "running stomach", "pikin", "stooling", "body is hot"). Reply with a JSON object whose keys are exactly these: ${JSON.stringify(keys)}. Omit keys they did not use. Values are the patient's words, lowercase, nothing else. JSON only.`,
+    JSON.stringify(input.conversation),
+  );
+  try {
+    const parsed = JSON.parse(out.replace(/^```json|```$/g, "").trim()) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).filter(([k, v]) => k in keys && typeof v === "string" && v.trim() && v.length < 40).map(([k, v]) => [k, String(v).trim().toLowerCase()]));
+  } catch {
+    return {};
+  }
+}
+
 // Reflective listening: say back what the patient told us, so a speech-to-text slip ("tóxica
 // lentura" for "tos y calentura") is caught before the pod reasons on it.
 export async function confirmComplaint(input: { said: string; language: string; locale: string }): Promise<{ text: string; english: string } | "UNCLEAR"> {

@@ -10,7 +10,7 @@
 import { jev, JevQuestion, noulOf, probsOf } from "../jev";
 import { advisoriesFor } from "../agents";
 import { postFor } from "../network";
-import { closingAdvice, confirmComplaint, followUpQuestion, phraseNext, replyToPatient } from "./brain";
+import { closingAdvice, confirmComplaint, extractWords, followUpQuestion, phraseNext, replyToPatient } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { NOTICED, TRAITS, TraitScan } from "./traits";
 import { COVER_KIT, ordersFor, RULE_SUPPLIES } from "./supplies";
@@ -713,6 +713,15 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // community taught the pod on earlier visits.
   const patientWords = [...input.turns.filter((t) => t.role === "patient").map((t) => t.text), ...(patientText ? [patientText] : [])];
   const lexicon: Lexicon = { ...(await communityLexicon(intake.community)), ...learnFrom(patientWords) };
+  // Beyond the word list: Claude pulls the patient's actual words from what they said this turn
+  // (any dialect), so "pikin" or "stooling" are reused even if nobody listed them.
+  if (patientText && patientText.split(/\s+/).length >= 4) {
+    const found = await Promise.race([
+      extractWords({ conversation: conversation.slice(-6), language }).catch(() => ({})),
+      new Promise<Record<string, string>>((r) => setTimeout(() => r({}), 2500)),
+    ]);
+    for (const [k, w] of Object.entries(found)) if (w && !/\b(no|none|nothing|nada|ninguno)\b/.test(w)) lexicon[k] = w;
+  }
   if (next) next = { ...next, text: speakLike(next.text, lexicon) }; // the patient's own words, in either language
 
   // Say it like a nurse who has been listening. Safety wording stays exactly as written: tests,
