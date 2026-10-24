@@ -818,7 +818,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
     doctor_required: urgency !== "green",
     reason:
       verdict === "nothing_found" && !redRule
-        ? "Nothing serious found: most likely a minor illness that will pass on its own"
+        ? feelsWell
+          ? "Nothing found: feeling well, routine check-up"
+          : "Nothing serious found: most likely a minor illness that will pass on its own"
         : verdict === "uncertain"
           ? `Not settled within ${topOpen!.label}: the cover kit is sent and the health worker checks today`
           : top,
