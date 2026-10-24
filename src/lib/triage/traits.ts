@@ -5,7 +5,9 @@
 
 import type { FindingKey } from "./tree";
 
-export type Trait = { id: string; group: string; label: string; look: string; finding?: FindingKey; hint?: string };
+// `ask`: the symptom to confirm with the patient when this is noticed ("your face looks red" ->
+// "do you feel hot or feverish?"). Unlike `finding`, it never counts as seen evidence.
+export type Trait = { id: string; group: string; label: string; look: string; finding?: FindingKey; hint?: string; ask?: FindingKey };
 
 export const TRAITS: Trait[] = [
   // Face and brain
@@ -14,11 +16,11 @@ export const TRAITS: Trait[] = [
   { id: "gaze_off", group: "Face & brain", label: "Eyes looking to one side", look: "Are both eyes fixed hard to one side in every picture, as if they cannot look the other way (not just glancing away or looking at a screen)?", hint: "stroke" },
   { id: "confused_look", group: "Face & brain", label: "Looks confused or disoriented", look: "Does the person look confused or disoriented?", hint: "stroke" },
   { id: "slack_mouth", group: "Face & brain", label: "Mouth hanging open / drooling", look: "Is the mouth hanging open or is the person drooling?", hint: "stroke" },
-  { id: "tremor", group: "Face & brain", label: "Shaking or trembling", look: "Is the person shaking or trembling?", hint: "fever" },
+  { id: "tremor", group: "Face & brain", label: "Shaking or trembling", look: "Is the person shaking or trembling?", hint: "fever", ask: "chills" },
   { id: "seizure_like", group: "Face & brain", label: "Jerking movements", look: "Are there sudden jerking movements of the face, arms or body, like a fit?", finding: "seizure" },
   // Eyes
   { id: "yellow_eyes", group: "Eyes", label: "Yellow eyes", look: "Are the whites of the eyes yellow?", finding: "yellow_eyes" },
-  { id: "red_eyes", group: "Eyes", label: "Red eyes", look: "Are the eyes red or bloodshot?", hint: "fever" },
+  { id: "red_eyes", group: "Eyes", label: "Red eyes", look: "Are the eyes red or bloodshot?", hint: "fever", ask: "fever" },
   { id: "sunken_eyes", group: "Eyes", label: "Sunken eyes", look: "Do the eyes look sunken into the face?", finding: "sunken_eyes" },
   { id: "puffy_eyes", group: "Eyes", label: "Puffy, swollen eyelids", look: "Are the eyelids clearly puffy or swollen?" },
   { id: "eye_discharge", group: "Eyes", label: "Discharge from eyes", look: "Is there pus or discharge around the eyes?" },
@@ -26,11 +28,12 @@ export const TRAITS: Trait[] = [
   { id: "eyes_closing", group: "Eyes", label: "Eyes keep closing", look: "Do the person's eyes keep closing, as if they cannot stay awake?", finding: "very_sleepy" },
   // Skin
   { id: "pale", group: "Skin", label: "Very pale", look: "Are the lips and inner eyelids almost white, much paler than this person's natural skin tone (not just bright or cold lighting)?", finding: "pale" },
-  { id: "flushed", group: "Skin", label: "Flushed, red face", look: "Is the face clearly flushed bright red, as with a high fever (not ordinary skin tone or warm lighting)?", hint: "fever" },
+  { id: "flushed", group: "Skin", label: "Flushed, red face", look: "Is the face clearly flushed bright red, as with a high fever (not ordinary skin tone or warm lighting)?", hint: "fever", ask: "fever" },
   { id: "sweaty", group: "Skin", label: "Sweaty or clammy", look: "Are there visible beads or drips of sweat on the face (not ordinary skin shine under lights)?", finding: "sweating" },
   { id: "blue_lips", group: "Skin", label: "Blue or grey lips", look: "Are the lips clearly blue or grey (not their normal pink or brown colour, not a shadow)?", finding: "blue_lips" },
   { id: "yellow_skin", group: "Skin", label: "Yellow skin", look: "Is the skin clearly yellow, like jaundice (not warm or yellow lighting)?", finding: "yellow_eyes" },
   { id: "rash", group: "Skin", label: "Rash or red spots", look: "Is there a visible rash or many red spots on the skin?", finding: "rash" },
+  { id: "bite_marks", group: "Skin", label: "Insect bite marks", look: "Are there several small red bumps on the skin that look like mosquito or insect bites (not a rash, not acne)?", ask: "mosquito_bites" },
   { id: "blisters", group: "Skin", label: "Blisters or sores", look: "Are there blisters, open sores or crusted spots on the skin?" },
   { id: "bruises", group: "Skin", label: "Bruises", look: "Are there visible bruises?", finding: "injury" },
   { id: "wound", group: "Skin", label: "Cut or open wound", look: "Is there a visible cut or open wound?", finding: "injury" },
@@ -40,24 +43,24 @@ export const TRAITS: Trait[] = [
   { id: "mouth_sores", group: "Skin", label: "Sores at the mouth corners", look: "Are there sores or cracks at the corners of the mouth?" },
   // Breathing
   { id: "labored", group: "Breathing", label: "Struggling to breathe", look: "Does the person look like they are struggling to breathe (gasping, straining the neck)?", finding: "short_of_breath" },
-  { id: "mouth_breathing", group: "Breathing", label: "Breathing through the mouth", look: "Is the person breathing through an open mouth?", hint: "breathing" },
+  { id: "mouth_breathing", group: "Breathing", label: "Breathing through the mouth", look: "Is the person breathing through an open mouth?", hint: "breathing", ask: "short_of_breath" },
   { id: "nostril_flare", group: "Breathing", label: "Nostrils flaring", look: "Do the nostrils flare out with each breath?", finding: "short_of_breath" },
   { id: "fast_chest", group: "Breathing", label: "Chest moving fast", look: "Is the chest or belly moving up and down fast?", finding: "fast_breathing" },
   { id: "coughing", group: "Breathing", label: "Coughing", look: "Is the person coughing in these pictures?", finding: "cough" },
   { id: "sneezing", group: "Breathing", label: "Runny nose or sneezing", look: "Does the person have a runny nose or are they sneezing?", hint: "breathing" },
   // Pain and posture
   { id: "grimace", group: "Pain & posture", label: "Face showing pain", look: "Is the person grimacing or wincing in pain?" },
-  { id: "holding_chest", group: "Pain & posture", label: "Holding the chest", look: "Is the person holding or pressing on their chest?", hint: "cardiac" },
-  { id: "holding_head", group: "Pain & posture", label: "Holding the head", look: "Is the person holding their head?", hint: "stroke" },
-  { id: "holding_belly", group: "Pain & posture", label: "Holding the belly", look: "Is the person holding their belly or stomach?", hint: "stomach" },
-  { id: "holding_back", group: "Pain & posture", label: "Holding the back", look: "Is the person holding their lower back?", hint: "pain" },
+  { id: "holding_chest", group: "Pain & posture", label: "Holding the chest", look: "Is the person holding or pressing on their chest?", hint: "cardiac", ask: "chest_pain" },
+  { id: "holding_head", group: "Pain & posture", label: "Holding the head", look: "Is the person holding their head?", hint: "stroke", ask: "headache" },
+  { id: "holding_belly", group: "Pain & posture", label: "Holding the belly", look: "Is the person holding their belly or stomach?", hint: "stomach", ask: "belly_pain" },
+  { id: "holding_back", group: "Pain & posture", label: "Holding the back", look: "Is the person holding their lower back?", hint: "pain", ask: "back_pain" },
   { id: "guarding_limb", group: "Pain & posture", label: "Protecting an arm or leg", look: "Is the person protecting or holding an arm or leg still, as if injured?", hint: "injury" },
   { id: "limp_arm", group: "Pain & posture", label: "One arm hanging limp", look: "Is one arm hanging limp or not moving like the other?", finding: "face_or_arm_weakness" },
   { id: "slumped", group: "Pain & posture", label: "Slumped, can't sit up", look: "Is the person slumped over or unable to sit upright?", finding: "very_sleepy" },
   { id: "rocking", group: "Pain & posture", label: "Rocking or restless", look: "Is the person rocking back and forth or very restless?", hint: "mental" },
   // Mood and energy
-  { id: "sad", group: "Mood & energy", label: "Sad expression", look: "Does the person look clearly sad or downcast (tearful, head down, mouth turned down), not just calm or neutral?", hint: "mental" },
-  { id: "anxious", group: "Mood & energy", label: "Anxious or frightened", look: "Does the person look anxious, frightened or tense?", hint: "mental" },
+  { id: "sad", group: "Mood & energy", label: "Sad expression", look: "Does the person look clearly sad or downcast (tearful, head down, mouth turned down), not just calm or neutral?", hint: "mental", ask: "low_mood" },
+  { id: "anxious", group: "Mood & energy", label: "Anxious or frightened", look: "Does the person look anxious, frightened or tense?", hint: "mental", ask: "anxious" },
   { id: "flat", group: "Mood & energy", label: "Flat, no expression", look: "Is the face strikingly blank and lifeless across all the pictures (dull eyes, no movement at all), well beyond an ordinary calm, neutral or concentrating face?", hint: "mental" },
   { id: "agitated", group: "Mood & energy", label: "Agitated", look: "Does the person look agitated or angry?" },
   { id: "exhausted", group: "Mood & energy", label: "Exhausted", look: "Does the person look clearly exhausted (heavy eyelids, slumping), not just calm?" },
@@ -104,4 +107,5 @@ export const NOTICED: Record<string, { en: string; es: string }> = {
   tremor: { en: "I notice you are shaking a little.", es: "Noto que está temblando un poco." },
   wound: { en: "I see a wound.", es: "Veo una herida." },
   rash: { en: "I see some spots on your skin.", es: "Veo unas manchas en su piel." },
+  bite_marks: { en: "I see some bite marks on your skin.", es: "Veo unas picaduras en su piel." },
 };

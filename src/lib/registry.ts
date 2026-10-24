@@ -21,6 +21,7 @@ export type VisitRecord = {
   reason: string;
   causes: { name: string; probability: number }[];
   resources: Resource[];
+  orders?: { item: string; qty: number; note?: string; for: string }[];
   mentalHealth: { category: string | null; wantsPeerGroup: boolean };
   handover: string | null;
 };

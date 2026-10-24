@@ -58,7 +58,7 @@ export type PathwayState = {
   subtypes: { name: string; probability: number; urgency: Urgency }[];
 };
 
-export type Frame = { secondsAgo: number; b64: string }; // camera pictures, oldest first
+export type Frame = { secondsAgo: number; b64: string; face?: string /* close-up of the face, same moment */ }; // camera pictures, oldest first
 
 export type TestResults = Partial<Record<string, Partial<Record<FindingKey, number>>>>;
 
@@ -98,5 +98,6 @@ export type TriageResult = {
   complaint_known: boolean; // false until the patient has said what brought them in
   network: { post: string; advisories: { kind: string; text: string; source: string }[] }; // what the network agents told this pod
   peer_group: { wants: boolean; category: string | null };
+  orders: { item: string; qty: number; note?: string; for: string }[]; // exact stock to send, only for conditions the pod is confident about
   jev_ms: number;
 };

@@ -15,7 +15,7 @@ export const FINDINGS = {
   pain_spreads: { label: "Pain spreads to arm, jaw or back", ask: { en: "Does the pain move to your arm, jaw or back?", es: "¿El dolor se le pasa al brazo, la quijada o la espalda?" } },
   sweating: {
     label: "Sweating or clammy",
-    ask: { en: "Are you sweating or feeling cold and clammy?", es: "¿Está sudando o siente sudor frío?" },
+    ask: { en: "Are you sweating a lot right now, or breaking into a cold sweat, even without heat or hard work?", es: "¿Está sudando mucho ahorita, o le da sudor frío, aunque no haga calor ni esté trabajando duro?" },
     seen: "Is the person's face visibly sweaty, wet or shiny with sweat?",
   },
   short_of_breath: {
@@ -54,6 +54,13 @@ export const FINDINGS = {
     seen: "Does the person look very drowsy, limp, or unable to keep their eyes open?",
   },
   fever: { label: "Fever", ask: { en: "Do you have a fever, or feel hot?", es: "¿Tiene calentura o se siente caliente?" } },
+  chills: { label: "Chills, shivering then sweats", ask: { en: "Do you get chills or shivering, and then break into a sweat?", es: "¿Le dan escalofríos o temblores, y luego suda mucho?" } },
+  mosquito_bites: {
+    label: "Mosquito bites / no bed net",
+    ask: { en: "Have you had many mosquito bites lately, or do you sleep without a mosquito net?", es: "¿Le han picado muchos zancudos últimamente, o duerme sin mosquitero?" },
+    seen: "Are there visible insect bite marks (small red bumps) on the person's skin?",
+  },
+  belly_pain: { label: "Belly pain", ask: { en: "Do you have pain in your belly?", es: "¿Le duele la panza?" } },
   stiff_neck: { label: "Stiff neck", ask: { en: "Does it hurt to bend your neck forward?", es: "¿Le duele al doblar el cuello hacia adelante?" } },
   rash: { label: "Rash or spots", ask: { en: "Is there a rash or red spots on the skin?", es: "¿Tiene ronchas o manchas rojas en la piel?" }, seen: "Is there a visible rash or many red spots on the person's skin?" },
   cough: { label: "Cough", ask: { en: "Do you have a cough?", es: "¿Tiene tos?" } },
@@ -173,12 +180,12 @@ export const PATHWAYS: Pathway[] = [
     id: "fever",
     label: "Fever",
     description: "Fever, feeling hot, chills",
-    triggers: ["fever"],
-    questions: ["very_sleepy", "seizure", "unable_to_drink", "stiff_neck", "rash", "yellow_eyes", "test:palms", "vomits_everything"],
+    triggers: ["fever", "chills"],
+    questions: ["very_sleepy", "seizure", "unable_to_drink", "stiff_neck", "chills", "mosquito_bites", "rash", "yellow_eyes", "test:palms", "vomits_everything"],
     subtypes: [
-      { name: "Severe malaria", description: "Fever with convulsions, very sleepy, cannot drink, yellow eyes or very pale", urgency: "red", resources: ["Malaria rapid test", "Rectal artesunate (pre-referral)", "Urgent referral"] },
+      { name: "Severe malaria", description: "Fever (often with chills, mosquito bites or no bed net) plus convulsions, very sleepy, cannot drink, yellow eyes or very pale", urgency: "red", resources: ["Malaria rapid test", "Rectal artesunate (pre-referral)", "Urgent referral"] },
       { name: "Meningitis", description: "Fever with stiff neck, severe headache, rash or confusion", urgency: "red", resources: ["Pre-referral antibiotic dose", "Urgent referral"] },
-      { name: "Malaria", description: "Fever in a malaria area without danger signs", urgency: "yellow", resources: ["Malaria rapid test", "Artemisinin combination therapy"] },
+      { name: "Malaria", description: "Fever with chills and sweats, often after many mosquito bites or sleeping without a net, in a malaria area, without danger signs", urgency: "yellow", resources: ["Malaria rapid test", "Artemisinin combination therapy"] },
       { name: "Dengue", description: "Fever with rash, body and eye pain, in a dengue area", urgency: "yellow", resources: ["Paracetamol (no ibuprofen)", "Oral rehydration salts", "Doctor review"] },
       { name: "Viral fever", description: "Fever with no danger signs and no specific pattern", urgency: "green", resources: ["Paracetamol", "Malaria rapid test"] },
     ],
@@ -187,8 +194,8 @@ export const PATHWAYS: Pathway[] = [
     id: "stomach",
     label: "Diarrhea / vomiting",
     description: "Diarrhea, vomiting, stomach upset",
-    triggers: ["diarrhea", "vomits_everything"],
-    questions: ["unable_to_drink", "very_sleepy", "sunken_eyes", "blood_in_stool", "vomits_everything", "test:feet"],
+    triggers: ["diarrhea", "vomits_everything", "belly_pain"],
+    questions: ["unable_to_drink", "very_sleepy", "sunken_eyes", "blood_in_stool", "vomits_everything", "diarrhea", "fever", "test:feet"],
     subtypes: [
       { name: "Severe dehydration", description: "Very sleepy, cannot drink, sunken eyes", urgency: "red", resources: ["IV fluids (referral)", "Oral rehydration salts", "Urgent referral"] },
       { name: "Some dehydration", description: "Sunken eyes or very thirsty, still drinking", urgency: "yellow", resources: ["Oral rehydration salts", "Zinc"] },
@@ -227,7 +234,7 @@ export const PATHWAYS: Pathway[] = [
     label: "Headache",
     description: "Headache, head pain, migraine",
     triggers: ["headache", "worst_headache"],
-    questions: ["worst_headache", "fever", "stiff_neck", "face_or_arm_weakness", "light_hurts", "severe_headache", "pregnant"],
+    questions: ["worst_headache", "fever", "stiff_neck", "chills", "mosquito_bites", "face_or_arm_weakness", "light_hurts", "severe_headache", "pregnant"],
     subtypes: [
       { name: "Bleeding in the brain", description: "Sudden, worst-ever headache, maybe with vomiting or confusion", urgency: "red", resources: ["Emergency transport to hospital with CT"] },
       { name: "Meningitis", description: "Headache with fever and stiff neck, maybe rash or confusion", urgency: "red", resources: ["Pre-referral antibiotic dose", "Urgent referral"] },
@@ -433,7 +440,7 @@ export const CLOSING_SUICIDE_RISK: Text = {
 // Opening line when the camera already saw something worrying.
 export const SEEN_OPENERS: Partial<Record<FindingKey, Text>> = {
   face_or_arm_weakness: { en: "I can see one side of your face looks different. Is one side of your face or an arm weak or numb?", es: "Veo que un lado de su cara se ve diferente. ¿Tiene un lado de la cara o un brazo débil o dormido?" },
-  sweating: { en: "I can see you are sweating. Do you have pain or pressure in your chest?", es: "Veo que está sudando. ¿Siente dolor o presión en el pecho?" },
+  sweating: { en: "I can see you are sweating. Are you sweating a lot right now, even without heat or hard work?", es: "Veo que está sudando. ¿Está sudando mucho ahorita, aunque no haga calor ni esté trabajando duro?" },
   short_of_breath: { en: "It looks hard for you to breathe. Is it hard to breathe right now?", es: "Parece que le cuesta respirar. ¿Le cuesta respirar ahorita?" },
   severe_bleeding: { en: "I can see bleeding. Is it heavy and not stopping?", es: "Veo sangre. ¿Está sangrando mucho y no para?" },
   yellow_eyes: { en: "Your eyes look a little yellow. Have you had a fever?", es: "Sus ojos se ven un poco amarillos. ¿Ha tenido calentura?" },
@@ -442,7 +449,7 @@ export const SEEN_OPENERS: Partial<Record<FindingKey, Text>> = {
 // Which finding an opener asks about (so it is not asked twice).
 export const SEEN_OPENER_ASKS: Partial<Record<FindingKey, Step>> = {
   face_or_arm_weakness: "face_or_arm_weakness",
-  sweating: "chest_pain",
+  sweating: "sweating", // confirm the sign first; the chest question follows once the complaint is known
   short_of_breath: "short_of_breath",
   severe_bleeding: "severe_bleeding",
   yellow_eyes: "fever",

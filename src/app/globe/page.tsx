@@ -14,6 +14,7 @@ const DB_NAME = process.env.NEXT_PUBLIC_SPACETIME_DB ?? "podnet";
 type Village = { id: number; name: string; lat: number; lng: number; population: number; hub: boolean };
 type Order = {
   id: bigint;
+  kind: string;
   patientName: string;
   toVillageId: number;
   fromVillageId: number;
@@ -25,7 +26,7 @@ type Order = {
   etaMinutes: number;
   departedAt?: { microsSinceUnixEpoch: bigint };
 };
-type FeedItem = { id: number; text: string; tone: "need" | "move" | "done" | "alert" | "live" };
+type FeedItem = { id: number; at: string; text: string; tone: "need" | "move" | "done" | "alert" | "live" | "restock" | "agent" };
 type Marker =
   | { kind: "village"; v: Village; lat: number; lng: number }
   | { kind: "pop"; id: number; lat: number; lng: number; text: string; tone: string }
@@ -48,7 +49,8 @@ export default function GlobePage() {
   const [picked, setPicked] = useState<Village | null>(null);
   const [stockOf, setStockOf] = useState<{ item: string; qty: number }[]>([]);
 
-  const push = (text: string, tone: FeedItem["tone"]) => setFeed((f) => [{ id: ++feedSeq, text, tone }, ...f].slice(0, 40));
+  const push = (text: string, tone: FeedItem["tone"]) =>
+    setFeed((f) => [{ id: ++feedSeq, at: new Date().toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }), text, tone }, ...f].slice(0, 40));
   const vname = (id: number) => villages.current.get(id)?.name.replace(/ \(.*\)$/, "") ?? `#${id}`;
 
   // ---- globe ----
@@ -75,7 +77,10 @@ export default function GlobePage() {
         .arcStartLng((d: object) => (d as { a: Village }).a.lng)
         .arcEndLat((d: object) => (d as { b: Village }).b.lat)
         .arcEndLng((d: object) => (d as { b: Village }).b.lng)
-        .arcColor((d: object) => ((d as { mode: string }).mode === "drone" ? ["#38bdf8", "#e0f2fe"] : ["#a78bfa", "#ede9fe"]))
+        .arcColor((d: object) => {
+          const o = d as { mode: string; kind: string };
+          return o.kind === "restock" ? ["#34d399", "#d1fae5"] : o.mode === "drone" ? ["#38bdf8", "#e0f2fe"] : ["#a78bfa", "#ede9fe"];
+        })
         .arcAltitude(0.012)
         .arcStroke(0.05)
         .arcDashLength(0.35)
@@ -147,7 +152,7 @@ export default function GlobePage() {
       });
       const arcs = orders
         .filter((o) => o.status !== "delivered" && o.mode !== "walk")
-        .map((o) => ({ a: villages.current.get(o.fromVillageId), b: villages.current.get(o.toVillageId), mode: o.mode }))
+        .map((o) => ({ a: villages.current.get(o.fromVillageId), b: villages.current.get(o.toVillageId), mode: o.mode, kind: o.kind }))
         .filter((x) => x.a && x.b);
       globeRef.current?.arcsData(arcs);
       const s = [...conn.db.settings.iter()][0];
@@ -169,7 +174,7 @@ export default function GlobePage() {
             syncVillages(c);
             refreshKpis(c);
           })
-          .subscribe(["SELECT * FROM village", "SELECT * FROM stock", "SELECT * FROM visit", "SELECT * FROM delivery_order", "SELECT * FROM settings", "SELECT * FROM pop"]);
+          .subscribe(["SELECT * FROM village", "SELECT * FROM stock", "SELECT * FROM visit", "SELECT * FROM delivery_order", "SELECT * FROM settings", "SELECT * FROM pop", "SELECT * FROM agent_log"]);
       })
       .onConnectError(() => setConnected("offline"))
       .onDisconnect(() => setConnected("offline"))
@@ -180,32 +185,36 @@ export default function GlobePage() {
     conn.db.settings.onUpdate(() => refreshKpis(conn));
     conn.db.visit.onInsert((_ctx, v) => {
       refreshKpis(conn);
-      if (v.fromPod) push(`LIVE POD · ${v.patientName} checked in ${vname(v.villageId)} — ${v.urgency === "green" ? "no needs found" : v.urgency.toUpperCase()}`, "live");
+      if (v.fromPod) push(`LIVE POD ▸ ${v.patientName} · ${vname(v.villageId)} · ${v.urgency === "green" ? "nothing needed" : v.urgency.toUpperCase()}`, "live");
     });
     conn.db.deliveryOrder.onInsert((_ctx, o) => {
       refreshKpis(conn);
-      push(`Ordered: ${o.item} for ${o.patientName} (${vname(o.toVillageId)}) — ${o.mode === "walk" ? "from the village post" : `${o.mode} from ${vname(o.fromVillageId)}, ~${o.etaMinutes} min`}`, "move");
+      if (o.kind === "restock") push(`RESTOCK ▸ ${o.qty} ${o.item} → ${vname(o.toVillageId)} post · ${o.mode} from ${vname(o.fromVillageId)} · ~${o.etaMinutes} min`, "restock");
+      else push(`ORDER ▸ ${o.item} → ${o.patientName} (${vname(o.toVillageId)}) · ${o.mode === "walk" ? "from the village post" : `${o.mode} from ${vname(o.fromVillageId)} · ~${o.etaMinutes} min`}`, "move");
     });
     conn.db.deliveryOrder.onUpdate((_ctx, _old, o) => {
       refreshKpis(conn);
-      if (o.status === "on_the_way" && o.mode !== "walk") push(`${o.mode === "drone" ? "🛩 Drone" : "🚚 Truck"} left ${vname(o.fromVillageId)} with ${o.item} for ${o.patientName}`, "move");
+      if (o.status === "on_the_way" && o.mode !== "walk") push(`${o.mode === "drone" ? "DRONE" : "TRUCK"} ▸ left ${vname(o.fromVillageId)} · ${o.qty} ${o.item} → ${o.kind === "restock" ? `${vname(o.toVillageId)} post` : o.patientName}`, "move");
+    });
+    conn.db.agentLog.onInsert((_ctx, l) => {
+      if (l.agent !== "Pod") push(`${l.agent.toUpperCase()} ▸ ${l.text}`, "agent");
     });
     conn.db.pop.onInsert((_ctx, p) => {
       const v = villages.current.get(p.villageId);
       if (!v) return;
       const id = ++feedSeq;
-      const tone = p.kind === "delivered" ? "done" : p.kind === "alert" ? "alert" : "need";
+      const tone = p.kind === "delivered" ? "done" : p.kind === "alert" ? "alert" : p.kind === "restock" ? "restock" : "need";
       pops.current.push({ kind: "pop", id, lat: v.lat, lng: v.lng, text: p.text, tone });
       setTimeout(() => (pops.current = pops.current.filter((x) => x.kind !== "pop" || x.id !== id)), 2600);
       const g = globeRef.current;
       if (g) {
-        const ring = { lat: v.lat, lng: v.lng, rgb: tone === "done" ? "52,211,153" : tone === "alert" ? "239,68,68" : "251,191,36" };
+        const ring = { lat: v.lat, lng: v.lng, rgb: tone === "done" ? "52,211,153" : tone === "alert" ? "239,68,68" : tone === "restock" ? "56,189,248" : "251,191,36" };
         g.ringsData([...(g.ringsData() as object[]), ring]);
         setTimeout(() => g.ringsData((g.ringsData() as object[]).filter((r) => r !== ring)), 2200);
       }
-      if (tone === "done") push(`📦 ${p.text.replace(/^📦 /, "")} — delivered (${vname(p.villageId)})`, "done");
-      else if (tone === "alert") push(`${p.text} (${vname(p.villageId)})`, "alert");
-      else push(`${p.text} — ${vname(p.villageId)}`, "need");
+      if (tone === "done") push(`DELIVERED ▸ ${p.text.replace(/^📦 /, "")} · ${vname(p.villageId)}`, "done");
+      else if (tone === "alert") push(`ALERT ▸ ${p.text.replace(/^[🚨⚠] /, "")} · ${vname(p.villageId)}`, "alert");
+      else if (tone === "need") push(`NEED ▸ ${p.text} · ${vname(p.villageId)}`, "need");
     });
     return () => conn.disconnect();
   }, []);
@@ -249,21 +258,31 @@ export default function GlobePage() {
           <Link href="/kiosk?village=Katete" className="rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-1.5 hover:bg-slate-800">
             Open the Katete pod
           </Link>
+          <Link href="/government" className="rounded-lg border border-emerald-700 bg-emerald-950/70 px-3 py-1.5 text-emerald-200 hover:bg-emerald-900">
+            Government view
+          </Link>
           <span className={`self-center ${connected === "live" ? "text-emerald-300" : "text-amber-300"}`}>
             ● {connected === "live" ? "SpacetimeDB live" : connected === "connecting" ? "connecting…" : "SpacetimeDB offline — run `spacetime start`"}
           </span>
         </div>
       </div>
 
-      <div className="absolute bottom-5 right-5 top-5 z-10 flex w-96 flex-col rounded-2xl border border-slate-700/70 bg-slate-950/75 p-4 backdrop-blur">
-        <p className="mb-2 text-xs uppercase tracking-wide text-slate-400">What just happened</p>
-        <div className="flex-1 space-y-1.5 overflow-hidden">
+      <div className="hud absolute bottom-5 right-5 top-5 z-10 flex w-[26rem] flex-col p-4">
+        <div className="mb-3 flex items-center justify-between font-mono text-[11px] uppercase tracking-[0.25em] text-sky-300/90">
+          <span>
+            <span className="blink mr-2 inline-block h-2 w-2 rounded-full bg-emerald-400 align-middle" />
+            podnet // live feed
+          </span>
+          <span className="text-slate-500">{feed.length ? feed[0].at : "--:--:--"}</span>
+        </div>
+        <div className="flex-1 space-y-1 overflow-hidden">
           {feed.map((f) => (
-            <p key={f.id} className={`feed rounded-lg px-2.5 py-1.5 text-sm ${TONE[f.tone]}`}>
-              {f.text}
-            </p>
+            <div key={f.id} className={`feed ${TONE[f.tone]}`}>
+              <span className="stamp">{f.at}</span>
+              <span className="msg">{f.text}</span>
+            </div>
           ))}
-          {!feed.length && <p className="text-sm text-slate-500">Waiting for the first patient…</p>}
+          {!feed.length && <p className="font-mono text-xs text-slate-500">awaiting first patient…</p>}
         </div>
       </div>
 
@@ -289,11 +308,13 @@ export default function GlobePage() {
 }
 
 const TONE: Record<FeedItem["tone"], string> = {
-  need: "bg-amber-500/15 text-amber-100",
-  move: "bg-sky-500/10 text-sky-100",
-  done: "bg-emerald-500/15 text-emerald-100",
-  alert: "bg-red-500/20 text-red-100",
-  live: "bg-violet-500/25 text-violet-100 font-semibold",
+  need: "t-need",
+  move: "t-move",
+  done: "t-done",
+  alert: "t-alert",
+  live: "t-live",
+  restock: "t-restock",
+  agent: "t-agent",
 };
 
 function Kpi({ label, value, tone = "text-white" }: { label: string; value: number; tone?: string }) {
@@ -332,8 +353,18 @@ const CSS = `
 .pop.need{background:#fbbf24;color:#1c1917}
 .pop.done{background:#34d399;color:#052e16}
 .pop.alert{background:#ef4444;color:white}
+.pop.restock{background:#38bdf8;color:#082f49}
+.hud{background:linear-gradient(180deg,rgba(2,6,23,.82),rgba(2,6,23,.7));border:1px solid rgba(56,189,248,.25);border-radius:14px;box-shadow:0 0 0 1px rgba(2,6,23,.6),0 0 40px rgba(56,189,248,.08) inset;backdrop-filter:blur(10px);overflow:hidden}
+.hud:before{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px)}
+.hud:after{content:"";position:absolute;left:0;right:0;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(56,189,248,.8),transparent)}
+.feed{display:grid;grid-template-columns:3.6rem 1fr;gap:.5rem;align-items:start;padding:.4rem .6rem .4rem .7rem;border-left:2px solid var(--c);background:linear-gradient(90deg,color-mix(in srgb,var(--c) 14%,transparent),transparent 70%);font:12.5px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#e2e8f0;animation:feedin .35s ease-out;position:relative}
+.feed .stamp{color:color-mix(in srgb,var(--c) 85%,white);font-size:10.5px;letter-spacing:.04em;padding-top:1px}
+.feed .msg{text-shadow:0 0 12px color-mix(in srgb,var(--c) 45%,transparent)}
+.feed:first-child{box-shadow:0 0 18px color-mix(in srgb,var(--c) 35%,transparent)}
+.t-need{--c:#fbbf24}.t-move{--c:#38bdf8}.t-done{--c:#34d399}.t-alert{--c:#ef4444}.t-live{--c:#c084fc;font-weight:700}.t-restock{--c:#2dd4bf}.t-agent{--c:#f472b6}
+.blink{animation:blink 1.2s steps(2,start) infinite}
+@keyframes blink{to{visibility:hidden}}
 @keyframes floatup{0%{opacity:0;margin-top:-10px;scale:.6}12%{opacity:1;margin-top:-34px;scale:1.1}20%{scale:1}75%{opacity:1}100%{opacity:0;margin-top:-80px}}
 .mover{transform:translate(-50%,-50%);font-size:20px;filter:drop-shadow(0 0 6px rgba(56,189,248,.9))}
-.feed{animation:feedin .35s ease-out}
 @keyframes feedin{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
 `;

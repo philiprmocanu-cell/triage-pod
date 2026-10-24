@@ -15,6 +15,7 @@ const FACE_EDGE = [234, 454];
 
 export type CameraHandle = {
   capture: (maxWidth?: number) => string | null; // base64 JPEG of the current frame, for Jev
+  captureFace: () => string | null; // square close-up of the face (360 px), null when no face
   startSmileTest: () => void;
   finishSmileTest: () => "normal" | "asymmetric" | null;
   reset: () => void;
@@ -32,6 +33,7 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
   const droop = useRef(new DroopTracker());
   const hr = useRef(new HeartRateEstimator());
   const smileRef = useRef(smileTest);
+  const lastFace = useRef<{ x: number; y: number }[] | null>(null);
   const onSignalsRef = useRef(onSignals);
   const [status, setStatus] = useState("Starting camera…");
 
@@ -48,6 +50,22 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
       c.height = Math.round(video.videoHeight * scale);
       c.getContext("2d")!.drawImage(video, 0, 0, c.width, c.height);
       return c.toDataURL("image/jpeg", 0.8).split(",")[1];
+    },
+    // Jev judges skin, eyes and lips far better on a close-up than on a whole room: crop a square
+    // around the last detected face with a third of its size as margin, scaled to 360 px.
+    captureFace: () => {
+      const video = videoRef.current, lm = lastFace.current;
+      if (!video || !video.videoWidth || !lm) return null;
+      const xs = lm.map((p) => p.x), ys = lm.map((p) => p.y);
+      const w = video.videoWidth, h = video.videoHeight;
+      const cx = ((Math.min(...xs) + Math.max(...xs)) / 2) * w, cy = ((Math.min(...ys) + Math.max(...ys)) / 2) * h;
+      const size = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * Math.max(w, h) * 1.7;
+      const x0 = Math.max(0, cx - size / 2), y0 = Math.max(0, cy - size / 2);
+      const sw = Math.min(size, w - x0), sh = Math.min(size, h - y0);
+      const c = document.createElement("canvas");
+      c.width = c.height = 360;
+      c.getContext("2d")!.drawImage(video, x0, y0, sw, sh, 0, 0, 360, 360);
+      return c.toDataURL("image/jpeg", 0.85).split(",")[1];
     },
     startSmileTest: () => droop.current.startSmileTest(),
     finishSmileTest: () => droop.current.finishSmileTest(),
@@ -106,6 +124,7 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
       const res = landmarker.detectForVideo(video, now);
       const lm = res.faceLandmarks?.[0];
       faceVisible = Boolean(lm);
+      lastFace.current = lm ?? null;
       const overlay = overlayRef.current;
       const octx = overlay?.getContext("2d");
       if (overlay && octx) {

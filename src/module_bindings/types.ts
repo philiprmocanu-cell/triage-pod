@@ -10,9 +10,19 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const AgentLog = __t.object("AgentLog", {
+  id: __t.u64(),
+  at: __t.timestamp(),
+  agent: __t.string(),
+  villageId: __t.u32(),
+  text: __t.string(),
+});
+export type AgentLog = __Infer<typeof AgentLog>;
+
 export const DeliveryOrder = __t.object("DeliveryOrder", {
   id: __t.u64(),
   visitId: __t.u64(),
+  kind: __t.string(),
   patientName: __t.string(),
   toVillageId: __t.u32(),
   fromVillageId: __t.u32(),
@@ -45,6 +55,8 @@ export const Settings = __t.object("Settings", {
   id: __t.u32(),
   simulate: __t.bool(),
   simEverySeconds: __t.u32(),
+  agents: __t.bool(),
+  lastAgentsRun: __t.timestamp(),
 });
 export type Settings = __Infer<typeof Settings>;
 

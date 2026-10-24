@@ -34,13 +34,16 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AllocateReducer from "./allocate_reducer";
 import ReportVisitReducer from "./report_visit_reducer";
 import ResetDemoReducer from "./reset_demo_reducer";
+import SetAgentsReducer from "./set_agents_reducer";
 import SetSimulationReducer from "./set_simulation_reducer";
 
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import AgentLogRow from "./agent_log_table";
 import DeliveryOrderRow from "./delivery_order_table";
 import PopRow from "./pop_table";
 import SettingsRow from "./settings_table";
@@ -52,6 +55,17 @@ import VisitRow from "./visit_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  agentLog: __table({
+    name: 'agent_log',
+    indexes: [
+      { accessor: 'id', name: 'agent_log_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'agent_log_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AgentLogRow),
   deliveryOrder: __table({
     name: 'delivery_order',
     indexes: [
@@ -122,8 +136,10 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("allocate", AllocateReducer),
   __reducerSchema("report_visit", ReportVisitReducer),
   __reducerSchema("reset_demo", ResetDemoReducer),
+  __reducerSchema("set_agents", SetAgentsReducer),
   __reducerSchema("set_simulation", SetSimulationReducer),
 );
 

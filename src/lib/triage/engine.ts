@@ -13,6 +13,7 @@ import { postFor } from "../network";
 import { closingAdvice, confirmComplaint, followUpQuestion, phraseNext, replyToPatient } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { NOTICED, TRAITS, TraitScan } from "./traits";
+import { ordersFor, RULE_SUPPLIES } from "./supplies";
 import { getVitals } from "../session";
 import { maxUrgency, runRules, vitalsRules } from "./rules";
 import {
@@ -102,7 +103,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
       // the same in both and must not flip the conversation into English.
       const words = (input.latest.candidates[pick] ?? "").split(/\s+/).filter(Boolean).length;
       const sure = a.lang?.type === "choice" ? a.lang.confidence : 0;
-      if (input.language && pick !== input.language && input.latest.candidates[input.language] && (words < 4 || sure < 0.8)) pick = input.language;
+      const prior = input.language ?? language; // the region's language until the patient clearly speaks another
+      if (pick !== prior && input.latest.candidates[prior] && (words < 6 || sure < 0.85)) pick = prior;
       language = (pick === "en" ? "en" : "es") as Lang;
       patientText = input.latest.candidates[pick] ?? entries[0][1];
     } else if (entries.length === 1) {
@@ -296,15 +298,19 @@ export async function step(input: StepInput): Promise<TriageResult> {
 
   const yes = {} as Record<FindingKey, number>;
   const saidYes = {} as Record<FindingKey, number>;
+  const saidKnown = {} as Record<FindingKey, boolean>; // asked, or answered in their own words (the camera doesn't count)
   const known = {} as Record<FindingKey, boolean>;
   const findings: FindingState[] = [];
   for (const k of FINDING_KEYS) {
     const said = probsOf(a[`said_${k}`]);
     const s = Math.max(seen[k] ?? 0, tested.get(k) ?? 0);
     let y = Math.max(said.yes ?? 0, s >= YES ? s : 0);
+    // The patient's clear "no" beats the camera on anything they can feel themselves.
+    if (asked.has(k) && (said.no ?? 0) >= 0.6 && k !== "face_or_arm_weakness" && !tested.has(k)) y = said.yes ?? 0;
     if (k === "confused_speech" && speechTest && noulOf(a.speech_attempted) >= 0.7) y = Math.max(y, noulOf(a.speech_garbled) >= 0.75 ? noulOf(a.speech_garbled) : 0);
     yes[k] = y;
     saidYes[k] = said.yes ?? 0;
+    saidKnown[k] = asked.has(k) || (said.yes ?? 0) + (said.no ?? 0) >= 0.6;
     known[k] = asked.has(k) || (said.yes ?? 0) + (said.no ?? 0) >= 0.6 || s >= 0.75;
     if (k !== "wants_peer_group" && (y >= 0.3 || asked.has(k))) {
       const fromSaid = (said.yes ?? 0) >= 0.3, fromSeen = s >= YES;
@@ -415,6 +421,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
     c.confident = ruleBacked || (!c.early && c.probability >= CONFIDENT && c.evidence.length >= 2);
   }
 
+  // Exactly what to send: one treatment course per confident condition, plus what a safety rule
+  // calls for. Nothing is ordered for a guess.
+  const orders: TriageResult["orders"] = [];
+  for (const c of causes.filter((x) => x.confident)) for (const s of ordersFor([c.name])) addOrder(orders, { ...s, for: c.name });
+  for (const hit of ruleHits) for (const s of RULE_SUPPLIES[hit.id] ?? []) addOrder(orders, { ...s, for: hit.label });
+
   // Urgency comes from safety rules and strongly supported conditions only, never from guesses.
   const causeUrgency = causes.filter((c) => c.confident).map((c) => c.urgency);
   const urgency: Urgency = maxUrgency(...ruleHits.map((h) => h.urgency), ...causeUrgency);
@@ -443,29 +455,48 @@ export async function step(input: StepInput): Promise<TriageResult> {
   let next: TriageResult["next"] = null;
   // Explore what the camera noticed, at most two hunches: "I see you holding your chest. Do you
   // have pain or pressure in your chest?"
+  // Each hunch gets two turns. First the sign itself, in the patient's words ("I notice you are
+  // sweating. Are you sweating a lot, even without heat?"). If they agree, then its likely cause
+  // ("Do you have pain or pressure in your chest?"). If they say no, the camera was wrong: drop it.
   const hunchTurns = input.turns.filter((t) => t.role === "pod" && t.english?.startsWith("[hunch:"));
   const hunchAsked = hunchTurns.length;
-  const hunchUsed = new Set(hunchTurns.map((t) => t.english!.slice(7, t.english!.indexOf("]"))));
+  const hunchTags = new Set(hunchTurns.map((t) => t.english!.slice(7, t.english!.indexOf("]"))));
+  const hunchSay = (trait: string, phase: "sign" | "cause", step: Step): TriageResult["next"] => {
+    const n = NOTICED[trait] ?? { en: "", es: "" };
+    const lead = phase === "sign" ? n : { en: "", es: "" }; // the sign was already mentioned
+    const tag = `[hunch:${trait}:${phase}]`;
+    if (step.startsWith("test:")) {
+      const t = TESTS.find((x) => `test:${x.id}` === step)!;
+      return { asks: step, text: `${lead[language]} ${t.say[language]}`.trim(), english: `${tag} ${lead.en} ${t.say.en}`, test: { id: t.id, label: t.label, seconds: t.seconds, prep: t.prep } };
+    }
+    const f = FINDINGS[step as FindingKey];
+    return { asks: step, text: `${lead[language]} ${f.ask[language]}`.trim(), english: `${tag} ${lead.en} ${f.ask.en}` };
+  };
   const nextHunch = (): TriageResult["next"] => {
-    if (!complaintKnown || hunchAsked >= 2) return null;
+    if (!complaintKnown || hunchAsked >= 4) return null;
     for (const h of hunches) {
-      if (hunchUsed.has(h.trait)) continue;
+      const trait = TRAITS.find((t) => t.id === h.trait);
+      const sign: FindingKey | undefined = trait?.ask ?? h.finding ?? undefined;
+      // Phase 1: confirm the sign, unless the patient already told us about it.
+      if (sign && !hunchTags.has(`${h.trait}:sign`) && !saidKnown[sign]) return hunchSay(h.trait, "sign", sign);
+      // The patient said no to the sign: the camera was wrong, move on.
+      if (sign && saidKnown[sign] && yes[sign] < YES) continue;
+      // Phase 2: the cause.
+      if (hunchTags.has(`${h.trait}:cause`)) continue;
       const path = h.pathway ? PATHWAYS.find((d) => d.id === h.pathway) : PATHWAYS.find((d) => h.finding && (d.triggers.includes(h.finding) || d.questions.includes(h.finding)));
       if (path && open.some((o) => o.id === path.id)) continue; // already being explored
       const step: Step | undefined = h.trait === "face_droop" ? "test:smile" : path?.triggers.find((k) => !known[k]) ?? (h.finding && !known[h.finding] ? h.finding : undefined);
       if (!step || asked.has(step) || (step.startsWith("test:") && testDone(step.slice(5)))) continue;
-      const n = NOTICED[h.trait];
-      if (step.startsWith("test:")) {
-        const t = TESTS.find((x) => `test:${x.id}` === step)!;
-        return { asks: step, text: `${n[language]} ${t.say[language]}`, english: `[hunch:${h.trait}] ${n.en} ${t.say.en}`, test: { id: t.id, label: t.label, seconds: t.seconds, prep: t.prep } };
-      }
-      const f = FINDINGS[step as FindingKey];
-      return { asks: step, text: `${n[language]} ${f.ask[language]}`, english: `[hunch:${h.trait}] ${n.en} ${f.ask.en}` };
+      return hunchSay(h.trait, sign ? "cause" : "sign", step);
     }
     return null;
   };
   const seenOpener = () => {
-    const k = (Object.keys(SEEN_OPENERS) as FindingKey[]).filter((f) => (seen[f] ?? 0) >= YES).sort((x, y) => (seen[y] ?? 0) - (seen[x] ?? 0))[0];
+    // Once only: never re-ask an opener, and drop it once the patient has said no to that sign.
+    const k = (Object.keys(SEEN_OPENERS) as FindingKey[])
+      .filter((f) => (seen[f] ?? 0) >= YES)
+      .filter((f) => !asked.has(SEEN_OPENER_ASKS[f] ?? f) && !(saidKnown[f] && yes[f] < YES))
+      .sort((x, y) => (seen[y] ?? 0) - (seen[x] ?? 0))[0];
     return k ? say(SEEN_OPENER_ASKS[k] ?? k, SEEN_OPENERS[k]!) : null;
   };
 
@@ -559,8 +590,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const lastAsked = lastPod?.asks;
   const reAsked = (lastPod?.text ?? "").startsWith(SORRY[language]);
   if (patientText && lastPod && !done && !redRule) {
-    if (noulOf(a.repeat_request) >= 0.6) {
-      next = { asks: lastAsked ?? null, text: `${CLARO[language]} ${stripPrefix(lastPod.text, language)}`, english: lastPod.english ?? lastPod.text };
+    const repeatedAlready = (["en", "es"] as Lang[]).some((l) => (lastPod.text ?? "").startsWith(CLARO[l]));
+    if (noulOf(a.repeat_request) >= 0.6 && !repeatedAlready) {
+      // Say it again once, in whatever language the patient is speaking now (they may have
+      // just told us they don't understand the other one).
+      const canon = lastAsked ? textFor(lastAsked) : null;
+      next = { asks: lastAsked ?? null, text: `${CLARO[language]} ${canon ? canon[language] : stripPrefix(lastPod.text, language)}`, english: canon ? canon.en : (lastPod.english ?? lastPod.text) };
     } else if (speechTest && noulOf(a.speech_attempted) < 0.7 && !reAsked) {
       next = {
         asks: "confused_speech",
@@ -733,6 +768,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     why,
     complaint_known: complaintKnown,
     network: { post: podPost, advisories: advisories.map((x) => ({ kind: x.kind, text: x.text, source: x.source })) },
+    orders,
     peer_group: {
       wants: yes.wants_peer_group >= YES && !facts.self_harm_thoughts,
       category: mental && mental.probability >= OPEN ? (mental.subtypes[0]?.name ?? null) : null,
@@ -816,6 +852,21 @@ function localeReason(p: Record<string, number>): string {
 }
 
 // "Amoxicillin" and "Amoxicillin dispersible tablets" are the same supply line.
+// The protocol wording of a step, in both languages.
+function textFor(step: Step): Record<Lang, string> | null {
+  if (step === "open") return OPENING;
+  if (step.startsWith("intake:")) return (INTAKE as Record<string, Record<Lang, string>>)[step.slice(7)] ?? null;
+  if (step.startsWith("history:")) return (HISTORY as Record<string, Record<Lang, string>>)[step.slice(8)] ?? null;
+  if (step.startsWith("test:")) return TESTS.find((t) => `test:${t.id}` === step)?.say ?? null;
+  return (FINDINGS as Record<string, { ask: Record<Lang, string> }>)[step]?.ask ?? null;
+}
+
+function addOrder(orders: TriageResult["orders"], o: TriageResult["orders"][number]) {
+  const cur = orders.find((x) => x.item === o.item);
+  if (!cur) orders.push(o);
+  else if (o.qty > cur.qty) Object.assign(cur, o);
+}
+
 function sameItem(a: string, b: string): boolean {
   const words = (s: string) => new Set(s.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3 && w !== "with"));
   const wa = words(a), wb = words(b);

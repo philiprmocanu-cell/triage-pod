@@ -13,6 +13,7 @@ import {
 export default __t.row({
   id: __t.u64().primaryKey(),
   visitId: __t.u64().name("visit_id"),
+  kind: __t.string(),
   patientName: __t.string().name("patient_name"),
   toVillageId: __t.u32().name("to_village_id"),
   fromVillageId: __t.u32().name("from_village_id"),

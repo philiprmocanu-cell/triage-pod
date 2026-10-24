@@ -14,4 +14,6 @@ export default __t.row({
   id: __t.u32().primaryKey(),
   simulate: __t.bool(),
   simEverySeconds: __t.u32().name("sim_every_seconds"),
+  agents: __t.bool(),
+  lastAgentsRun: __t.timestamp().name("last_agents_run"),
 });

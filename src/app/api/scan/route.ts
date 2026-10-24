@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 // Most people who sit at a pod are well; a scan that leans "yes" on a normal face sends the pod
 // asking about problems that aren't there.
 const CALIBRATE =
-  "Look at the `frames` (a few seconds of camera pictures of a person at a health post, oldest first). Most people here are healthy, and a calm, neutral, tired or bored face is normal: answer no unless the sign is clearly there.";
+  "Look at the `frames` (a few seconds of camera pictures of a person at a health post, oldest first; each has the whole picture and, when present, a `face_closeup` of the same moment: use the close-up for anything about the face, eyes, lips or skin, the whole picture for posture, hands and who is there). Most people here are healthy, and a calm, neutral, tired or bored face is normal: answer no unless the sign is clearly there.";
 const FACE_CLEAR = 0.6; // below this the pictures aren't judged at all
 
 // Live physical scan: Jev checks every trait over the last few seconds of camera pictures, in one
@@ -23,7 +23,8 @@ export async function POST(req: Request) {
   const seq = frames.slice(-3).map((f, i) => {
     const ref = `scan-${t0}-${i}-5e8a`;
     images[ref] = f.b64;
-    return { seconds_ago: Math.round(f.secondsAgo), picture: ref };
+    if (f.face) images[`${ref}-face`] = f.face;
+    return { seconds_ago: Math.round(f.secondsAgo), picture: ref, ...(f.face && { face_closeup: `${ref}-face` }) };
   });
   const q: Record<string, JevQuestion> = {
     person_visible: { type: "noul", instructions: "In the `frames`, is a person clearly visible?" },

@@ -1,4 +1,4 @@
-import type { Resource, Urgency } from "@/lib/triage/types";
+import type { Resource, TriageResult, Urgency } from "@/lib/triage/types";
 
 // Sends a finished pod visit to the SpacetimeDB network (spacetime/spacetimedb). The globe at
 // /globe subscribes to it, so the "+1" and the delivery to the patient's home show up live.
@@ -19,7 +19,10 @@ const ITEM_FOR: [RegExp, string][] = [
 ];
 const NEEDED = 0.5; // a resource has to be this likely before anything is sent
 
-export function needsFrom(resources: Resource[]): { item: string; qty: number }[] {
+// The pod's exact order when it has one (confident conditions only); otherwise the older
+// best-effort mapping from its resource list.
+export function needsFrom(resources: Resource[], orders?: TriageResult["orders"]): { item: string; qty: number }[] {
+  if (orders) return orders.map((o) => ({ item: o.item, qty: o.qty }));
   const items = new Set<string>();
   for (const r of resources) {
     if (r.probability < NEEDED) continue;

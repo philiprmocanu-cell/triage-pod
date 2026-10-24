@@ -95,6 +95,15 @@ export function coordinatorBriefing(state: Record<string, unknown>): Promise<str
   );
 }
 
+// The Provincial Medical Officer's briefing: stock vs demand across the province and what the
+// network agents already moved; ends with the one decision that needs a human.
+export function provincialBriefing(state: Record<string, unknown>): Promise<string> {
+  return ask(
+    "You brief the Provincial Medical Officer of Eastern Province, Zambia. Pods at village health posts triage patients and flag exactly what each needs; AI agents move stock from the Chipata hub (or from posts with idle stock) to posts that are short, by drone or truck, and watch for outbreak clusters. From STATE write 5 short sentences in plain English, no headings or bullets: (1) how many patients and how many needs were met, (2) where stock is critically low right now and why, (3) what the agents already moved and whether redistribution between posts happened, (4) any cluster or escalation, (5) the one decision the Officer should make today. Use village names and item names from STATE only.",
+    JSON.stringify(state),
+  );
+}
+
 // Reflective listening: say back what the patient told us, so a speech-to-text slip ("tóxica
 // lentura" for "tos y calentura") is caught before the pod reasons on it.
 export async function confirmComplaint(input: { said: string; language: string; locale: string }): Promise<{ text: string; english: string } | "UNCLEAR"> {

@@ -79,7 +79,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
   const [typed, setTyped] = useState("");
   const [error, setError] = useState("");
   const cam = useRef<CameraHandle>(null);
-  const frames = useRef<{ t: number; b64: string }[]>([]);
+  const frames = useRef<{ t: number; b64: string; face?: string }[]>([]);
   const askedAt = useRef(0); // when the pod finished asking the current question
 
   useEffect(() => {
@@ -91,7 +91,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     const id = setInterval(() => {
       const b64 = cam.current?.capture(480);
       if (!b64) return;
-      frames.current.push({ t: now(), b64 });
+      frames.current.push({ t: now(), b64, face: cam.current?.captureFace() ?? undefined });
       if (frames.current.length > FRAME_KEEP) frames.current.shift();
     }, FRAME_EVERY_MS);
     return () => clearInterval(id);
@@ -350,7 +350,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
         const res = await fetch("/api/scan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ frames: frames.current.slice(-3).map((f) => ({ secondsAgo: t - f.t, b64: f.b64 })) }),
+          body: JSON.stringify({ frames: frames.current.slice(-3).map((f) => ({ secondsAgo: t - f.t, b64: f.b64, face: f.face })) }),
         });
         if (res.ok) {
           const d = await res.json();
@@ -844,6 +844,23 @@ export function ResultPanel({
               </ol>
             </div>
           ))}
+        </Card>
+      )}
+
+      {(result.orders?.length ?? 0) > 0 && (
+        <Card title="Order placed · exactly what this patient gets">
+          <div className="space-y-1">
+            {result.orders.map((o) => (
+              <div key={o.item} className="flex items-baseline justify-between gap-3 text-sm">
+                <span>
+                  <span className="font-semibold tabular-nums">{o.qty}×</span> {o.item}
+                  {o.note && <span className="text-xs text-slate-400"> · {o.note}</span>}
+                </span>
+                <span className="text-xs text-sky-300">for {o.for}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-slate-500">Sent to the patient&apos;s home via the network when the visit ends. Nothing is ordered for a guess.</p>
         </Card>
       )}
 
