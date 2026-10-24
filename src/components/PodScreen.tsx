@@ -11,24 +11,6 @@ import TeachAccent from "./TeachAccent";
 
 type Region = { id: string; name: string; locale: string; languages: string[] };
 
-// The region sets the epidemiology (what is common here) and nothing about the voice. The pod
-// starts in the plain, unaccented voice of the region's first language and only switches once the
-// patient's own words show which variety they speak.
-const neutral = (language: string) => (language === "es" ? "es-US" : language === "ar" ? "ar" : "en-US");
-const ALL_LANGUAGES = ["en", "es", "ar"]; // every utterance is transcribed under all of these
-const WELCOME: Record<string, string> = { en: "Welcome. Please sit in front of the camera.", es: "Bienvenido. Siéntese frente a la cámara.", ar: "مرحبا. من فضلك اجلس أمام الكاميرا." };
-// Names for the varieties the triage brain can pick by phrasing (marker hits come named from /api/stt).
-const VARIETY: Record<string, string> = {
-  "es-MX": "Mexican Spanish", "es-GT": "Guatemalan Spanish", "es-HN": "Honduran Spanish", "es-SV": "Salvadoran Spanish", "es-NI": "Nicaraguan Spanish",
-  "es-CO": "Colombian Spanish", "es-PE": "Peruvian Spanish", "es-BO": "Bolivian Spanish", "es-EC": "Ecuadorian Spanish", "es-ES": "Spain Spanish", "es-US": "neutral Spanish",
-  "en-ZM": "Zambian English", "en-NG": "Nigerian English", "en-IN": "Indian English", "en-GB": "British English", "en-US": "neutral English",
-  "ar-MA": "Moroccan Arabic (Darija)", "ar": "Arabic (standard)",
-};
-const varietyName = (locale: string) => VARIETY[locale] ?? locale;
-type Heard = { locale: string; language: string; name: string; markers: string[] };
-type LiveNote = { at: number; kind: "heard" | "voice" | "words" | "learned"; text: string };
-const LEARN_AFTER_BYTES = 6 * 32_000; // 6 s of 16 kHz speech: enough for Cartesia to clone a voice
-
 const REGIONS: Region[] = [
   { id: "zm", name: "Rural Zambia (Eastern Province)", locale: "en-ZM", languages: ["en", "es"] },
   { id: "gt", name: "Rural Guatemala", locale: "es-GT", languages: ["es", "en"] },
@@ -83,19 +65,13 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
   const [seen, setSeen] = useState<Seen>({});
   const [tests, setTests] = useState<TestResults>({});
   const [intake, setIntake] = useState<Intake>({});
-  // Voice learning: the patient's own recordings this visit. As soon as there is enough of them
-  // the pod clones a voice for THIS visit (nothing written down); if they say yes to "may the pod
-  // learn your way of speaking" at the end, that voice is kept for the village, otherwise deleted.
+  // Voice learning: the patient's own recordings this visit, cloned into the village's voice once
+  // they say yes to "may the pod learn your way of speaking".
   const clips = useRef<ArrayBuffer[]>([]);
-  const learned = useRef(false); // kept for later patients (consent given)
-  const ownVoice = useRef<{ id: string; name: string; locale: string } | null>(null); // this visit's clone
-  const learning = useRef(false);
+  const learned = useRef(false);
   const [language, setLanguage] = useState<Lang | null>(null);
   const [spoken, setSpoken] = useState<string | null>(null);
-  const [locale, setLocale] = useState<string | null>(null); // null = nothing heard yet: neutral voice
-  const [live, setLive] = useState<LiveNote[]>([]); // what the pod heard and changed, for the screen
-  const lastVoice = useRef("");
-  const note = (kind: LiveNote["kind"], text: string) => setLive((l) => [...l.slice(-7), { at: Date.now(), kind, text }]);
+  const [locale, setLocale] = useState<string | null>(null);
   const [camera, setCamera] = useState<LiveCamera | null>(null);
   const [smileTest, setSmileTest] = useState<CameraSignals["smileTest"]>("not_done");
   const [services, setServices] = useState({ cartesia: false, jev: false, claude: false });
@@ -121,8 +97,15 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
   const frames = useRef<{ t: number; b64: string; face?: string }[]>([]);
   const askedAt = useRef(0); // when the pod finished asking the current question
 
+  const cartesiaRef = useRef<boolean | null>(null); // null = health not answered yet (assume yes)
   useEffect(() => {
-    fetch("/api/health").then((r) => r.json()).then(setServices).catch(() => {});
+    fetch("/api/health")
+      .then((r) => r.json())
+      .then((s) => {
+        cartesiaRef.current = Boolean(s.cartesia);
+        setServices(s);
+      })
+      .catch(() => {});
   }, []);
 
   // Keep a rolling few seconds of pictures so Jev sees motion, not one frozen moment.
@@ -146,74 +129,31 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     return picked.map((f) => ({ secondsAgo: t - f.t, b64: f.b64 }));
   };
 
-  const speak = useCallback(
-    async (text: string, loc: string, community?: string) => {
-      setStatus("speaking");
-      if (services.cartesia) {
-        // A voice learned from this patient a minute ago beats any catalog accent.
-        const own = ownVoice.current && ownVoice.current.locale.split("-")[0] === loc.split("-")[0] ? { id: ownVoice.current.id, name: ownVoice.current.name } : undefined;
-        const res = await fetch("/api/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, locale: loc, community, voice: own }),
-        });
-        if (res.ok) {
-          const name = decodeURIComponent(res.headers.get("X-Voice-Name") ?? "");
-          const match = res.headers.get("X-Voice-Match") ?? "";
-          const gap = decodeURIComponent(res.headers.get("X-Voice-Note") ?? "");
-          setVoiceInfo(`${name} · ${match}${gap ? ` · ${gap}` : ""}`);
-          // Say on screen every time the voice actually changes, and be honest about the gap.
-          if (lastVoice.current !== name) {
-            lastVoice.current = name;
-            note("voice", `Voice now: ${name} (${match})${gap ? ` — ${gap}` : ""}`);
-          }
-          await playBlob(await res.blob());
-          return;
-        }
+  // Always Cartesia first (the health check is only advice; a Start pressed before it answers must
+  // not condemn the whole visit to the browser voice). The browser voice is the last resort, and
+  // when it is used the screen says so in red, with the reason.
+  const speak = useCallback(async (text: string, loc: string, community?: string) => {
+    setStatus("speaking");
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, locale: loc, community }),
+      });
+      if (res.ok) {
+        setVoiceInfo(`${decodeURIComponent(res.headers.get("X-Voice-Name") ?? "")} · ${res.headers.get("X-Voice-Match")} match`);
+        await playBlob(await res.blob());
+        return;
       }
-      await speakWithBrowser(text, loc);
-    },
-    [services.cartesia],
-  );
-
-  // Clone a voice from what this patient has said so far. `keep` = they agreed it may be used
-  // for later patients here; otherwise it lives for this visit only.
-  const learnVoice = useCallback(
-    async (loc: string, community: string | undefined, keep: boolean) => {
-      if (learning.current) return;
-      learning.current = true;
-      try {
-        const form = new FormData();
-        const name = `${community ?? "Village"} voice (learned)`;
-        if (keep && ownVoice.current) {
-          form.append("voice", ownVoice.current.id); // already cloned this visit: just keep it
-        } else {
-          if (!clips.current.length) return;
-          form.append("clip", mergeWavs(clips.current), "patient.wav");
-          form.append("persist", keep ? "1" : "0");
-        }
-        form.append("locale", loc);
-        if (community) form.append("community", community);
-        form.append("name", name);
-        const res = await fetch("/api/clone", { method: "POST", body: form });
-        if (!res.ok) return;
-        const v = await res.json();
-        ownVoice.current = { id: v.id, name: v.name, locale: loc };
-        if (keep) {
-          learned.current = true;
-          setVoiceInfo(`Learned this visit: ${v.name}`);
-          note("learned", `They said yes: this voice is kept for ${community ?? "this village"} — the next patient here hears it`);
-        } else {
-          note("learned", `Learned a voice from ${Math.round(clips.current.reduce((n, c) => n + c.byteLength, 0) / 32_000)} s of their speech — this visit only, until they agree to keep it`);
-        }
-      } catch {
-        /* the catalog voice carries on */
-      } finally {
-        learning.current = false;
-      }
-    },
-    [],
-  );
+      const why = (await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`;
+      throw new Error(why);
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      console.warn("Cartesia speech failed, using the browser voice:", why);
+      setError(`Cartesia voice failed (${why}) — using the browser voice for this sentence.`);
+    }
+    await speakWithBrowser(text, loc);
+  }, []);
 
   const cameraSnapshot = useCallback(
     (): CameraSignals => ({
@@ -268,11 +208,8 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       stage: "look" | "answer",
       latest?: { text?: string; candidates?: Record<string, string>; speech?: SpeechStats },
       state?: { turns: Turn[]; tests: TestResults; intake: Intake; smile?: CameraSignals["smileTest"] },
-      heardIn?: Heard | null, // dialect markers found in this very utterance (from /api/stt)
     ): Promise<void> => {
       const cur = state ?? { turns, tests, intake };
-      const before = locale ?? neutral(region.languages[0]); // neutral until their words say otherwise
-      let heard = heardIn ?? null;
       setStatus(stage === "look" ? "looking" : "thinking");
       const res = await fetch("/api/triage", {
         method: "POST",
@@ -290,7 +227,8 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
           language,
           spoken,
           region: region.name,
-          defaultLocale: heard?.locale ?? before,
+          defaultLocale: locale ?? region.locale,
+          village,
         }),
       });
       const data = await res.json();
@@ -298,28 +236,12 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       const r = data as TriageResult;
       setResult(r);
       setSeen(r.seen);
-      const lang = r.patient_text ? r.language : language ?? (before.startsWith("es") ? "es" : "en");
-      // Which variety to speak back, decided only from what was heard:
-      //  1. marker words in their own transcript (واش, running stomach, wawa) are the strongest evidence;
-      //  2. else the triage brain's read of the phrasing, when it is sure;
-      //  3. else, if they switched language, that language's neutral voice.
-      let loc = before;
+      const lang = r.patient_text ? r.language : language ?? (region.locale.startsWith("en") ? "en" : "es");
+      const loc = r.patient_text ? r.locale : locale ?? region.locale;
       if (r.patient_text) {
         setLanguage(r.language);
-        const spokenNow = r.spoken_language ?? r.language;
-        setSpoken(spokenNow);
-        const share = parseInt(r.locale_reason.match(new RegExp(`${r.locale} (\\d+)%`))?.[1] ?? "0") / 100;
-        if (heard?.language !== spokenNow) heard = null; // markers in a transcript Jev judged garbled do not count
-        if (heard) loc = heard.locale;
-        else if (r.locale !== before && r.locale.split("-")[0] === spokenNow && share >= 0.7) loc = r.locale;
-        else if (before.split("-")[0] !== spokenNow) loc = neutral(spokenNow);
-        if (loc !== before) {
-          setLocale(loc);
-          note("heard", heard ? `Heard ${heard.name}: ${heard.markers.slice(0, 4).join(", ")} → switching voice and words` : `Heard ${varietyName(loc)} in the phrasing (${Math.round(share * 100) || "language"}${share ? "% sure" : " switch"}) → switching voice and words`);
-        } else if (heard && !live.some((n) => n.kind === "heard")) {
-          setLocale(loc);
-          note("heard", `Heard ${heard.name}: ${heard.markers.slice(0, 4).join(", ")} — staying with it`);
-        }
+        setSpoken(r.spoken_language ?? r.language);
+        setLocale(r.locale);
       }
 
       const nextIntake = r.intake;
@@ -350,16 +272,23 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
           .then((d) => setSaved({ name: d.name, community: d.community, handover: d.handover }))
           .catch(() => {});
       }
-      // Their words, mirrored: the next sentence uses what they call things (shown as it happens).
-      const words = Object.entries(r.lexicon ?? {}).filter(([, w]) => w);
-      if (words.length && r.patient_text) {
-        const line = words.map(([c, w]) => `${w} (${c.replace(/_en$/, "")})`).join(", ");
-        if (!live.some((n) => n.kind === "words" && n.text.endsWith(line))) note("words", `Using their words from now on: ${line}`);
-      }
-      // They said the pod may learn their way of speaking: keep the voice learned this visit (or
-      // clone one now) for the village, so every later patient here hears it.
+      // They said the pod may learn their way of speaking: clone this visit's recordings into the
+      // village's voice, so the very next sentence (and every later patient here) hears it.
       const community = village ?? nextIntake.community;
-      if (r.voice_consent && !learned.current && (ownVoice.current || clips.current.length)) await learnVoice(loc, community, true);
+      if (r.voice_consent && !learned.current && clips.current.length) {
+        learned.current = true;
+        try {
+          const form = new FormData();
+          form.append("clip", mergeWavs(clips.current), "patient.wav");
+          form.append("locale", loc);
+          if (community) form.append("community", community);
+          form.append("name", `${community ?? "Village"} voice (learned)`);
+          const res = await fetch("/api/clone", { method: "POST", body: form });
+          if (res.ok) setVoiceInfo(`Learned this visit: ${(await res.json()).name}`);
+        } catch {
+          /* the catalog voice carries on */
+        }
+      }
       if (r.next) await speak(r.next.text, loc, community);
       askedAt.current = now();
 
@@ -370,9 +299,11 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
         return triage("answer", undefined, { turns: nextTurns, tests: nextTests, intake: nextIntake, smile });
       }
       setStatus(r.done ? "done" : "idle");
-      if (!r.done && services.cartesia) void hearRef.current(); // listen for the answer, no tapping
+      // Listen for the answer, no tapping. Read through the ref: a Start pressed before /api/health
+      // answered must not leave this closure believing there is no Cartesia and stop the loop.
+      if (!r.done && cartesiaRef.current !== false) void hearRef.current();
     },
-    [turns, tests, intake, seen, scanAvg, cameraSnapshot, language, spoken, locale, live, region, village, speak, learnVoice, runTest, smileTest, services.cartesia],
+    [turns, tests, intake, seen, scanAvg, cameraSnapshot, language, spoken, locale, region, speak, runTest, smileTest, services.cartesia],
   );
 
   const run = useCallback(async (fn: () => Promise<void>) => {
@@ -392,9 +323,8 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       await triage("look");
     });
 
-  // Hands-free: listen until the patient finishes speaking, transcribe under every language the
-  // pod knows, read each transcript for dialect markers, and let Jev pick the real language every
-  // turn (so switching languages works). Nothing about the voice is assumed from the region.
+  // Hands-free: listen until the patient finishes speaking, transcribe in Spanish and English,
+  // and let Jev pick the real language every turn (so switching languages works).
   const hear = async () => {
     listenAbort.current?.abort();
     const ctl = new AbortController();
@@ -402,13 +332,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     setStatus("listening");
     const wav = await listenForUtterance({ signal: ctl.signal, waitMs: 15000, onLevel: (l) => setLevel(l) });
     if (ctl.signal.aborted) return;
-    if (wav && wav.size > 48_000) {
-      clips.current.push(await wav.arrayBuffer()); // 1.5 s or more of real speech
-      // Enough of their voice to learn from: clone it now, for this visit, while the words are
-      // being understood. The pod's next sentence can already sound like them.
-      const total = clips.current.reduce((n, c) => n + c.byteLength, 0);
-      if (total >= LEARN_AFTER_BYTES && !ownVoice.current && services.cartesia) void learnVoice(locale ?? neutral(region.languages[0]), village ?? intake.community, false);
-    }
+    if (wav && wav.size > 48_000) clips.current.push(await wav.arrayBuffer()); // 1.5 s or more of real speech
     if (!wav) {
       setStatus("idle"); // nobody spoke: the mic button starts listening again
       return;
@@ -416,7 +340,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     setStatus("transcribing");
     const form = new FormData();
     form.append("audio", wav, "speech.wav");
-    form.append("languages", [...new Set([...region.languages, ...ALL_LANGUAGES])].join(","));
+    form.append("languages", region.languages.join(","));
     const res = await fetch("/api/stt", { method: "POST", body: form });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? "Transcription failed");
@@ -425,12 +349,8 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       setError("Didn't catch that — listening again.");
       return hear();
     }
-    // Marker words are language-specific, so the transcript that carries them also says which
-    // language this was. The language they have been speaking is read first.
-    const dialects = (data.dialects ?? {}) as Record<string, Heard | null>;
-    const heard = (spoken && dialects[spoken]) || Object.values(dialects).filter((d): d is Heard => Boolean(d)).sort((a, b) => b.markers.length - a.markers.length)[0] || null;
-    const best = t[spoken ?? language ?? region.languages[0]] ?? Object.values(t)[0];
-    await triage("answer", { candidates: Object.fromEntries(Object.entries(t).map(([l, x]) => [l, x.text])), speech: best.speech }, undefined, heard);
+    const best = t[language ?? region.languages[0]] ?? Object.values(t)[0];
+    await triage("answer", { candidates: Object.fromEntries(Object.entries(t).map(([l, x]) => [l, x.text])), speech: best.speech });
   };
   hearRef.current = () => run(hear);
 
@@ -466,14 +386,8 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     setSaved(null);
     setScanNow({});
     setScanMax({});
-    setSpoken(null);
-    setLive([]);
-    lastVoice.current = "";
     cam.current?.reset();
     clips.current = [];
-    // A voice learned this visit without a yes at the end is thrown away, not kept.
-    if (ownVoice.current && !learned.current) fetch(`/api/clone?voice=${ownVoice.current.id}`, { method: "DELETE" }).catch(() => {});
-    ownVoice.current = null;
     learned.current = false;
   };
 
@@ -493,9 +407,8 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ frames: pickSpread(frames.current.slice(-SCAN_FRAMES * 3), SCAN_FRAMES).map((f) => ({ secondsAgo: t - f.t, b64: f.b64, face: f.face })) }),
         });
-        const d = await res.json().catch(() => ({}));
         if (res.ok) {
-          setError((e) => (e.startsWith("Camera scan: ") ? "" : e)); // Jev is back: clear our own line only
+          const d = await res.json();
           setTooFar(!d.judged && d.person >= 0.5);
           if (d.judged || d.bodyJudged) {
             setScanNow(d.traits);
@@ -503,13 +416,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
             setScanMax((m) => Object.fromEntries(TRAITS.map((x) => [x.id, 0.5 * (m[x.id] ?? 0) + 0.5 * (d.traits[x.id] ?? 0)])));
             setScanMs(d.ms);
           }
-        } else {
-          // Jev down while the pod is only looking: say so in the same red line a failed triage
-          // turn uses, and keep scanning so it clears by itself when Jev answers again.
-          setError(`Camera scan: ${d.error ?? `Jev returned ${res.status}`}`);
         }
-      } catch (e) {
-        setError(`Camera scan: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
         scanning.current = false;
       }
@@ -601,24 +508,27 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     };
   }, [podUrl]);
 
-  // Tell the network this pod is here and what it is doing (the map shows a green ring and
-  // "listening to the patient · about fever · ar"): every 5 s and on every change; "offline" when
-  // the screen closes.
-  const beatTurn = [...turns].reverse().find((t) => t.role === "pod");
+  // Tell the network this pod is here and what it is doing (the map shows it online): every 5 s and
+  // on every change, "offline" when the screen closes. Fire-and-forget: it never touches the visit.
   const beatStatus = status === "listening" || status === "speaking" ? status : ["looking", "transcribing", "thinking", "testing"].includes(status) ? "thinking" : "idle";
-  const beatStep = beatTurn?.asks ?? "";
+  const beatStep = [...turns].reverse().find((t) => t.role === "pod")?.asks ?? "";
   const beatLang = spoken ?? "";
   useEffect(() => {
-    const beat = (s: string, keepalive = false) =>
-      fetch("/api/registry/heartbeat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ village: village ?? "Katete", status: s, step: beatStep, language: beatLang }),
-        keepalive,
-      }).catch(() => {});
-    void beat(beatStatus);
-    const id = setInterval(() => void beat(beatStatus), 5000);
-    const bye = () => void beat("offline", true);
+    const beat = (s: string, keepalive = false) => {
+      try {
+        fetch("/api/registry/heartbeat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ village: village ?? "Katete", status: s, step: beatStep, language: beatLang }),
+          keepalive,
+        }).catch(() => {});
+      } catch {
+        /* never let the heartbeat touch the visit */
+      }
+    };
+    beat(beatStatus);
+    const id = setInterval(() => beat(beatStatus), 5000);
+    const bye = () => beat("offline", true);
     window.addEventListener("beforeunload", bye);
     return () => {
       clearInterval(id);
@@ -680,11 +590,11 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
           {status === "ready" ? (
             <>
               {region.languages[0] === "en" ? (
-                <p className="text-5xl font-semibold leading-tight">{WELCOME.en}</p>
+                <p className="text-5xl font-semibold leading-tight">Welcome. Please sit in front of the camera.</p>
               ) : (
                 <>
-                  <p className="text-5xl font-semibold leading-tight">{WELCOME[region.languages[0]] ?? WELCOME.en}</p>
-                  <p className="mt-4 text-2xl text-slate-400">{WELCOME.en}</p>
+                  <p className="text-5xl font-semibold leading-tight">Bienvenido. Siéntese frente a la cámara.</p>
+                  <p className="mt-4 text-2xl text-slate-400">Welcome. Please sit in front of the camera.</p>
                 </>
               )}
               {tooFar && <p className="mt-6 text-3xl text-amber-300">{region.languages[0] === "en" ? "Come a little closer, facing the screen" : "Acérquese un poco, mirando la pantalla · Come a little closer"}</p>}
@@ -719,7 +629,6 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
             </>
           )}
           {error && <p className="mt-6 text-lg text-amber-300">{error}</p>}
-          {live.length > 0 && <p className="mt-8 max-w-4xl text-lg text-emerald-300">{live[live.length - 1].text}</p>}
         </div>
         <div className="absolute bottom-6 right-6 w-72 overflow-hidden rounded-2xl border border-slate-700">
           <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} remote={podUrl} />
@@ -802,7 +711,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
             </div>
           ))}
           <QuestionCard turns={turns} why={result?.why ?? null} status={status} />
-          <LiveVoice live={live} locale={locale ?? neutral(region.languages[0])} heard={locale !== null} voiceInfo={voiceInfo} />
+          <MalariaPressureCard village={village ?? "Katete"} region={region.name} fromVisit={result?.malaria_pressure ?? null} />
           <div className="relative">
             <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} remote={podUrl} />
             {testClock && (
@@ -884,28 +793,33 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
   );
 }
 
-// What the pod heard and changed, as it happens: the audience sees the voice and the words follow
-// the patient, not the region picked in the menu.
-const LIVE_STYLE: Record<LiveNote["kind"], string> = { heard: "text-emerald-300", voice: "text-sky-300", words: "text-amber-200", learned: "text-violet-300" };
-function LiveVoice({ live, locale, heard, voiceInfo }: { live: LiveNote[]; locale: string; heard: boolean; voiceInfo: string }) {
+// This week's malaria pressure at the pod's village (mosquitoes heard, rain, recent cases): it
+// sets where malaria STARTS among the fever causes and which fever questions come first, never the
+// decision. Fetched for the village on its own, refreshed every few minutes, and replaced by the
+// figure the engine actually used once a visit is under way.
+function MalariaPressureCard({ village, region, fromVisit }: { village: string; region: string; fromVisit: TriageResult["malaria_pressure"] }) {
+  const [fetched, setFetched] = useState<TriageResult["malaria_pressure"]>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch(`/api/pressure?village=${encodeURIComponent(village)}&region=${encodeURIComponent(region)}`)
+        .then((r) => r.json())
+        .then((p) => alive && setFetched(p))
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [village, region]);
+  const p = fromVisit ?? fetched;
+  if (!p || !p.applies) return null;
+  const tone = p.level === "high" ? "border-red-700 bg-red-950/50 text-red-200" : p.level === "medium" ? "border-amber-700 bg-amber-950/50 text-amber-200" : "border-emerald-800 bg-emerald-950/40 text-emerald-200";
   return (
-    <div className="rounded-2xl border border-emerald-900 bg-emerald-950/30 px-4 py-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-xs uppercase tracking-wide text-emerald-300/80">Voice & dialect · learned live from what they say</p>
-        <p className="text-xs text-slate-400">
-          {heard ? `Now: ${varietyName(locale)}` : `Not heard yet: ${varietyName(locale)} voice, nothing assumed from the region`}
-          {voiceInfo && ` · ${voiceInfo}`}
-        </p>
-      </div>
-      {live.length > 0 && (
-        <ul className="mt-2 space-y-0.5 text-sm">
-          {live.slice(-4).map((n) => (
-            <li key={n.at} className={LIVE_STYLE[n.kind]}>
-              {n.text}
-            </li>
-          ))}
-        </ul>
-      )}
+    <div className={`rounded-xl border px-4 py-2 text-sm ${tone}`}>
+      <span className="font-semibold">Malaria pressure in {p.village} this week: {p.level.toUpperCase()}</span> — {p.reasons.join(", ")}.
+      <span className="ml-1 text-xs opacity-70">Malaria starts {p.priorShift >= 0 ? "+" : ""}{Math.round(p.priorShift * 100)}% among fever causes; the rapid test still decides.</span>
     </div>
   );
 }

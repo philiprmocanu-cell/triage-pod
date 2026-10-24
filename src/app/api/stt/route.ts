@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server";
 import { cartesia, STT_MODEL } from "@/lib/cartesia";
-import { detectDialect } from "@/lib/triage/dialect";
 
 export const runtime = "nodejs";
 
-// Transcribe one recording. The client sends every candidate language for the region; we
-// transcribe under each and let the triage brain pick the one that reads as real speech.
-// Each transcript is also read for dialect markers (Darija "واش", Zambian "running stomach",
-// Bolivian "wawa"...), so the pod can switch its voice and words as soon as the patient speaks.
+// Transcribe one recording. On the first turn the client sends several candidate languages;
+// we transcribe under each and let the triage brain pick the one that reads as real speech.
 export async function POST(req: Request) {
   const form = await req.formData();
   const audio = form.get("audio");
@@ -21,8 +18,7 @@ export async function POST(req: Request) {
         return [language, { text: res.text.trim(), speech: speechStats(res.words ?? []) }] as const;
       }),
     );
-    const dialects = Object.fromEntries(results.map(([language, r]) => [language, r.text ? detectDialect([r.text], language) : null]));
-    return NextResponse.json({ transcripts: Object.fromEntries(results), dialects });
+    return NextResponse.json({ transcripts: Object.fromEntries(results) });
   } catch (err) {
     console.error("stt failed", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Transcription failed" }, { status: 500 });

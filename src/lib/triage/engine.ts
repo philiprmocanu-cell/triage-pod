@@ -16,6 +16,7 @@ import { NOTICED, TRAITS, TraitScan } from "./traits";
 import { COVER_KIT, ordersFor, RULE_SUPPLIES } from "./supplies";
 import { getVitals } from "../session";
 import { maxUrgency, runRules, vitalsRules } from "./rules";
+import { pressure, type Pressure } from "../pressure";
 import {
   CLOSING,
   CLOSING_SUICIDE_RISK,
@@ -102,9 +103,17 @@ export type StepInput = {
   spoken?: string | null; // the patient's actual language from earlier turns (en, es, ar...)
   region: string;
   defaultLocale: string;
+  village?: string | null; // the post the pod stands at (?village= on the kiosk): sets this week's malaria pressure
 };
 
 const visible = FINDING_KEYS.filter((k) => "seen" in FINDINGS[k]);
+
+// The fever questions that tell malaria apart from the other fevers. Under HIGH pressure they come
+// straight after the danger signs; under LOW they come after the rash / vomiting questions. The
+// danger signs (very sleepy, fits, cannot drink, stiff neck) are asked first whatever the score.
+const MALARIA_TELLS: Step[] = ["chills", "mosquito_bites", "yellow_eyes", "test:palms"];
+const FEVER_DANGER: Step[] = ["very_sleepy", "seizure", "unable_to_drink", "stiff_neck"];
+const isMalariaCause = (name: string) => /malaria/i.test(name);
 
 export async function step(input: StepInput): Promise<TriageResult> {
   const t0 = Date.now();
@@ -113,6 +122,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const epi = epiFor(input.region);
   // Conditions that cannot occur in this region are never offered to Jev or named.
   const subtypesOf = (p: Pathway) => p.subtypes.filter((s) => !(NEEDS_EPI[s.name] && !epi[NEEDS_EPI[s.name]]));
+  // This week's malaria pressure at the pod's village: read from disk (sightings, satellite copy,
+  // registry), so it costs nothing while Jev is asked. Only in malaria regions, only when a village
+  // is known; a read failure leaves the prior untouched.
+  const pressureVillage = input.village?.trim() || input.intake.community?.trim() || null;
+  const pressurePromise: Promise<Pressure | null> = epi.malaria && pressureVillage ? pressure(pressureVillage, { malariaRegion: true }).catch(() => null) : Promise.resolve(null);
   let language: Lang = input.language ?? (input.defaultLocale.startsWith("es") ? "es" : "en"); // the logic language: Spanish regions reason in Spanish, everyone else in English
   // The language the patient speaks. The logic (findings, rules) always runs in English or Spanish;
   // any other language is rendered by Claude on the way out and understood by Jev on the way in.
@@ -310,6 +324,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const tJev = Date.now();
   const a = Object.keys(q).length ? await jevWithin(`triage ${input.stage}, ${Object.keys(q).length} questions`, jev(state, q, images)) : {}; // nothing to ask before any picture or words
   const jevMs = Date.now() - tJev;
+  const malariaPressure = await pressurePromise;
 
   // What the camera sees: everything seen so far this visit, refreshed by the new pictures and by
   // the on-device face-droop check.
@@ -390,13 +405,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const complaint = complaintKnown ? probsOf(a.complaint) : {};
   const pathways: PathwayState[] = PATHWAYS.map((p) => {
     const sub = probsOf(a[`sub_${p.id}`]);
+    const subtypes = subtypesOf(p).map((s) => ({ name: s.name, probability: sub[s.name] ?? 0, urgency: s.urgency }));
     return {
       id: p.id,
       label: p.label,
       probability: complaintKnown ? Math.max(complaint[p.id] ?? 0, ...p.triggers.map((k) => yes[k])) : 0,
-      subtypes: subtypesOf(p)
-        .map((s) => ({ name: s.name, probability: sub[s.name] ?? 0, urgency: s.urgency }))
-        .sort((x, y) => y.probability - x.probability),
+      subtypes: (p.id === "fever" ? withMalariaPrior(subtypes, malariaPressure) : subtypes).sort((x, y) => y.probability - x.probability),
     };
   }).sort((x, y) => y.probability - x.probability);
   // Gate: only what the patient actually said opens an area, and at most two areas at once.
@@ -412,7 +426,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const confirmed = def.triggers.some((k) => saidYes[k] >= YES);
     const probes = probesFor(id).map((p) => `probe:${p.id}` as Step);
     const steps = confirmed || def.questions.includes(def.triggers[0]) ? [...probes, ...def.questions] : [def.triggers[0], ...probes, ...def.questions];
-    return epi.malaria ? steps : steps.filter((st) => st !== "mosquito_bites"); // no bed-net question where there is no malaria
+    if (!epi.malaria) return steps.filter((st) => st !== "mosquito_bites"); // no bed-net question where there is no malaria
+    return id === "fever" ? feverOrder(steps, malariaPressure) : steps;
   };
   const isFinding = (st: Step): st is FindingKey => st in FINDINGS;
   // A probe is worth asking while two or more of the findings it covers are still unknown;
@@ -922,7 +937,11 @@ export async function step(input: StepInput): Promise<TriageResult> {
         : nextPath && next.asks?.startsWith("probe:")
           ? `${nextPath.label} is open (${openedBy(nextPath.id).join(", ") || "complaint"}) → asking in their own words first; one answer can settle several questions`
         : nextPath
-          ? `${nextPath.label} is open (${openedBy(nextPath.id).join(", ") || "complaint"}) → checking ${label(next.asks as Step).toLowerCase()}${stepsFor(nextPath.id).indexOf(next.asks as Step) < 2 ? " first" : ""}`
+          ? `${nextPath.label} is open (${openedBy(nextPath.id).join(", ") || "complaint"}) → checking ${label(next.asks as Step).toLowerCase()}${stepsFor(nextPath.id).indexOf(next.asks as Step) < 2 ? " first" : ""}${
+              nextPath.id === "fever" && malariaPressure && malariaPressure.level !== "medium" && MALARIA_TELLS.includes(next.asks as Step)
+                ? `; malaria pressure in ${malariaPressure.village} is ${malariaPressure.level.toUpperCase()} → malaria questions ${malariaPressure.level === "high" ? "early" : "after the other fever causes"}`
+                : ""
+            }`
           : isChild && ["probe:child_danger", "unable_to_drink", "vomits_everything", "seizure", "very_sleepy"].includes(next.asks ?? "")
             ? "Child: WHO danger signs are always checked first"
             : "Nothing specific found yet → screening";
@@ -976,9 +995,37 @@ export async function step(input: StepInput): Promise<TriageResult> {
       volunteer: yes.volunteer >= YES,
     },
     verdict,
+    malaria_pressure: malariaPressure,
     jev_ms: jevMs,
     step_ms: Date.now() - t0,
   };
+}
+
+// Malaria pressure shifts the STARTING probability of the malaria causes among the fever causes:
+// their share of Jev's pick is multiplied by the pressure's factor (low 0.6x ... high up to 2.5x)
+// and the fever causes are rescaled so they add up to what Jev gave them. Nothing else moves: the
+// rapid test is still ordered by the fever rule and by every fever cause's kit, and only a
+// positive test names malaria with confidence.
+function withMalariaPrior<T extends { name: string; probability: number }>(subtypes: T[], p: Pressure | null): T[] {
+  if (!p || !p.applies || p.priorFactor === 1) return subtypes;
+  const before = subtypes.reduce((s, x) => s + x.probability, 0);
+  const shifted = subtypes.map((x) => (isMalariaCause(x.name) ? { ...x, probability: x.probability * p.priorFactor } : x));
+  const after = shifted.reduce((s, x) => s + x.probability, 0);
+  if (!before || !after) return subtypes;
+  return shifted.map((x) => ({ ...x, probability: Math.round((x.probability * (before / after)) * 1000) / 1000 }));
+}
+
+// The fever questions in pressure order. Danger signs stay first; the malaria tells (chills,
+// bites / net, yellow eyes, palm check) move up under HIGH pressure and down under LOW; medium
+// keeps the tree's own order. The same questions are asked either way, only sooner or later.
+function feverOrder(steps: Step[], p: Pressure | null): Step[] {
+  if (!p || !p.applies || p.level === "medium") return steps;
+  const probes = steps.filter((st) => st.startsWith("probe:"));
+  const rest = steps.filter((st) => !st.startsWith("probe:"));
+  const danger = rest.filter((st) => FEVER_DANGER.includes(st));
+  const tells = rest.filter((st) => MALARIA_TELLS.includes(st));
+  const other = rest.filter((st) => !FEVER_DANGER.includes(st) && !MALARIA_TELLS.includes(st));
+  return p.level === "high" ? [...probes, ...danger, ...tells, ...other] : [...probes, ...danger, ...other, ...tells];
 }
 
 // Which condition each safety rule points to.
@@ -1023,7 +1070,7 @@ const RULE_PATHWAY: Record<string, string> = {
 // What can exist where. Malaria and dengue do not happen in San Francisco; TB is everywhere but
 // far likelier in some places. The region name comes from the screen's region picker.
 type Epi = { malaria: boolean; dengue: boolean; tb: "high" | "low"; note: string };
-function epiFor(region: string): Epi {
+export function epiFor(region: string): Epi {
   const r = region.toLowerCase();
   if (/zambia|malawi|mozambique|uganda|sierra|liberia|niger|chad|mali|congo|madagascar|angola|guinea/.test(r)) return { malaria: true, dengue: false, tb: "high", note: "Malaria is common here all year; TB is common." };
   if (/guatemala|honduras|nicaragua|bolivia|peru|mexico|haiti/.test(r)) return { malaria: true, dengue: true, tb: "high", note: "Malaria and dengue occur in the lowlands; TB is common." };

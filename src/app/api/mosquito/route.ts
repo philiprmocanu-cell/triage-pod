@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { classifierInstalled, classifyWav, warmClassifier, type Classification } from "@/lib/mosquito/classifier";
 import { vectorVerdict, type VectorVerdict } from "@/lib/mosquito/vectors";
+import { recordSighting } from "@/lib/mosquito/sightings";
 import { reportVisit } from "@/lib/spacetime";
 
 export const runtime = "nodejs";
@@ -20,7 +21,9 @@ export async function GET() {
 }
 
 // POST multipart: `audio` (WAV blob) + `village` -> classification + vector verdict + suggested order.
-// POST JSON { audioBase64, village } does the same.
+// POST JSON { audioBase64, village } does the same. Every classified clip is also written to the
+// sightings store (data/mosquito-sightings.json), which feeds the village's malaria pressure; an
+// optional `tag` (e.g. "seed") marks test clips so they can be removed again.
 // POST JSON { action: "order", village, species, summary, orders } -> sends the order to the
 // village's live network (SpacetimeDB `reportVisit`), the same path a triaged patient uses.
 export async function POST(req: Request) {
@@ -30,13 +33,14 @@ export async function POST(req: Request) {
       const body = await req.json();
       if (body.action === "order") return order(body);
       if (!body.audioBase64) return NextResponse.json({ error: "audioBase64 or multipart `audio` required" }, { status: 400 });
-      return NextResponse.json(await classify(Buffer.from(body.audioBase64, "base64"), body.village));
+      return NextResponse.json(await classify(Buffer.from(body.audioBase64, "base64"), body.village, typeof body.tag === "string" ? body.tag : undefined));
     }
     const form = await req.formData();
     const audio = form.get("audio");
     if (!(audio instanceof Blob)) return NextResponse.json({ error: "multipart field `audio` (WAV) required" }, { status: 400 });
     const village = typeof form.get("village") === "string" ? (form.get("village") as string) : undefined;
-    return NextResponse.json(await classify(Buffer.from(await audio.arrayBuffer()), village));
+    const tag = typeof form.get("tag") === "string" ? (form.get("tag") as string) : undefined;
+    return NextResponse.json(await classify(Buffer.from(await audio.arrayBuffer()), village, tag));
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error("[mosquito]", message);
@@ -44,9 +48,19 @@ export async function POST(req: Request) {
   }
 }
 
-async function classify(wav: Buffer, village?: string): Promise<MosquitoResult> {
+async function classify(wav: Buffer, village?: string, tag?: string): Promise<MosquitoResult> {
   const c = await classifyWav(wav);
-  return { ...c, verdict: vectorVerdict(c.species, c.mosquito), village: village || "Katete" };
+  const result: MosquitoResult = { ...c, verdict: vectorVerdict(c.species, c.mosquito), village: village || "Katete" };
+  // Remember the clip for the village's malaria pressure. A write failure must not lose the verdict.
+  await recordSighting({
+    village: result.village,
+    mosquito: c.mosquito,
+    species: c.mosquito ? c.species : null,
+    probability: c.mosquito ? c.speciesProbability : c.mosquitoProbability,
+    malariaVector: result.verdict.malariaVector,
+    ...(tag && { tag }),
+  }).catch((e) => console.error("[mosquito] sighting not saved", e));
+  return result;
 }
 
 async function order(body: { village?: string; species?: string; summary?: string; orders?: { item: string; qty: number }[]; urgency?: string }) {

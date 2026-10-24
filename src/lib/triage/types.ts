@@ -1,4 +1,5 @@
 import type { FindingKey, IntakeField, Lang, Step } from "./tree";
+import type { Pressure } from "../pressure";
 
 export type Urgency = "green" | "yellow" | "red";
 
@@ -102,6 +103,10 @@ export type TriageResult = {
   peer_group: { wants: boolean; category: string | null; volunteer: boolean };
   verdict: "emergency" | "likely" | "uncertain" | "nothing_found"; // the one-word outcome the health worker reads first
   orders: { item: string; qty: number; note?: string; for: string }[]; // exact stock to send, only for conditions the pod is confident about
+  // The village's malaria pressure this week (mosquitoes heard, rain, recent cases): it set the
+  // STARTING probability of malaria and the order of the fever questions, never the decision.
+  // null outside malaria regions or when no village is known.
+  malaria_pressure: Pressure | null;
   jev_ms: number; // time Jev took to answer this turn's questions
   step_ms: number; // the whole turn, Claude's wording included
 };
