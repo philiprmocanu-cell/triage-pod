@@ -1,4 +1,6 @@
 import Cartesia from "@cartesia/cartesia-js";
+import { promises as fs } from "fs";
+import path from "path";
 import type { Voice } from "@cartesia/cartesia-js/resources/voices";
 
 export const TTS_MODEL = "sonic-3.5";
@@ -12,10 +14,30 @@ export function cartesia(): Cartesia {
 
 export const hasCartesia = () => Boolean(process.env.CARTESIA_API_KEY);
 
-// Voices cloned at this post (e.g. the health worker), keyed by locale. Wins over the catalog.
-const clonedByLocale = new Map<string, { id: string; name: string }>();
-export function registerClonedVoice(locale: string, id: string, name: string) {
-  clonedByLocale.set(locale, { id, name });
+// Voices cloned at this post (e.g. the health worker reading a sentence), keyed by locale. They
+// win over the catalog and are kept in data/voices.json so they survive restarts.
+const voicesFile = () => path.join(process.env.DATA_DIR ?? path.join(process.cwd(), "data"), "voices.json");
+type Cloned = Record<string, { id: string; name: string }>;
+async function readCloned(): Promise<Cloned> {
+  try {
+    return JSON.parse(await fs.readFile(voicesFile(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+export async function registerClonedVoice(locale: string, id: string, name: string) {
+  const all = await readCloned();
+  all[locale] = { id, name };
+  await fs.mkdir(path.dirname(voicesFile()), { recursive: true });
+  await fs.writeFile(voicesFile(), JSON.stringify(all, null, 2));
+}
+export async function forgetClonedVoice(locale: string) {
+  const all = await readCloned();
+  delete all[locale];
+  await fs.writeFile(voicesFile(), JSON.stringify(all, null, 2));
+}
+export async function clonedVoice(locale: string) {
+  return (await readCloned())[locale] ?? null;
 }
 
 // The patient's dialect -> the Cartesia accents to look for, closest first. Cartesia has native
@@ -65,8 +87,8 @@ export type PickedVoice = { id: string; name: string; locale: string; match: str
 
 // Find the voice that sounds most like the patient's region. A warm female voice by default.
 export async function pickVoice(locale: string): Promise<PickedVoice> {
-  const cloned = clonedByLocale.get(locale);
-  if (cloned) return { ...cloned, locale, match: "cloned local voice" };
+  const cloned = await clonedVoice(locale);
+  if (cloned) return { ...cloned, locale, match: "taught by a local speaker" };
 
   catalog ??= loadCatalog().catch((e) => {
     catalog = null;

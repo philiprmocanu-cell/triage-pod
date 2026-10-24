@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { cartesia, registerClonedVoice } from "@/lib/cartesia";
+import { cartesia, clonedVoice, forgetClonedVoice, registerClonedVoice } from "@/lib/cartesia";
 
 export const runtime = "nodejs";
 
@@ -14,10 +14,22 @@ export async function POST(req: Request) {
 
   try {
     const voice = await cartesia().voices.clone({ clip, language: locale.split("-")[0], name: `${name} (${locale})` });
-    registerClonedVoice(locale, voice.id, voice.name);
+    await registerClonedVoice(locale, voice.id, voice.name);
     return NextResponse.json({ id: voice.id, name: voice.name, locale });
   } catch (err) {
     console.error("clone failed", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Clone failed" }, { status: 500 });
   }
+}
+
+export async function GET(req: Request) {
+  const locale = new URL(req.url).searchParams.get("locale") ?? "es-MX";
+  return NextResponse.json({ voice: await clonedVoice(locale) });
+}
+
+// Go back to the catalog voice for this region.
+export async function DELETE(req: Request) {
+  const locale = new URL(req.url).searchParams.get("locale") ?? "es-MX";
+  await forgetClonedVoice(locale);
+  return NextResponse.json({ ok: true });
 }

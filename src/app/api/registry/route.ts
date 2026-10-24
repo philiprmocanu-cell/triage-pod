@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { addVisit, readRegistry, updateVisit, VisitRecord } from "@/lib/registry";
 import { handover, readIntake } from "@/lib/triage/brain";
+import { rememberWords } from "@/lib/triage/dialect";
 import type { Intake, TriageResult, Turn } from "@/lib/triage/types";
 
 export const runtime = "nodejs";
@@ -43,6 +44,7 @@ export async function POST(req: Request) {
     handover: note.status === "fulfilled" ? note.value : plainHandover(result),
   };
   await updateVisit(record.id, patch);
+  await rememberWords(patch.community ?? intake.community, result.lexicon ?? {}); // the community's words, for next time
   return NextResponse.json({ ...record, ...patch });
 }
 

@@ -6,6 +6,7 @@ import { playBlob, Recorder, speakWithBrowser } from "@/lib/audio";
 import type { Lang } from "@/lib/triage/tree";
 import type { CameraSignals, Frame, Intake, Seen, SpeechStats, TestResults, TriageResult, Turn, Urgency } from "@/lib/triage/types";
 import { CameraHandle, CameraPanel, LiveCamera } from "./CameraPanel";
+import TeachAccent from "./TeachAccent";
 
 type Region = { id: string; name: string; locale: string; languages: string[] };
 
@@ -75,6 +76,7 @@ export default function PodScreen() {
   const [voiceInfo, setVoiceInfo] = useState("");
   const [saved, setSaved] = useState<{ name: string | null; community: string | null; handover: string | null } | null>(null);
   const [testClock, setTestClock] = useState<{ label: string; left: number } | null>(null);
+  const [teaching, setTeaching] = useState(false);
   const [typed, setTyped] = useState("");
   const [error, setError] = useState("");
   const recorder = useRef(new Recorder());
@@ -326,9 +328,19 @@ export default function PodScreen() {
           <p className="text-xs text-slate-400">Supports the health worker. Does not diagnose. A doctor reviews every yellow and red case.</p>
         </div>
         <div className="flex items-center gap-3 text-sm">
+          <Link href="/dashboard" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
+            Dashboard
+          </Link>
           <Link href="/registry" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
             Registry
           </Link>
+          <button
+            onClick={() => setTeaching(true)}
+            disabled={!services.cartesia}
+            className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800 disabled:opacity-40"
+          >
+            Teach accent
+          </button>
           <select
             className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2"
             value={region.id}
@@ -346,6 +358,8 @@ export default function PodScreen() {
           </button>
         </div>
       </header>
+
+      {teaching && <TeachAccent locale={locale ?? region.locale} onClose={() => setTeaching(false)} />}
 
       {(!services.cartesia || !services.jev) && (
         <div className="mx-6 mt-4 rounded-lg border border-amber-700 bg-amber-950/60 px-4 py-2 text-sm text-amber-200">
@@ -608,6 +622,16 @@ function ResultPanel({
           {result.language.toUpperCase()} · <span className="font-semibold">{result.locale}</span>
         </p>
         <p className="text-sm text-slate-400">{result.locale_reason}</p>
+        {Object.keys(result.lexicon ?? {}).length > 0 && (
+          <p className="mt-1 text-sm">
+            Learned words:{" "}
+            {Object.entries(result.lexicon).map(([concept, word]) => (
+              <span key={concept} className="mr-2 rounded bg-sky-900 px-1.5 py-0.5 text-xs text-sky-100">
+                {concept} → {word}
+              </span>
+            ))}
+          </p>
+        )}
         {voiceInfo && <p className="mt-1 text-xs text-slate-500">Pod voice: {voiceInfo}</p>}
       </Card>
     </div>

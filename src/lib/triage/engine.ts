@@ -8,6 +8,7 @@
 // Code then opens pathways, picks the next step, applies the safety rules and adds up supplies.
 
 import { jev, JevQuestion, noulOf, probsOf } from "../jev";
+import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { maxUrgency, runRules } from "./rules";
 import {
   CLOSING,
@@ -339,6 +340,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const done = input.stage === "answer" && !next;
   if (done) next = say(null, ruleHits.some((h) => h.id === "suicide_risk") ? CLOSING_SUICIDE_RISK : CLOSING[urgency]);
 
+  // Talk back with the patient's own words: what this patient said, on top of what their
+  // community taught the pod on earlier visits.
+  const patientWords = [...input.turns.filter((t) => t.role === "patient").map((t) => t.text), ...(patientText ? [patientText] : [])];
+  const lexicon: Lexicon = { ...(await communityLexicon(intake.community)), ...learnFrom(patientWords) };
+  if (next && language === "es") next = { ...next, text: speakLike(next.text, lexicon) };
+
   const top = ruleHits[0]?.label ?? (causes[0] ? `Most likely: ${causes[0].name} (${Math.round(causes[0].probability * 100)}%)` : "No danger signs found so far");
   const mental = pathways.find((p) => p.id === "mental");
 
@@ -363,6 +370,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     next,
     consent: intake.consent ? noulOf(a.consent) : null,
     intake,
+    lexicon,
     peer_group: {
       wants: yes.wants_peer_group >= YES && !facts.self_harm_thoughts,
       category: mental && mental.probability >= OPEN ? (mental.subtypes[0]?.name ?? null) : null,

@@ -85,6 +85,7 @@ export type TriageResult = {
   next: { asks: Step | null; text: string; english: string; test?: { id: string; label: string; seconds: number } } | null;
   consent: number | null; // probability the patient agreed to be saved (null = not asked yet)
   intake: Intake; // intake answers so far, including ones given before they were asked
+  lexicon: Partial<Record<string, string>>; // regional words learned from this patient / community
   peer_group: { wants: boolean; category: string | null };
   jev_ms: number;
 };
