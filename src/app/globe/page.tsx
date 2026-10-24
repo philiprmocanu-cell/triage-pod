@@ -115,6 +115,11 @@ export default function GlobePage() {
   useEffect(() => {
     let raf = 0;
     let disposed = false;
+    // Size the canvas to its box (a window resize event alone misses zoom and pane changes).
+    const fit = () => {
+      const r = el.current?.getBoundingClientRect();
+      if (r && r.width && r.height) globeRef.current?.width(r.width).height(r.height);
+    };
     (async () => {
       const Globe = (await import("globe.gl")).default;
       if (disposed || !el.current) return;
@@ -199,11 +204,6 @@ export default function GlobePage() {
       };
       loop();
     })();
-    // Size the canvas to its box (a window resize event alone misses zoom and pane changes).
-    const fit = () => {
-      const r = el.current?.getBoundingClientRect();
-      if (r && r.width && r.height) globeRef.current?.width(r.width).height(r.height);
-    };
     const ro = new ResizeObserver(fit);
     if (el.current) ro.observe(el.current);
     window.addEventListener("resize", fit);
