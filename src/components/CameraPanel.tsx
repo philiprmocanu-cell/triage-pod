@@ -36,6 +36,7 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
   const lastFace = useRef<{ x: number; y: number }[] | null>(null);
   const onSignalsRef = useRef(onSignals);
   const [status, setStatus] = useState("Starting camera…");
+  const [evidence, setEvidence] = useState<string[]>([]);
 
   smileRef.current = smileTest;
   onSignalsRef.current = onSignals;
@@ -206,12 +207,47 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
     };
   }, [remote]);
 
+  // Scoring honesty, for the operator: what the live scan thinks it sees and why the pod did or did
+  // not act on it ("face droop 0.52 × 1 burst — not asked (needs 3)"). Read from /api/scan every
+  // two seconds; shown on the operator screen (/pod) only, never on the patient-facing kiosk.
+  useEffect(() => {
+    let stopped = false;
+    const tick = async () => {
+      if (stopped) return;
+      if (window.location.pathname.startsWith("/kiosk")) {
+        setEvidence([]);
+        return;
+      }
+      try {
+        const res = await fetch("/api/scan", { cache: "no-store" });
+        if (res.ok) {
+          const d = (await res.json()) as { at: number; evidence: string[] };
+          setEvidence(Date.now() - d.at < 15_000 ? d.evidence : []); // stale lines vanish when the scan stops
+        }
+      } catch {
+        /* the line is a courtesy; the camera keeps running */
+      }
+    };
+    const id = setInterval(tick, 2000);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, []);
+
   return (
     <div className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-black">
       <video ref={videoRef} playsInline muted className="absolute inset-0 h-full w-full -scale-x-100 object-cover" />
       <canvas ref={overlayRef} className="absolute inset-0 h-full w-full -scale-x-100 object-cover" />
       {status && (
         <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-slate-300">{status}</div>
+      )}
+      {evidence.length > 0 && (
+        <div className="absolute inset-x-0 top-0 space-y-0.5 bg-slate-950/75 px-3 py-2 font-mono text-[11px] leading-snug text-amber-200">
+          {evidence.map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
+        </div>
       )}
     </div>
   );

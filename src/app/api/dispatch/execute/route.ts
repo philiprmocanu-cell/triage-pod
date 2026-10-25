@@ -43,6 +43,7 @@ export async function POST(req: Request) {
     if (!chosen.length) return NextResponse.json({ error: "No shipment matched. Plan again and pick from the current plan.", executed: 0 }, { status: 400 });
 
     const villageName = (id: number) => state.posts.find((p) => p.id === id)?.name ?? `#${id}`;
+    const hubId = state.posts.find((x) => x.hub)?.id ?? 1;
     const notes: string[] = [];
     const hasRestock = await reducerExists("restock");
     const hasLogAgent = await reducerExists("log_agent");
@@ -56,7 +57,9 @@ export async function POST(req: Request) {
       const reason = `${s.priority}: ${s.why[0]}`;
       try {
         if (hasRestock) {
-          for (const i of s.items) await callReducer("restock", [s.toVillageId, i.item, i.qty, `${reason}; ${i.why}`]);
+          // restock(toVillageId, fromVillageId, item, qty, reason): the lender the plan chose, else the
+          // hub (0 would let the module pick its own nearest idle stock).
+          for (const i of s.items) await callReducer("restock", [s.toVillageId, i.fromVillageId ?? (s.fromVillageId !== s.toVillageId ? s.fromVillageId : hubId), i.item, i.qty, `${reason}; ${i.why}`]);
         } else {
           await callReducer("report_visit", [name, `${short(name)} health post pre-position`, "green", `Dispatch planner, ${s.priority}: ${s.why[0]}`, s.items.map((i) => ({ item: i.item, qty: i.qty }))]);
         }
@@ -75,13 +78,40 @@ export async function POST(req: Request) {
       else if (p.shipment.fromVillageId !== state.posts.find((x) => x.hub)?.id && !hasRestock) notes.push(`${p.shipment.toVillage}: the plan wanted ${p.shipment.fromVillage}'s idle stock; report_visit picks its own source.`);
     }
 
-    // A route for each new order, when the Routes agent's endpoint exists.
+    // A route for each new order. Orders whose shipments ride one batched run (two or more posts)
+    // are planned together as a multi-stop run: one road from the base through every stop, the run
+    // id in each route_plan's reason ("run A stop 2 of 4"). The rest are planned one by one.
     let routed = 0;
     let routesExist = true;
+    const runs: { id: string; carrierId: number | null; orderIds: number[]; posts: Set<number> }[] = [];
+    const singles: typeof orders = [];
     for (const o of orders) {
+      const s = chosen.find((x) => x.toVillageId === o.toVillageId && x.run);
+      if (!s?.run) { singles.push(o); continue; }
+      let r = runs.find((x) => x.id === s.run);
+      if (!r) { r = { id: s.run, carrierId: s.carrierId, orderIds: [], posts: new Set() }; runs.push(r); }
+      r.orderIds.push(o.id);
+      r.posts.add(o.toVillageId);
+    }
+    const planned: { run: string; stops: number; orders: number; km: number; carrier: string; floodRisk: string }[] = [];
+    for (const r of runs) {
+      if (!routesExist) break;
+      if (r.posts.size < 2) { singles.push(...orders.filter((o) => r.orderIds.includes(o.id))); continue; }
+      try {
+        const res = await fetch(`${origin}/api/routes/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run: { id: r.id, orderIds: r.orderIds, carrierId: r.carrierId ?? undefined } }), signal: AbortSignal.timeout(120_000) });
+        if (res.status === 404) { routesExist = false; notes.push("No /api/routes/plan yet: orders are placed without a route plan."); break; }
+        const j = (await res.json()) as { error?: string; stops?: unknown[]; km?: number; carrier?: { name: string }; floodRisk?: string };
+        if (!res.ok) { notes.push(`/api/routes/plan ${res.status} for ${r.id}: ${j.error ?? ""}`); singles.push(...orders.filter((o) => r.orderIds.includes(o.id))); continue; }
+        routed += r.orderIds.length;
+        planned.push({ run: r.id, stops: j.stops?.length ?? r.posts.size, orders: r.orderIds.length, km: j.km ?? 0, carrier: j.carrier?.name ?? "", floodRisk: j.floodRisk ?? "" });
+      } catch (err) {
+        notes.push(`/api/routes/plan failed for ${r.id}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    for (const o of singles) {
       if (!routesExist) break;
       try {
-        const res = await fetch(`${origin}/api/routes/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: o.id }), signal: AbortSignal.timeout(8000) });
+        const res = await fetch(`${origin}/api/routes/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: o.id }), signal: AbortSignal.timeout(30_000) });
         if (res.status === 404) {
           routesExist = false;
           notes.push("No /api/routes/plan yet: orders are placed without a route plan.");
@@ -91,6 +121,7 @@ export async function POST(req: Request) {
         notes.push(`/api/routes/plan failed for order ${o.id}: ${err instanceof Error ? err.message : err}`);
       }
     }
+    for (const p of planned) notes.push(`${p.run.replace("run-", "Run ")}: one road through ${p.stops} posts for ${p.orders} orders, ${p.km} km by ${p.carrier}, flood risk ${p.floodRisk}; drawn once on the Routes page with numbered stops.`);
 
     // One log line per shipment, written where it can be.
     const lines = placed.map((p) => {
@@ -112,7 +143,7 @@ export async function POST(req: Request) {
     const at = new Date().toISOString();
     await appendLog(lines.map((l) => ({ at, villageId: l.villageId, village: l.village, text: l.text, where: logged }))).catch(() => {});
 
-    const execution: Execution = { at, shipmentIds: chosen.map((s) => s.id), orders, routed, notes };
+    const execution: Execution = { at, shipmentIds: chosen.map((s) => s.id), orders, routed, notes, runs: planned };
     await appendExecution(execution).catch(() => {});
     return NextResponse.json({ executed: placed.filter((p) => p.ok).length, failed: placed.filter((p) => !p.ok).map((p) => ({ id: p.shipment.id, error: p.error })), orders, routed, logged, notes });
   } catch (err) {

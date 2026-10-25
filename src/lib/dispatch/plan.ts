@@ -13,6 +13,9 @@
 //   (b) PRE-POSITION: the roads may close within CUT_OFF_HORIZON_DAYS and the demand expected
 //       over the closure (malaria outlook x population) is more than the shelf holds -> send it
 //       before the roads close, by the cheapest carrier that gets there in time.
+//   (b2) PRE-POSITION (SEASONAL): the ten-year calendar says this post's road usually closes
+//       within SEASON_HORIZON_DAYS -> stock for the whole usual closure window (and the malaria
+//       peak when it falls inside it), leaving SEASON_LEAD_DAYS before the closure usually starts.
 //   (c) OUTBREAK OUTLOOK: a high (or medium) malaria outlook raises the RDT / ACT / artesunate /
 //       R21 targets for that post, so routine top-ups are bigger there.
 //   (d) ROUTINE: top up to the (raised) minimum, batched into one truck or pickup run per area.
@@ -20,8 +23,23 @@
 //       picked when the load fits.
 // Every number here is the same one the SpacetimeDB module and the government view use.
 
-export type PriorityTier = "emergency" | "urgent" | "pre-position" | "routine";
+export type PriorityTier = "emergency" | "urgent" | "pre-position" | "pre-position-seasonal" | "routine";
 export type CarrierKind = "truck" | "pickup" | "motorbike" | "bicycle" | "boat" | "drone";
+
+// The seasonal calendar for a post (GET /api/weather/seasons, from ten years of ERA5 rain):
+// when the rains usually start and end, the weeks that usually close the road, how many days a
+// month the post is usually cut off, and the malaria peak that follows the rain by 4–8 weeks.
+export type PostSeason = {
+  wetSeasonStart: string; // ISO dates in the current or coming season
+  wetSeasonEnd: string;
+  closureStart: string | null; // first typical closure week
+  closureEnd: string | null; // last typical closure week's end
+  closureWeeks: { from: string; to: string; frequency: number }[];
+  cutOffDaysByMonth: number[]; // index 0 = January
+  cutOffDaysInSeason: number;
+  malariaPeak: { from: string; to: string };
+  confidence: "high" | "medium" | "low";
+};
 
 export type Carrier = {
   id: number;
@@ -48,6 +66,7 @@ export type PostOutlook = {
   cutOffReason?: string; // the weather route's sentence, when it gave one
   cutOffDate: string | null;
   source: "outlook" | "satellite" | "none";
+  season?: PostSeason | null;
 };
 
 export type PostState = {
@@ -94,8 +113,14 @@ export type DispatchPlan = {
   shipments: Shipment[];
   runs: Run[];
   emergency: { active: boolean; reasons: string[]; cutOffPosts: string[]; redVisitPosts: string[] };
-  posts: { villageId: number; name: string; cutOffRisk: number; daysUntilCutOff: number | null; cutOffDate: string | null; cutOffReason: string | null; cutOffNow: boolean; malariaOutlook6w: "low" | "medium" | "high"; floodRiskToday: boolean; floodTodayLevel: "low" | "medium" | "high"; flood14dLevel: "low" | "medium" | "high"; rainNext14Mm: number; redVisitsOpen: number; outlookSource: PostOutlook["source"] }[];
+  posts: {
+    villageId: number; name: string; cutOffRisk: number; daysUntilCutOff: number | null; cutOffDate: string | null; cutOffReason: string | null; cutOffNow: boolean;
+    malariaOutlook6w: "low" | "medium" | "high"; floodRiskToday: boolean; floodTodayLevel: "low" | "medium" | "high"; flood14dLevel: "low" | "medium" | "high"; rainNext14Mm: number; redVisitsOpen: number; outlookSource: PostOutlook["source"];
+    // The season calendar strip: the wet season, the closure weeks, when the seasonal shipment must leave.
+    season: (PostSeason & { sendBy: string | null; daysUntilClosure: number | null; inWindow: boolean }) | null;
+  }[];
   counts: Record<PriorityTier, number> & { items: number; kg: number; posts: number };
+  seasonSource: string;
   notes: string[]; // what could not be done (nothing in the province, no carrier can reach)
   weatherSource: string;
   carrierSource: "table" | "fallback";
@@ -129,6 +154,11 @@ const COLD_CHAIN_KG = 2.5; // one vaccine carrier with ice packs, added once whe
 // Luangwa or a seasonal stream is over the road (weeks, from the district offices' experience).
 export const CUT_OFF_HORIZON_DAYS = 14;
 export const CLOSURE_WEEKS = 3;
+// Seasonal pre-positioning (rule b2): a post whose typical closure weeks begin within this many
+// days gets its stock before the roads usually close; the shipment leaves a week ahead.
+export const SEASON_HORIZON_DAYS = 42;
+export const SEASON_LEAD_DAYS = 7;
+export const SEASON_MIN_WEEKS = 3, SEASON_MAX_WEEKS = 8; // how long a seasonal closure window is planned for
 // Malaria cases per 1,000 people per week by outlook. Eastern Province runs ~300 cases per 1,000
 // a year (World Bank), so ~6/1,000/week in season; low is the dry-season floor.
 const MALARIA_PER_1000_WEEK: Record<PostOutlook["malariaOutlook6w"], number> = { low: 1, medium: 3.5, high: 8 };
@@ -247,11 +277,12 @@ export function targetFor(item: string, post: PostState) {
   return Math.max(raised, due + 1 > base ? due + 1 : raised);
 }
 
-// What the post will use while its roads are closed (rule b).
-export function closureDemand(post: PostState): Record<string, number> {
-  const weeks = CLOSURE_WEEKS;
-  const cases = (post.population / 1000) * MALARIA_PER_1000_WEEK[post.outlook.malariaOutlook6w] * weeks;
-  const wet = post.outlook.floodRiskToday || post.outlook.floodRisk14d || post.outlook.rainNext14Mm >= 60;
+// What the post will use while its roads are closed (rule b). The seasonal rule (b2) passes its
+// own window and, when the malaria peak falls inside it, the high case rate.
+export function closureDemand(post: PostState, opts: { weeks?: number; malaria?: PostOutlook["malariaOutlook6w"]; wet?: boolean } = {}): Record<string, number> {
+  const weeks = opts.weeks ?? CLOSURE_WEEKS;
+  const cases = (post.population / 1000) * MALARIA_PER_1000_WEEK[opts.malaria ?? post.outlook.malariaOutlook6w] * weeks;
+  const wet = opts.wet ?? (post.outlook.floodRiskToday || post.outlook.floodRisk14d || post.outlook.rainNext14Mm >= 60);
   const runs = (post.population / 1000) * (wet ? DIARRHOEA_PER_1000_WEEK.wet : DIARRHOEA_PER_1000_WEEK.dry) * weeks;
   const d: Record<string, number> = {
     "Malaria rapid test": Math.ceil(cases * 1.5), // more tests than cases
@@ -268,7 +299,24 @@ export function closureDemand(post: PostState): Record<string, number> {
 
 // ---- The planner ----
 
-export type PlanInput = { posts: PostState[]; carriers: Carrier[]; now?: Date; weatherSource?: string; carrierSource?: "table" | "fallback" };
+export type PlanInput = { posts: PostState[]; carriers: Carrier[]; now?: Date; weatherSource?: string; seasonSource?: string; carrierSource?: "table" | "fallback" };
+
+const daysBetween = (fromIso: string, toIso: string) => Math.round((Date.parse(`${toIso}T00:00:00Z`) - Date.parse(`${fromIso}T00:00:00Z`)) / 86400_000);
+const overlaps = (a: { from: string; to: string }, b: { from: string; to: string }) => a.from <= b.to && b.from <= a.to;
+
+// The seasonal shipment's dates for a post: when its closure weeks start, when the truck must leave.
+export function seasonWindow(season: PostSeason | null | undefined, now: Date) {
+  if (!season?.closureStart || !season.closureEnd) return null;
+  const today = isoDate(now);
+  const daysUntilClosure = daysBetween(today, season.closureStart);
+  const sendByIso = isoDate(plusDays(new Date(`${season.closureStart}T00:00:00Z`), -SEASON_LEAD_DAYS));
+  const sendBy = sendByIso < today ? today : sendByIso; // late: it goes now
+  const inWindow = daysUntilClosure <= SEASON_HORIZON_DAYS && today <= season.closureEnd;
+  // Stock for the days the post is usually cut off (plus a week's margin, since the cut-off days
+  // come in several spells), never less than the forecast rule's 3 weeks nor more than 8.
+  const closureWeeksCount = Math.max(SEASON_MIN_WEEKS, Math.min(SEASON_MAX_WEEKS, Math.ceil(season.cutOffDaysInSeason / 7) + 1));
+  return { daysUntilClosure, sendBy, inWindow, closureWeeksCount };
+}
 
 export function planDispatch(input: PlanInput): DispatchPlan {
   const now = input.now ?? new Date();
@@ -342,6 +390,34 @@ export function planDispatch(input: PlanInput): DispatchPlan {
         // Leave a day for loading and the drive; never later than the closure itself.
         const sendBy = plusDays(now, Math.max(0, o.daysUntilCutOff - 2));
         draft.push({ post, priority: "pre-position", lines, why, score: 400 + o.cutOffRisk * 100 + (14 - o.daysUntilCutOff) * 5 + (o.malariaOutlook6w === "high" ? 40 : o.malariaOutlook6w === "medium" ? 15 : 0) + Math.min(30, post.population / 1000), sendBy, mode: "cheapest" });
+      }
+    }
+
+    // (b2) Pre-position from the seasonal calendar: the post's typical closure weeks begin within
+    // SEASON_HORIZON_DAYS (whether or not the 16-day forecast sees them yet). Stock for the whole
+    // typical closure window (its length in weeks, 3–8) at the high malaria rate when the malaria
+    // peak falls inside it; the truck leaves SEASON_LEAD_DAYS before the first closure week.
+    const sw = seasonWindow(o.season, now);
+    if (sw && sw.inWindow && !o.cutOffNow && !draft.some((d) => d.post.id === post.id && d.priority === "pre-position")) {
+      const season = o.season!;
+      const peakInside = overlaps(season.malariaPeak, { from: season.closureStart!, to: season.closureEnd! });
+      const malaria: PostOutlook["malariaOutlook6w"] = peakInside ? "high" : o.malariaOutlook6w === "low" ? "medium" : o.malariaOutlook6w;
+      const demand = closureDemand(post, { weeks: sw.closureWeeksCount, malaria, wet: true });
+      const lines: Line[] = [];
+      for (const [item, need] of Object.entries(demand)) {
+        if (promised.has(item) || HUB_ONLY.has(item)) continue;
+        const gap = need - have(item) - onWay(item);
+        if (gap > 0) lines.push({ item, qty: gap, why: `${sw.closureWeeksCount} weeks of the usual closure${peakInside ? " at the malaria peak" : ""} needs ~${need}, has ${have(item)}${onWay(item) ? ` + ${onWay(item)} on the way` : ""}` });
+      }
+      if (lines.length) {
+        for (const l of lines) promised.add(l.item);
+        const late = sw.daysUntilClosure < SEASON_LEAD_DAYS;
+        const why = [
+          `roads usually close from ${season.closureStart} (${sw.daysUntilClosure <= 0 ? "the closure weeks have begun" : `in ${plural(sw.daysUntilClosure, "day")}`}; ${season.closureWeeks.length} closure week${season.closureWeeks.length === 1 ? "" : "s"} to ${season.closureEnd}, about ${season.cutOffDaysInSeason} cut-off days a season; ${season.confidence} confidence from 10 years of rain)`,
+          `${peakInside ? `malaria peak ${season.malariaPeak.from} → ${season.malariaPeak.to} falls inside the closure, planned at the high rate` : `malaria outlook ${malaria} for the window`} for ${post.population.toLocaleString()} people: ${sw.closureWeeksCount} weeks of demand is more than the shelf holds`,
+          late ? `send now: the usual lead of ${SEASON_LEAD_DAYS} days before the closure has passed` : `send by ${sw.sendBy}, ${SEASON_LEAD_DAYS} days before the closure usually starts`,
+        ];
+        draft.push({ post, priority: "pre-position-seasonal", lines, why, score: 300 + Math.max(0, SEASON_HORIZON_DAYS - sw.daysUntilClosure) * 2 + (peakInside ? 20 : 0) + season.cutOffDaysInSeason + Math.min(30, post.population / 1000), sendBy: new Date(`${sw.sendBy}T00:00:00Z`), mode: "cheapest" });
       }
     }
 
@@ -439,7 +515,7 @@ export function planDispatch(input: PlanInput): DispatchPlan {
   const districts = posts.filter((p) => p.id >= 2 && p.id <= 12);
   const groups = new Map<number, Shipment[]>();
   for (const s of shipments) {
-    if (s.priority === "emergency" || s.priority === "urgent" || s.carrierKind === "none") continue;
+    if (s.priority === "emergency" || s.priority === "urgent" || s.carrierKind === "none") continue; // routine and both pre-position tiers ride the runs
     const post = byId.get(s.toVillageId)!;
     const nearest = districts.length ? districts.reduce((best, d) => (distanceKm(d, post) < distanceKm(best, post) ? d : best)) : hub;
     const key = nearest.id;
@@ -497,7 +573,7 @@ export function planDispatch(input: PlanInput): DispatchPlan {
   if (redVisitPosts.length) reasons.push(`red visit open at ${redVisitPosts.join(", ")}`);
   if (cutOffPosts.length) reasons.push(`roads closed at ${cutOffPosts.join(", ")}`);
 
-  const counts = { emergency: 0, urgent: 0, "pre-position": 0, routine: 0, items: 0, kg: 0, posts: new Set(shipments.map((s) => s.toVillageId)).size };
+  const counts = { emergency: 0, urgent: 0, "pre-position": 0, "pre-position-seasonal": 0, routine: 0, items: 0, kg: 0, posts: new Set(shipments.map((s) => s.toVillageId)).size };
   for (const s of shipments) {
     counts[s.priority]++;
     counts.items += s.items.reduce((a, i) => a + i.qty, 0);
@@ -526,11 +602,13 @@ export function planDispatch(input: PlanInput): DispatchPlan {
         rainNext14Mm: p.outlook.rainNext14Mm,
         redVisitsOpen: p.redVisitsOpen,
         outlookSource: p.outlook.source,
+        season: p.outlook.season ? (() => { const sw = seasonWindow(p.outlook.season, now); return { ...p.outlook.season!, sendBy: sw?.sendBy ?? null, daysUntilClosure: sw?.daysUntilClosure ?? null, inWindow: !!sw?.inWindow }; })() : null,
       }))
       .sort((a, b) => Number(b.cutOffNow) - Number(a.cutOffNow) || (a.daysUntilCutOff ?? 99) - (b.daysUntilCutOff ?? 99) || b.cutOffRisk - a.cutOffRisk),
     counts,
     notes: [...new Set(notes)],
     weatherSource: input.weatherSource ?? "",
+    seasonSource: input.seasonSource ?? "",
     carrierSource: input.carrierSource ?? (input.carriers.length ? "table" : "fallback"),
   };
 }

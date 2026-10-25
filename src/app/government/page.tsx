@@ -36,7 +36,7 @@ const SHORT: Record<string, string> = {
 const AGENT_TAG: Record<string, string> = { "Supply allocator": "ALLOC", "Outbreak sentinel": "SENTINEL", "Immunisation planner": "VACCINE", "Community connector": "CIRCLE", "Dispatch planner": "DISPATCH", "Route planner": "ROUTE", Pod: "POD" };
 const AGENT_TONE: Record<string, string> = { "Outbreak sentinel": "t-alert", "Immunisation planner": "t-vax", "Community connector": "t-conn", "Dispatch planner": "t-dispatch", Pod: "t-live" };
 // The dispatch brain's priorities, in the order they are sent.
-const PRIORITY_LABEL: Record<string, string> = { emergency: "Emergency", urgent: "Urgent", "pre-position": "Pre-position", routine: "Routine" };
+const PRIORITY_LABEL: Record<string, string> = { emergency: "Emergency", urgent: "Urgent", "pre-position": "Pre-position", "pre-position-seasonal": "Pre-position (seasonal)", routine: "Routine" };
 const CARRIER_LABEL: Record<string, string> = { truck: "truck", pickup: "pickup", motorbike: "motorbike", bicycle: "bicycle", boat: "boat", drone: "drone", none: "no carrier" };
 
 type Village = { id: number; name: string; population: number; hub: boolean };
@@ -55,17 +55,33 @@ type Shipment = {
   id: string; rank: number; toVillageId: number; toVillage: string; fromVillage: string;
   items: { item: string; qty: number; from?: string; why: string }[];
   kg: number; km: number; carrierKind: string; carrierName: string; etaMinutes: number | null;
-  priority: "emergency" | "urgent" | "pre-position" | "routine"; sendBy: string; why: string[]; run: string | null; droneAlternative: string | null;
+  priority: "emergency" | "urgent" | "pre-position" | "pre-position-seasonal" | "routine"; sendBy: string; why: string[]; run: string | null; droneAlternative: string | null;
+};
+// The ten-year season calendar per post (from /api/weather/seasons via the planner), for the strip.
+type PostSeason = {
+  wetSeasonStart: string; wetSeasonEnd: string; closureStart: string | null; closureEnd: string | null;
+  closureWeeks: { from: string; to: string; frequency: number }[]; cutOffDaysByMonth: number[]; cutOffDaysInSeason: number;
+  malariaPeak: { from: string; to: string }; confidence: "high" | "medium" | "low"; sendBy: string | null; daysUntilClosure: number | null; inWindow: boolean;
 };
 type DispatchPlan = {
   plannedAt: string; shipments: Shipment[];
   runs: { id: string; label: string; carrierName: string; posts: string[]; kg: number; km: number; minutes: number }[];
   emergency: { active: boolean; reasons: string[]; cutOffPosts: string[]; redVisitPosts: string[] };
-  posts: { villageId: number; name: string; cutOffRisk: number; daysUntilCutOff: number | null; cutOffDate: string | null; cutOffReason: string | null; cutOffNow: boolean; malariaOutlook6w: "low" | "medium" | "high"; floodTodayLevel: string; flood14dLevel: string; rainNext14Mm: number; redVisitsOpen: number; outlookSource: string }[];
-  counts: { emergency: number; urgent: number; "pre-position": number; routine: number; items: number; kg: number; posts: number };
-  notes: string[]; weatherSource: string; carrierSource: "table" | "fallback";
+  posts: { villageId: number; name: string; cutOffRisk: number; daysUntilCutOff: number | null; cutOffDate: string | null; cutOffReason: string | null; cutOffNow: boolean; malariaOutlook6w: "low" | "medium" | "high"; floodTodayLevel: string; flood14dLevel: string; rainNext14Mm: number; redVisitsOpen: number; outlookSource: string; season: PostSeason | null }[];
+  counts: { emergency: number; urgent: number; "pre-position": number; "pre-position-seasonal"?: number; routine: number; items: number; kg: number; posts: number };
+  notes: string[]; weatherSource: string; seasonSource?: string; carrierSource: "table" | "fallback";
 };
 type SendResult = { executed?: number; orders?: { id: number; item: string; qty: number; mode: string }[]; routed?: number; logged?: string; notes?: string[]; error?: string; failed?: { id: string; error: string }[] };
+
+// Where a date sits on the season strip (1 October → 30 June), as a percentage.
+function seasonAxis(anchor: string) {
+  const y = Number(anchor.slice(0, 4)) - (Number(anchor.slice(5, 7)) >= 7 ? 0 : 1);
+  const start = Date.parse(`${y}-10-01T00:00:00Z`), end = Date.parse(`${y + 1}-06-30T00:00:00Z`);
+  const pct = (iso: string) => Math.max(0, Math.min(100, ((Date.parse(`${iso}T00:00:00Z`) - start) / (end - start)) * 100));
+  // Every second month: the strip sits in a 20 rem column, so nine labels would overlap.
+  const months = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun"].map((m, i) => ({ m, at: pct(`${i < 3 ? y : y + 1}-${String(((9 + i) % 12) + 1).padStart(2, "0")}-01`) })).filter((_, i) => i % 2 === 0);
+  return { pct, months, year: y };
+}
 type PlannerLog = { lines: { id: number; at: string; village: string; text: string; where: "agent_log" | "file" }[] };
 
 const short = (name: string) => name.replace(/ \(.*\)$/, "");
@@ -392,7 +408,7 @@ export default function GovernmentPage() {
               <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
                 <Kpi label="emergency" value={plan.counts.emergency} tone={plan.counts.emergency ? "text-red-300" : "text-slate-500"} />
                 <Kpi label="urgent" value={plan.counts.urgent} tone={plan.counts.urgent ? "text-amber-300" : "text-slate-500"} />
-                <Kpi label="pre-position" value={plan.counts["pre-position"]} tone={plan.counts["pre-position"] ? "text-sky-300" : "text-slate-500"} />
+                <Kpi label={plan.counts["pre-position-seasonal"] ? `pre-position (${plan.counts["pre-position-seasonal"]} seasonal)` : "pre-position"} value={plan.counts["pre-position"] + (plan.counts["pre-position-seasonal"] ?? 0)} tone={plan.counts["pre-position"] + (plan.counts["pre-position-seasonal"] ?? 0) ? "text-sky-300" : "text-slate-500"} />
                 <Kpi label="routine" value={plan.counts.routine} tone="text-slate-300" />
                 <Kpi label="posts served" value={plan.counts.posts} />
                 <Kpi label="units" value={plan.counts.items} />
@@ -444,7 +460,7 @@ export default function GovernmentPage() {
                             <span className={`car ${s.carrierKind}`}>{CARRIER_LABEL[s.carrierKind] ?? s.carrierKind}</span>
                             <span className="block text-[10px] text-slate-400">{s.carrierName}{s.run ? ` · ${s.run.replace("run-", "run ")}` : ""}</span>
                           </td>
-                          <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-200">{s.priority === "emergency" || s.priority === "urgent" ? <span className="text-red-200">now</span> : s.sendBy}</td>
+                          <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-200">{s.priority === "emergency" || s.priority === "urgent" ? <span className="text-red-200">now</span> : s.priority === "pre-position-seasonal" && s.sendBy <= new Date().toISOString().slice(0, 10) ? <span className="text-violet-200">now (season)</span> : s.sendBy}</td>
                           <td className="whitespace-nowrap px-2 py-1.5 text-right tabular-nums text-slate-300">{s.etaMinutes == null ? "–" : s.etaMinutes >= 90 ? `${Math.round(s.etaMinutes / 6) / 10} h` : `${s.etaMinutes} min`}</td>
                           <td className="min-w-[16rem] px-2 py-1.5 text-slate-400">
                             {s.why.map((w, i) => (
@@ -484,6 +500,51 @@ export default function GovernmentPage() {
                       )}
                     </div>
                   </div>
+                  {plan.posts.some((p) => p.season?.closureStart) && (() => {
+                    const rows = plan.posts.filter((p) => p.season?.closureStart).sort((a, b) => (a.season!.closureStart! < b.season!.closureStart! ? -1 : 1));
+                    const axis = seasonAxis(rows[0].season!.wetSeasonStart);
+                    const today = new Date().toISOString().slice(0, 10);
+                    const todayPct = axis.pct(today);
+                    return (
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Season calendar</p>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Ten years of rain (ERA5) per post: the wet season in blue, the weeks that usually close the road in red, the amber tick is when the seasonal shipment must leave (a week before), the white line is today. Estimated from a 28 km cell average, not a road log.
+                        </p>
+                        <div className="mt-2 grid grid-cols-[5rem_1fr_4.5rem] gap-2">
+                          <span />
+                          <div className="relative h-3 text-[9px] text-slate-500">
+                            {axis.months.map((m) => <span key={m.m} className="absolute -translate-x-1/2" style={{ left: `${m.at}%` }}>{m.m}</span>)}
+                          </div>
+                          <span className="text-[9px] text-slate-500">closes · cut-off d</span>
+                        </div>
+                        <div className="mt-1 max-h-64 space-y-1.5 overflow-auto pr-1">
+                          {rows.map((p) => {
+                            const s = p.season!;
+                            const wetL = axis.pct(s.wetSeasonStart), wetR = axis.pct(s.wetSeasonEnd);
+                            return (
+                              <div key={p.villageId} className="grid grid-cols-[5rem_1fr_4.5rem] items-center gap-2 text-[11px]" title={`${p.name}: rains ${s.wetSeasonStart} → ${s.wetSeasonEnd}; road usually closes ${s.closureStart} → ${s.closureEnd} (${s.closureWeeks.length} weeks, ~${s.cutOffDaysInSeason} cut-off days a season); malaria peak ${s.malariaPeak.from} → ${s.malariaPeak.to}; seasonal shipment by ${s.sendBy}; confidence ${s.confidence}`}>
+                                <span className={`truncate ${s.inWindow ? "text-violet-200" : "text-slate-300"}`}>{p.name}{s.inWindow && <span className="text-violet-400"> ●</span>}</span>
+                                <div className="relative h-3.5 rounded bg-slate-900">
+                                  <div className="absolute inset-y-0.5 rounded bg-sky-800/70" style={{ left: `${wetL}%`, width: `${Math.max(0.5, wetR - wetL)}%` }} />
+                                  {s.closureWeeks.map((w) => (
+                                    <div key={w.from} className="absolute inset-y-0 bg-red-500/80" style={{ left: `${axis.pct(w.from)}%`, width: `${Math.max(0.6, axis.pct(w.to) - axis.pct(w.from))}%`, opacity: 0.55 + w.frequency * 0.6 }} />
+                                  ))}
+                                  <div className="absolute inset-y-0 border-l border-dotted border-emerald-300/60" style={{ left: `${axis.pct(s.malariaPeak.from)}%` }} title={`malaria peak from ${s.malariaPeak.from}`} />
+                                  {s.sendBy && <div className="absolute -top-0.5 -bottom-0.5 w-0.5 bg-amber-300" style={{ left: `${axis.pct(s.sendBy)}%` }} />}
+                                  <div className="absolute -top-1 -bottom-1 w-px bg-white/90" style={{ left: `${todayPct}%` }} />
+                                </div>
+                                <span className="whitespace-nowrap text-[10px] tabular-nums text-slate-400">{s.closureStart!.slice(5)} · {s.cutOffDaysInSeason} d</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <p className="mt-1.5 text-[10px] text-slate-500">
+                          {plan.counts["pre-position-seasonal"] ? `${plan.counts["pre-position-seasonal"]} seasonal shipment${plan.counts["pre-position-seasonal"] === 1 ? "" : "s"} due now (● posts).` : `No seasonal shipment is due yet: the first road to close is ${rows[0].name} from ${rows[0].season!.closureStart}, truck by ${rows[0].season!.sendBy}.`} Dotted green: malaria peak begins. {plan.seasonSource ? "" : "Calendar source unknown."}
+                        </p>
+                      </div>
+                    );
+                  })()}
                   {plan.runs.length > 0 && (
                     <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
                       <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Batched runs</p>
@@ -509,7 +570,7 @@ export default function GovernmentPage() {
                     </div>
                   )}
                   <p className="text-[10px] leading-relaxed text-slate-500">
-                    Weather: {plan.weatherSource}. Carriers: {plan.carrierSource === "table" ? "the carrier table (ZAMMSA trucks, district pickups, CHA motorbikes, bicycles, Luangwa boats; drones are a proposed partner and never relied on)" : "the planner's own list of the real fleet until the carrier table is published"}. Planned {new Date(plan.plannedAt).toLocaleTimeString([], { hour12: false })}.
+                    Weather: {plan.weatherSource}. {plan.seasonSource ? `Seasons: ${plan.seasonSource}. ` : ""}Carriers: {plan.carrierSource === "table" ? "the carrier table (ZAMMSA trucks, district pickups, CHA motorbikes, bicycles, Luangwa boats; drones are a proposed partner and never relied on)" : "the planner's own list of the real fleet until the carrier table is published"}. Planned {new Date(plan.plannedAt).toLocaleTimeString([], { hour12: false })}.
                   </p>
                 </div>
               </div>
@@ -776,6 +837,7 @@ const CSS = `
 .pr.emergency{color:#fecaca;border-color:rgba(239,68,68,.7);background:rgba(239,68,68,.22)}
 .pr.urgent{color:#fde68a;border-color:rgba(251,191,36,.6);background:rgba(251,191,36,.16)}
 .pr.pre-position{color:#bae6fd;border-color:rgba(56,189,248,.6);background:rgba(56,189,248,.14)}
+.pr.pre-position-seasonal{color:#c4b5fd;border-color:rgba(167,139,250,.6);background:rgba(167,139,250,.14)}
 .pr.routine{color:#cbd5e1;border-color:rgba(148,163,184,.4);background:rgba(148,163,184,.1)}
 .car{display:inline-block;white-space:nowrap;border-radius:999px;padding:1px 7px;font-size:10px;border:1px solid rgba(148,163,184,.35);color:#e2e8f0}
 .car.truck{border-color:rgba(251,146,60,.6);color:#fed7aa}.car.pickup{border-color:rgba(251,191,36,.5);color:#fde68a}.car.motorbike{border-color:rgba(45,212,191,.5);color:#99f6e4}

@@ -20,6 +20,12 @@ export function explainPlan(plan: DispatchPlan): string {
   if (ur.length) parts.push(`${ur.length} are urgent today because a pod asked and the order has not landed: ${list(ur.map((s) => s.toVillage))}.`);
   const pre = plan.shipments.filter((s) => s.priority === "pre-position");
   if (pre.length) parts.push(`${pre.length} are pre-positioned before the roads close: ${list(pre.map((s) => `${s.toVillage} by ${s.sendBy}`))}, sized for three weeks of the expected malaria and diarrhoea cases.`);
+  const seasonal = plan.shipments.filter((s) => s.priority === "pre-position-seasonal");
+  if (seasonal.length) parts.push(`${seasonal.length} ${seasonal.length === 1 ? "is" : "are"} pre-positioned from the ten-year season calendar, because the roads there usually close within six weeks: ${list(seasonal.map((s) => `${s.toVillage} by ${s.sendBy}`))}, sized for the usual closure weeks and the malaria peak.`);
+  else {
+    const soon = plan.posts.filter((p) => p.season?.closureStart && (p.season.daysUntilClosure ?? 999) > 0).sort((a, b) => (a.season!.daysUntilClosure ?? 0) - (b.season!.daysUntilClosure ?? 0));
+    if (soon.length) parts.push(`No seasonal pre-positioning is due yet: the first roads that usually close are ${list(soon.slice(0, 3).map((p) => `${p.name} (${p.season!.closureStart}, truck by ${p.season!.sendBy})`), 3)}.`);
+  }
   const ro = plan.shipments.filter((s) => s.priority === "routine");
   if (ro.length) parts.push(`${ro.length} routine top-ups ride on ${plan.runs.length} batched ${plan.runs.length === 1 ? "run" : "runs"} (${list(plan.runs.map((r) => `${r.label.replace(/^Run /, "run ")} with ${r.carrierName}, ${r.posts.length} posts`), 3)}).`);
   const raised = plan.posts.filter((p) => p.malariaOutlook6w !== "low");
@@ -43,6 +49,7 @@ export async function explainWithClaude(plan: DispatchPlan): Promise<{ text: str
     roads_closing: plan.posts.filter((p) => p.daysUntilCutOff !== null).map((p) => `${p.name}: ${p.cutOffNow ? "closed now" : `${p.daysUntilCutOff} days`} (risk ${Math.round(p.cutOffRisk * 100)}%)`),
     raised_targets: plan.posts.filter((p) => p.malariaOutlook6w !== "low").map((p) => `${p.name}: ${p.malariaOutlook6w}`),
     not_met: plan.notes,
+    season_calendar: plan.posts.filter((p) => p.season?.closureStart).slice(0, 6).map((p) => `${p.name}: roads usually close ${p.season!.closureStart} → ${p.season!.closureEnd}, seasonal shipment by ${p.season!.sendBy}${p.season!.inWindow ? " (due)" : ""}`),
     weather_source: plan.weatherSource,
   };
   try {

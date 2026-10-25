@@ -12,7 +12,7 @@ import { advisoriesFor } from "../agents";
 import { postFor } from "../network";
 import { closingAdvice, confirmComplaint, extractWords, followUpQuestion, phraseNext, replyToPatient, translateTo } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
-import { NOTICED, TRAITS, TraitScan } from "./traits";
+import { CHECK_FIRST, NOTICED, TRAITS, TraitScan } from "./traits";
 import { COVER_KIT, ordersFor, RULE_SUPPLIES } from "./supplies";
 import { getVitals } from "../session";
 import { maxUrgency, runRules, vitalsRules } from "./rules";
@@ -187,6 +187,16 @@ export async function step(input: StepInput): Promise<TriageResult> {
     }
   }
 
+  // Claude's wording starts now, alongside Jev, not after it: the patient's own words are pulled
+  // from what they just said, and right after "what brings you in?" the restatement of their
+  // complaint is drafted while Jev reads it. Each result is used only if the decision below still
+  // calls for it (a wasted draft costs cents; waiting for it in series cost the patient 4-6 s).
+  const tWords = Date.now();
+  const wordsEarly: Promise<Record<string, string>> | null =
+    patientText && patientText.split(/\s+/).length >= 4 ? extractWords({ conversation: conversation.slice(-6), language, timeoutMs: 4000 }).catch(() => ({})) : null;
+  const confirmEarly: Promise<Awaited<ReturnType<typeof confirmComplaint>> | "FAILED"> | null =
+    patientText && lastPod?.asks === "open" ? confirmComplaint({ said: patientText, language, locale: input.defaultLocale, timeoutMs: 6000 }).catch(() => "FAILED" as const) : null;
+
   // Pictures as a time sequence, so Jev sees where the patient was a second ago and where they are now.
   const frames = (input.frames ?? []).slice(-MAX_FRAMES);
   const images: Record<string, string> = {};
@@ -334,13 +344,20 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // Everything the camera notices is also a hunch to ask about, never a conclusion on its own.
   const hints: Record<string, { p: number; why: string }> = {};
   const hunches: { trait: string; pathway: string | null; finding: FindingKey | null; p: number }[] = [];
+  // The high-stakes signs (face droop, a hand on the chest, struggling to breathe) arrive here
+  // already filtered by /api/scan: three bursts in a row, a clear and evenly lit face, and a second
+  // opinion from Claude (src/lib/judge, docs/CAMERA.md). Face droop never counts as seen evidence
+  // of weakness on its own: only the smile test can turn it into one.
   for (const t of TRAITS) {
     const p = input.traits?.[t.id] ?? 0;
-    if (t.finding) seen[t.finding] = Math.max(seen[t.finding] ?? 0, p);
+    if (t.finding && t.id !== "face_droop") seen[t.finding] = Math.max(seen[t.finding] ?? 0, p);
     if (t.hint && p >= 0.6 && p > (hints[t.hint]?.p ?? 0)) hints[t.hint] = { p, why: t.label.toLowerCase() };
     if (p >= (t.id === "face_droop" ? 0.45 : 0.6) && NOTICED[t.id]) hunches.push({ trait: t.id, pathway: t.hint ?? null, finding: t.finding ?? null, p });
   }
-  if (input.camera.droop?.flagged) hunches.push({ trait: "face_droop", pathway: "stroke", finding: "face_or_arm_weakness", p: 0.8 });
+  // The on-device mouth-corner check (MediaPipe landmarks) is the weakest signal: a hand on the
+  // chin or glasses can shift the landmarks. It only speaks when there is no live Jev scan to
+  // check it against, and even then it leads to the smile test, never straight to a question.
+  if (input.camera.droop?.flagged && !scanning && !hunches.some((h) => h.trait === "face_droop")) hunches.push({ trait: "face_droop", pathway: "stroke", finding: "face_or_arm_weakness", p: 0.8 });
   if (input.camera.smileTest === "asymmetric") seen.face_or_arm_weakness = Math.max(seen.face_or_arm_weakness ?? 0, 0.95);
   hunches.sort((x, y) => y.p - x.p);
 
@@ -575,9 +592,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const hunchTurns = input.turns.filter((t) => t.role === "pod" && t.english?.startsWith("[hunch:"));
   const hunchAsked = hunchTurns.length;
   const hunchTags = new Set(hunchTurns.map((t) => t.english!.slice(7, t.english!.indexOf("]"))));
-  const hunchSay = (trait: string, phase: "sign" | "cause", step: Step): TriageResult["next"] => {
+  const hunchSay = (trait: string, phase: "sign" | "cause" | "check", step: Step): TriageResult["next"] => {
     const n = NOTICED[trait] ?? { en: "", es: "" };
-    const lead = phase === "sign" ? n : { en: "", es: "" }; // the sign was already mentioned
+    // "check": a quiet physical test before the sign is ever mentioned (the smile test for a suspected droop).
+    const lead = phase === "sign" ? n : phase === "check" ? CHECK_FIRST : { en: "", es: "" }; // the sign was already mentioned
     const tag = `[hunch:${trait}:${phase}]`;
     if (step.startsWith("test:")) {
       const t = TESTS.find((x) => `test:${x.id}` === step)!;
@@ -591,6 +609,17 @@ export async function step(input: StepInput): Promise<TriageResult> {
     for (const h of hunches) {
       const trait = TRAITS.find((t) => t.id === h.trait);
       const sign: FindingKey | undefined = trait?.ask ?? h.finding ?? undefined;
+      if (h.trait === "face_droop") {
+        // A suspected stroke is the one hunch the pod never voices on the camera's word alone.
+        // First the smile test, framed as a routine check; only an uneven smile (judged by Jev on
+        // the test pictures or by the on-device landmarks) earns the question. An even smile means
+        // the camera was wrong: nothing is said, and the operator's evidence line shows why.
+        if (!testDone("smile")) return hunchSay("face_droop", "check", "test:smile");
+        const smileUneven = input.camera.smileTest === "asymmetric" || (tested.get("face_or_arm_weakness") ?? 0) >= YES;
+        if (!smileUneven) continue;
+        if (!hunchTags.has("face_droop:sign") && !saidKnown.face_or_arm_weakness) return hunchSay("face_droop", "sign", "face_or_arm_weakness");
+        continue; // asked already (or the patient told us): the stroke pathway takes it from here
+      }
       // Phase 1: confirm the sign, unless the patient already told us about it.
       if (sign && !hunchTags.has(`${h.trait}:sign`) && !saidKnown[sign]) return hunchSay(h.trait, "sign", sign);
       // The patient said no to the sign: the camera was wrong, move on.
@@ -599,7 +628,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
       if (hunchTags.has(`${h.trait}:cause`)) continue;
       const path = h.pathway ? PATHWAYS.find((d) => d.id === h.pathway) : PATHWAYS.find((d) => h.finding && (d.triggers.includes(h.finding) || d.questions.includes(h.finding)));
       if (path && open.some((o) => o.id === path.id)) continue; // already being explored
-      const step: Step | undefined = h.trait === "face_droop" ? "test:smile" : path?.triggers.find((k) => !known[k]) ?? (h.finding && !known[h.finding] ? h.finding : undefined);
+      const step: Step | undefined = path?.triggers.find((k) => !known[k]) ?? (h.finding && !known[h.finding] ? h.finding : undefined);
       if (!step || asked.has(step) || (step.startsWith("test:") && testDone(step.slice(5)))) continue;
       return hunchSay(h.trait, sign ? "cause" : "sign", step);
     }
@@ -657,12 +686,13 @@ export async function step(input: StepInput): Promise<TriageResult> {
   } else if (!redRule && needConfirm) {
     // Say back what we heard before reasoning on it.
     const said = patientText ?? [...input.turns].reverse().find((t) => t.role === "patient")?.text ?? "";
-    let c: Awaited<ReturnType<typeof confirmComplaint>> = "UNCLEAR";
+    let c: Awaited<ReturnType<typeof confirmComplaint>> | "FAILED" = "FAILED";
     try {
-      c = await confirmComplaint({ said, language, locale: topKey(probsOf(a.locale)) ?? input.defaultLocale });
+      c = confirmEarly ? await confirmEarly : await confirmComplaint({ said, language, locale: topKey(probsOf(a.locale)) ?? input.defaultLocale, timeoutMs: 6000 });
     } catch {
-      c = { text: `${language === "es" ? "Entendí" : "I heard"}: "${said}". ${HISTORY.confirm[language]}`, english: `I heard: "${said}". Is that right?` };
+      c = "FAILED";
     }
+    if (c === "FAILED") c = { text: `${language === "es" ? "Entendí" : "I heard"}: "${said}". ${HISTORY.confirm[language]}`, english: `I heard: "${said}". Is that right?` };
     next = c === "UNCLEAR" ? say("open", RETELL) : { asks: "history:confirm", text: c.text, english: c.english };
   } else if (!redRule && confirmedWrong && retells < 2) {
     next = say("open", RETELL);
@@ -691,7 +721,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const freeAsked = input.turns.filter((t) => t.role === "pod" && t.asks === "free").length;
     if (!open.length && complaintKnown && !feelsWell && freeAsked < 2) {
       try {
-        const q = await followUpQuestion({ conversation, language, locale: topKey(probsOf(a.locale)) ?? input.defaultLocale });
+        const q = await followUpQuestion({ conversation, language, locale: topKey(probsOf(a.locale)) ?? input.defaultLocale, timeoutMs: 5000 });
         if (q) next = { asks: "free", text: q.text, english: q.english };
       } catch {
         /* fall through to the screen below */
@@ -774,6 +804,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
         locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
         urgency,
         likely: causes.filter((c) => c.confident).slice(0, 3).map((c) => c.name),
+        timeoutMs: 5000,
       });
     } catch {
       reply = HELP_COMING[language];
@@ -789,58 +820,62 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // community taught the pod on earlier visits.
   const patientWords = [...input.turns.filter((t) => t.role === "patient").map((t) => t.text), ...(patientText ? [patientText] : [])];
   const lexicon: Lexicon = { ...(await communityLexicon(intake.community)), ...learnFrom(patientWords) };
-  // Beyond the word list: Claude pulls the patient's actual words from what they said this turn
-  // (any dialect), so "pikin" or "stooling" are reused even if nobody listed them.
-  if (patientText && patientText.split(/\s+/).length >= 4) {
-    const found = await Promise.race([
-      extractWords({ conversation: conversation.slice(-6), language }).catch(() => ({})),
-      new Promise<Record<string, string>>((r) => setTimeout(() => r({}), 2500)),
-    ]);
-    for (const [k, w] of Object.entries(found)) if (w && !/\b(no|none|nothing|nada|ninguno)\b/.test(w)) lexicon[k] = w;
-  }
-  if (next) next = { ...next, text: speakLike(next.text, lexicon) }; // the patient's own words, in either language
 
-  // Say it like a nurse who has been listening. Safety wording stays exactly as written: tests,
-  // the speech check, the suicide question, re-asks, answers to the patient's own questions and
-  // every closing message.
+  // Say it like a nurse who has been listening: only for the open prompts ("tell me more about
+  // the pain: where, what it feels like..."), where dropping the parts already answered and using
+  // the patient's words changes what is asked. Every closed question goes out in its canonical
+  // wording (with the patient's own words swapped in below): Claude would only restyle it, and the
+  // patient waited 2-5 s for that. Safety wording stays exactly as written: tests, the speech
+  // check, the suicide question, re-asks, answers to the patient's own questions and every
+  // closing message. Started here so it runs while the word extraction below is still finishing.
   let phrasedOk = false;
   const fixedWording =
     !next ||
     done ||
     redRule ||
     next.asks === null ||
-    next.asks === "free" ||
-    next.asks === "history:confirm" ||
-    next.asks === "confused_speech" ||
-    next.asks === "self_harm_thoughts" ||
-    next.asks.startsWith("test:") ||
+    !next.asks.startsWith("probe:") ||
     next.english.startsWith("[answering") ||
     next.text.startsWith(SORRY[language]) ||
     next.text.startsWith(CLARO[language]) ||
     (input.stage === "look");
-  if (!fixedWording && next && patientText) {
-    const recent = conversation.slice(-5);
-    const phrased = await Promise.race([
-      phraseNext({
-        context: {
-          patient: { name: intake.name, who_the_visit_is_for: intake.who, community: intake.community, age_group: age },
-          main_problem: complaintKnown ? input.turns.slice(openIdx + 1).find((t) => t.role === "patient")?.text ?? patientText : null,
-          patient_just_said: patientText,
-          recent_conversation: recent,
-          camera_noticed: hunches.slice(0, 2).map((h) => TRAITS.find((t) => t.id === h.trait)?.label),
-          learned_words: lexicon,
-        },
-        question: next.text,
-        english: next.english.replace(/^\[hunch:[^\]]*\]\s*/, ""),
-        open: Boolean(next.asks?.startsWith("probe:")), // an open prompt keeps all its parts
-        locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
-      }).catch(() => null),
-      new Promise<null>((r) => setTimeout(() => r(null), 2500)), // never hold the patient up: fall back to the plain question
-    ]);
-    if (phrased) {
-      phrasedOk = true;
-      next = { ...next, text: phrased.text, english: next.english.startsWith("[hunch:") ? `${next.english.match(/^\[hunch:[^\]]*\]/)![0]} ${phrased.english}` : phrased.english };
-    }
+  const phrasing =
+    !fixedWording && next && patientText
+      ? Promise.race([
+          phraseNext({
+            context: {
+              patient: { name: intake.name, who_the_visit_is_for: intake.who, community: intake.community, age_group: age },
+              main_problem: complaintKnown ? input.turns.slice(openIdx + 1).find((t) => t.role === "patient")?.text ?? patientText : null,
+              patient_just_said: patientText,
+              recent_conversation: conversation.slice(-5),
+              camera_noticed: hunches.slice(0, 2).map((h) => TRAITS.find((t) => t.id === h.trait)?.label),
+              learned_words: lexicon,
+            },
+            question: speakLike(next.text, lexicon),
+            english: next.english.replace(/^\[hunch:[^\]]*\]\s*/, ""),
+            open: true, // an open prompt keeps all its parts
+            locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
+            timeoutMs: 2000,
+          }).catch(() => null),
+          new Promise<null>((r) => setTimeout(() => r(null), 2000)), // never hold the patient up: fall back to the plain question
+        ])
+      : null;
+
+  // Beyond the word list: Claude pulls the patient's actual words from what they said this turn
+  // (any dialect), so "pikin" or "stooling" are reused even if nobody listed them.
+  if (wordsEarly) {
+    // Started before Jev was asked, so it has usually finished by now: wait at most what is left
+    // of its 2.5 s budget, counted from when it started.
+    const left = Math.max(200, 2500 - (Date.now() - tWords));
+    const found = await Promise.race([wordsEarly, new Promise<Record<string, string>>((r) => setTimeout(() => r({}), left))]);
+    for (const [k, w] of Object.entries(found)) if (w && !/\b(no|none|nothing|nada|ninguno)\b/.test(w)) lexicon[k] = w;
+  }
+  if (next) next = { ...next, text: speakLike(next.text, lexicon) }; // the patient's own words, in either language
+
+  const phrased = phrasing ? await phrasing : null;
+  if (phrased && next) {
+    phrasedOk = true;
+    next = { ...next, text: phrased.text, english: next.english.startsWith("[hunch:") ? `${next.english.match(/^\[hunch:[^\]]*\]/)![0]} ${phrased.english}` : phrased.english };
   }
 
   if (done && next && !redRule && complaintKnown) {
@@ -856,6 +891,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
           sending: orders.map((o) => `${o.qty} ${o.item}`),
         },
         locale: topKey(probsOf(a.locale)) ?? input.defaultLocale,
+        timeoutMs: 7000,
       }).catch(() => null),
       new Promise<null>((r) => setTimeout(() => r(null), 7000)), // last message of the visit: worth the wait
     ]);
@@ -875,7 +911,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const foreign = spoken !== "en" && spoken !== "es";
   if (foreign && next && !phrasedOk) {
     const loc = topKey(probsOf(a.locale)) ?? input.defaultLocale;
-    const rendered = await Promise.race([translateTo(next.text, loc.startsWith(spoken) ? loc : spoken).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 6000))]);
+    const rendered = await Promise.race([translateTo(next.text, loc.startsWith(spoken) ? loc : spoken, 6000).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 6000))]);
     if (rendered) next = { ...next, text: rendered };
   }
 

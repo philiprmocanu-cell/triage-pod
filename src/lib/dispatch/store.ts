@@ -7,7 +7,7 @@ import path from "path";
 import type { DispatchPlan } from "./plan";
 
 export type DispatchLogLine = { id: number; at: string; agent: "Dispatch planner"; villageId: number; village: string; text: string; where: "agent_log" | "file" };
-export type Execution = { at: string; shipmentIds: string[]; orders: { id: number; toVillageId: number; item: string; qty: number; mode: string; via: "restock" | "report_visit" }[]; routed: number; notes: string[] };
+export type Execution = { at: string; shipmentIds: string[]; orders: { id: number; toVillageId: number; item: string; qty: number; mode: string; via: "restock" | "report_visit" }[]; routed: number; notes: string[]; runs?: { run: string; stops: number; orders: number; km: number; carrier: string; floodRisk: string }[] };
 type Store = { lastPlan: DispatchPlan | null; log: DispatchLogLine[]; executions: Execution[] };
 
 const FILE = () => path.join(process.env.DATA_DIR ?? path.join(process.cwd(), "data"), "dispatch.json");

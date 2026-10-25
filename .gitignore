@@ -54,3 +54,6 @@ spacetime/spacetimedb/dist
 
 # mosquito classifier's Python environment (rebuilt from tools/mosquito/requirements.txt)
 tools/mosquito/.venv/
+
+# settlements raw downloads (regenerate with tools/settlements/fetch.py)
+tools/settlements/raw/

@@ -13,6 +13,7 @@ const TABS = [
   { href: "/staff", label: "Health worker" },
   { href: "/globe", label: "Live map" },
   { href: "/routes", label: "Routes" },
+  { href: "/tracks", label: "Tracks" },
   { href: "/government", label: "Government" },
   { href: "/patients", label: "Patients" },
   { href: "/community", label: "Community", tone: "text-pink-300" },

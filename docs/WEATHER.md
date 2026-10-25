@@ -63,6 +63,59 @@ Examples, 24 Oct 2026 (end of the dry season):
 - Chipata → Katete (80 km, leaving today, 3 days): **low** — "0 mm in the last 72 h, 0 mm forecast over 3 days (wettest 0 mm); no flood water on the satellite map (14.7% of the area observed)".
 - Chipata → Chama (274 km, leaving 1 Nov, 4 days): **medium** — "28.2 mm forecast on 2026-11-02 (near -11.217, 33.167)"; the four samples further south stay low (7–17 mm wettest day).
 
+### `GET /api/weather/seasons` (the ten-year calendar, for pre-positioning)
+
+The forecast sees 16 days. The season calendar says what *usually* happens, so the dispatcher can
+plan the whole wet season: when the rains start and end at each post, which weeks usually close the
+road, how many days a month the post is usually cut off, and when malaria peaks. Code
+`src/lib/weather/seasons.ts`, cache `data/seasons.json` (kept a month; recomputed when the ten-year
+window moves on 1 July).
+
+Source: **Open-Meteo archive API** (`archive-api.open-meteo.com/v1/archive`, ERA5 reanalysis, keyless),
+daily `precipitation_sum` for ten hydrological years (1 July 2016 → 30 June 2026), one 0.25° cell per
+post (32 cells for 40 posts, four cells a call with a pause: the free quota weighs ten-year requests
+heavily and answers 429 when pushed; the fetch keeps what arrived and finishes on the next call).
+
+Per post: `{ wetSeasonStart, wetSeasonEnd, typical {start,end}, closureWeeks[{from,to,frequency}],
+closureStart, closureEnd, cutOffDaysByMonth[12] (January first), cutOffDaysInSeason,
+malariaPeak {from,to}, confidence, confidenceWhy, seasonRainMm, rainByMonth[12], years, source }`.
+Dates are placed in the current or coming season (1 July → 30 June); `?refresh=1` recomputes.
+
+How each number is made (`computeCellSeason`):
+
+- **Onset**: the first day from 1 September with 25 mm in the trailing 10 days and no 10-day dry spell
+  in the following 30 (the usual agro-meteorological definition); median over the ten seasons.
+  **End**: the last day after 1 January with rain and 20 mm in the trailing 10 days; median.
+- **Closure weeks**: the road-closing marks from `model.ts` (one day ≥ 40 mm or 72 h ≥ 80 mm) applied
+  to the cell average **× 1.5** (`AREA_TO_POINT`: an ERA5 cell is ~28 km across and its daily extremes
+  are softer than one road's gauge; the factor is an estimate for the district to tune). A season week
+  (from 1 July) is a closure week when **3 of the 10 years** closed the road in it (`CLOSURE_WEEK_MIN_FREQ`).
+- **Cut-off days**: a closing day plus the two after it (`CLOSURE_LASTS_DAYS` = 3), averaged per
+  calendar month.
+- **Malaria peak**: the wettest four weeks of the climatology, shifted 4 weeks (start) and 8 weeks
+  (end): the lag from rain to cases.
+- **Confidence**: how much the onset moves between years: ±12 days high, ±24 medium, else low
+  (and low under 7 seasons).
+
+Checked 24 Oct 2026 (ten seasons each, medium confidence, onset ±15–16 days):
+
+| Post | Rains | Closure weeks | Cut-off days by month (Dec, Jan, Feb, Mar) | Malaria peak | Season rain |
+| --- | --- | --- | --- | --- | --- |
+| **Katete** | 22 Nov → 5 Apr | 13 Jan → 9 Feb (4 weeks, 3–4 of 10 years) | 0.6, 3.1, 3.2, 1.7 (8.6 a season) | 27 Jan → 24 Mar | 814 mm |
+| **Chama** | 1 Dec → 24 Apr | 23 Dec → 16 Mar (5 weeks: 23 Dec, 30 Dec, 20 Jan at 5 of 10 years, 17 Feb, 10 Mar) | 2.9, 3.9, 2.6, 2.1 (11.9) | 20 Jan → 17 Mar | 970 mm |
+| Chipata | 22 Nov → 11 Apr | 30 Dec → 2 Mar (8 weeks) | 2.4, 5.7, 4.2, 1.6 (14.7) | 13 Jan → 10 Mar | 930 mm |
+| Mfuwe | 27 Nov → 10 Apr | 25 Nov → 9 Mar (10 weeks) | 3.8, 5.8, 4.5, 2.5 (18) | 13 Jan → 10 Mar | 956 mm |
+| Lundazi | 4 Dec → 12 Apr | 23 Dec week only (4 of 10 years) | 1.8, 2.1, 0.5, 0.4 (5.1) | 20 Jan → 17 Mar | 808 mm (high confidence, ±11 days) |
+
+Honest limit: this is a reanalysis cell average, scaled by a guess, not a log of which roads closed
+when. The ×1.5 factor and the 3-of-10 rule are named constants for the district to replace with its
+own record. The dispatch planner uses it for *seasonal* pre-positioning (docs/DISPATCH.md).
+
+### `GET /api/weather/outlook?meta=1`
+
+Only `{ fetchedAt, cacheAgeSec, ttlSec, errors }`, for the Routes page's watcher (it re-checks every
+live route when `fetchedAt` changes). The full answer also carries `cacheAgeSec` and `ttlSec` now.
+
 ### `GET /api/satellite` (unchanged fields + overlay)
 
 Every field the government page already reads is exactly as before (`rain30Mm`, `lastYearRain30Mm`,
@@ -86,6 +139,7 @@ Example, 24 Oct 2026: Katete `rain30Mm` 378 (NASA POWER preliminary; last year 0
 | **Copernicus GloFAS v4** via `flood-api.open-meteo.com/v1/flood` | daily river discharge, 365 days back + 16 ahead, `models=seamless_v4` | keyless | **live**. Direct Copernicus access (`ewds.climate.copernicus.eu/api/retrieve/v1/processes/cems-glofas-forecast`) answers 401 "authentication required" without an ECMWF account token; not needed |
 | **NASA LANCE MODIS/VIIRS flood (MCDWD, 3-day composite)** via GIBS WMS `gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi`, layer `MODIS_Combined_Flood_3-Day` | what is under water right now, one picture of the province at ~550 m per pixel; colour key `colormaps/v1.3/MODIS_Flood.xml` (red = flood, yellow = recurring flood, cyan = surface water, grey = not observed) | keyless | **live**. The raw 250 m HDF files at `nrt3.modaps.eosdis.nasa.gov/api/v2/content/archives/allData/61/MCDWD_L3_NRT/` list without a login but every download redirects (303) to the Earthdata licence/login page |
 | NASA POWER (already in `/api/satellite`) | the last 30 days, finished record a year ago | keyless | live; lags 2 days, recent weeks preliminary |
+| **Open-Meteo archive** `archive-api.open-meteo.com/v1/archive` (ERA5) | ten years of daily rain per cell for the season calendar | keyless; heavy requests hit a per-minute quota (429) | **live**; 32 cells in 8 calls with pauses, cached a month |
 | Google Flood Hub API `floodforecasting.googleapis.com` | gauge-level flood forecasts | needs a Google Cloud API key (403 "unregistered callers") | **not used**; a free key would add river gauges on the Luangwa |
 
 Optional later: `NASA_EARTHDATA_TOKEN` — an Earthdata Login bearer token. Nothing reads it today; it

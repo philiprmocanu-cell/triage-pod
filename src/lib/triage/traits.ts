@@ -84,6 +84,8 @@ export const TRAITS: Trait[] = [
 export type TraitScan = Record<string, number>; // trait id -> probability seen
 
 // How the pod mentions a hunch before asking about it ("I notice you look tired. ...").
+// face_droop is only ever said AFTER the smile test came back uneven (engine.ts): until then the
+// pod frames the smile test as a routine check (CHECK_FIRST) and never mentions the face.
 export const NOTICED: Record<string, { en: string; es: string }> = {
   face_droop: { en: "I notice one side of your face looks a little different.", es: "Noto que un lado de su cara se ve un poco diferente." },
   sweaty: { en: "I notice you are sweating.", es: "Noto que está sudando." },
@@ -109,3 +111,6 @@ export const NOTICED: Record<string, { en: string; es: string }> = {
   rash: { en: "I see some spots on your skin.", es: "Veo unas manchas en su piel." },
   bite_marks: { en: "I see some bite marks on your skin.", es: "Veo unas picaduras en su piel." },
 };
+
+// The lead-in for a quiet physical check the pod runs before it would say what it thinks it saw.
+export const CHECK_FIRST = { en: "Let's do a quick check together.", es: "Hagamos una prueba rápida juntos." };

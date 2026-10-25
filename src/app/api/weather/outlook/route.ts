@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getWeather, outlookFor } from "@/lib/weather";
+import { getWeather, outlookFor, TTL_MS } from "@/lib/weather";
 
 export const runtime = "nodejs";
 
@@ -7,9 +7,13 @@ export const runtime = "nodejs";
 // next two weeks, how much rain is coming, the malaria outlook six weeks out, and the day the
 // roads may close. Sources and a caveat ride along so the page can print them. See docs/WEATHER.md.
 
-export async function GET() {
+// `?meta=1` answers only the cache's age (for the Routes page's watcher, which re-checks every
+// live route when the forecast has been refreshed): { fetchedAt, cacheAgeSec, ttlSec, errors }.
+export async function GET(req: Request) {
   try {
     const w = await getWeather();
+    const cacheAgeSec = Math.max(0, Math.round((Date.now() - Date.parse(w.fetchedAt)) / 1000));
+    if (new URL(req.url).searchParams.get("meta") === "1") return NextResponse.json({ fetchedAt: w.fetchedAt, cacheAgeSec, ttlSec: TTL_MS / 1000, errors: w.errors });
     const posts = w.sites.flatMap((s) => {
       const o = outlookFor(s, w);
       if (!o) return [];
@@ -33,6 +37,8 @@ export async function GET() {
       errors: w.errors,
       note: missing ? `${missing} posts have no forecast cell yet` : undefined,
       fetchedAt: w.fetchedAt,
+      cacheAgeSec,
+      ttlSec: TTL_MS / 1000,
       cached: true,
     });
   } catch (e) {

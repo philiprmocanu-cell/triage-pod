@@ -31,6 +31,13 @@ let cacheWrite: Promise<void> = Promise.resolve();
 let osrmQueue: Promise<unknown> = Promise.resolve();
 
 const key = (a: LatLng, b: LatLng) => `${a[0].toFixed(4)},${a[1].toFixed(4)}|${b[0].toFixed(4)},${b[1].toFixed(4)}`;
+export const pairKey = key; // shared with the surface cache (data/surfaces.json) so both files line up
+
+// Every pair the road cache knows, as [from, to] points (for warming the surface cache).
+export async function cachedPairs(): Promise<[LatLng, LatLng][]> {
+  const c = await loadCache();
+  return Object.keys(c).map((k) => k.split("|").map((p) => p.split(",").map(Number) as LatLng) as [LatLng, LatLng]);
+}
 
 async function loadCache() {
   if (cache) return cache;

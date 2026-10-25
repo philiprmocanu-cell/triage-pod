@@ -6,7 +6,7 @@
 
 import { GET as satelliteGET } from "@/app/api/satellite/route";
 import { dueFor, nextDoses } from "@/lib/vaccines";
-import { fallbackFleet, type Carrier, type PostOutlook, type PostState } from "./plan";
+import { fallbackFleet, type Carrier, type PostOutlook, type PostSeason, type PostState } from "./plan";
 
 const URL_BASE = process.env.SPACETIME_HTTP ?? "http://127.0.0.1:3000";
 const DB = process.env.SPACETIME_DB ?? "podnet";
@@ -161,6 +161,28 @@ export async function loadOutlook(origin: string | null): Promise<{ byKey: Map<s
   }
 }
 
+// ---- Seasons ----
+
+// The ten-year calendar per post (GET /api/weather/seasons): the dates the planner needs for the
+// seasonal pre-positioning rule and the season strip. Missing or down: no seasonal shipments.
+export async function loadSeasons(origin: string | null): Promise<{ byId: Map<number, PostSeason>; byName: Map<string, PostSeason>; source: string }> {
+  const byId = new Map<number, PostSeason>(), byName = new Map<string, PostSeason>();
+  if (!origin) return { byId, byName, source: "no seasonal calendar (no origin)" };
+  try {
+    const res = await fetch(`${origin}/api/weather/seasons`, { signal: AbortSignal.timeout(90_000), cache: "no-store" });
+    if (!res.ok) return { byId, byName, source: `seasonal calendar unavailable (${res.status})` };
+    const json = (await res.json()) as { posts?: (PostSeason & { villageId?: number; name?: string })[]; range?: { start: string; end: string }; errors?: string | null; note?: string };
+    for (const p of json.posts ?? []) {
+      const s: PostSeason = { wetSeasonStart: p.wetSeasonStart, wetSeasonEnd: p.wetSeasonEnd, closureStart: p.closureStart, closureEnd: p.closureEnd, closureWeeks: (p.closureWeeks ?? []).map((w) => ({ from: w.from, to: w.to, frequency: w.frequency })), cutOffDaysByMonth: p.cutOffDaysByMonth ?? [], cutOffDaysInSeason: p.cutOffDaysInSeason ?? 0, malariaPeak: p.malariaPeak, confidence: p.confidence };
+      if (p.villageId) byId.set(p.villageId, s);
+      if (p.name) byName.set(short(p.name), s);
+    }
+    return { byId, byName, source: `/api/weather/seasons (ERA5 daily rain ${json.range?.start ?? ""} → ${json.range?.end ?? ""} from the Open-Meteo archive; ${byId.size} posts${json.errors ? `; ${json.errors}` : ""})` };
+  } catch (e) {
+    return { byId, byName, source: `seasonal calendar unavailable (${e instanceof Error ? e.message : e})` };
+  }
+}
+
 const NO_OUTLOOK: PostOutlook = { malariaOutlook6w: "low", floodRiskToday: false, floodRisk14d: false, floodTodayLevel: "low", flood14dLevel: "low", rainNext14Mm: 0, cutOffRisk: 0, daysUntilCutOff: null, cutOffNow: false, cutOffDate: null, source: "none" };
 
 // ---- Carriers ----
@@ -188,17 +210,18 @@ export async function loadCarriers(posts: Pick<PostState, "id" | "name" | "hub">
 
 // ---- The whole picture ----
 
-export type NetworkState = { posts: PostState[]; carriers: Carrier[]; carrierSource: "table" | "fallback"; weatherSource: string; now: Date };
+export type NetworkState = { posts: PostState[]; carriers: Carrier[]; carrierSource: "table" | "fallback"; weatherSource: string; seasonSource: string; now: Date };
 
 export async function loadState(origin: string | null): Promise<NetworkState> {
   const now = new Date();
-  const [villages, stock, visits, orders, patients, outlook] = await Promise.all([
+  const [villages, stock, visits, orders, patients, outlook, seasons] = await Promise.all([
     sql("SELECT * FROM village"),
     sql("SELECT * FROM stock"),
     sql("SELECT * FROM visit"),
     sql("SELECT * FROM delivery_order"),
     sql("SELECT * FROM patient"),
     loadOutlook(origin),
+    loadSeasons(origin),
   ]);
   if (!villages.length) throw new Error("SpacetimeDB has no villages (is `spacetime start` running and the module published?)");
 
@@ -231,9 +254,9 @@ export async function loadState(origin: string | null): Promise<NetworkState> {
       redVisitsOpen,
       openNeeds: [...needMap].map(([item, qty]) => ({ item, qty })),
       vaccinesDue,
-      outlook: outlook.byKey.get(`id:${id}`) ?? outlook.byKey.get(`name:${short(name)}`) ?? NO_OUTLOOK,
+      outlook: { ...(outlook.byKey.get(`id:${id}`) ?? outlook.byKey.get(`name:${short(name)}`) ?? NO_OUTLOOK), season: seasons.byId.get(id) ?? seasons.byName.get(short(name)) ?? null },
     };
   });
   const { carriers, source: carrierSource } = await loadCarriers(posts);
-  return { posts, carriers, carrierSource, weatherSource: outlook.source, now };
+  return { posts, carriers, carrierSource, weatherSource: outlook.source, seasonSource: seasons.source, now };
 }

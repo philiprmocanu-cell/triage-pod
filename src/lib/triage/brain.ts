@@ -7,16 +7,21 @@ import type { Intake, TriageResult, Turn } from "./types";
 let client: Anthropic | null = null;
 const anthropic = () => (client ??= new Anthropic());
 
-async function ask(system: string, user: string): Promise<string> {
-  const response = await anthropic().beta.messages.create({
-    model: "claude-opus-5-5",
-    max_tokens: 2000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    output_config: { effort: "low" },
-    system,
-    messages: [{ role: "user", content: user }],
-  });
+// timeoutMs: a hard cap for wording the patient is waiting on. Past it the SDK aborts the request
+// (no retries, which would triple the wait) and the caller falls back to the fixed wording.
+async function ask(system: string, user: string, timeoutMs?: number): Promise<string> {
+  const response = await anthropic().beta.messages.create(
+    {
+      model: "claude-opus-5-5",
+      max_tokens: 2000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      output_config: { effort: "low" },
+      system,
+      messages: [{ role: "user", content: user }],
+    },
+    timeoutMs ? { timeout: timeoutMs, maxRetries: 0 } : undefined,
+  );
   if (response.stop_reason === "refusal") throw new Error("The model declined this request.");
   return response.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("").trim();
 }
@@ -68,18 +73,21 @@ export async function replyToPatient(input: {
   locale: string;
   urgency: string;
   likely: string[];
+  timeoutMs?: number;
 }): Promise<string> {
   return ask(
     `You are the voice of a health pod at a rural health post (${input.locale}). The patient just asked you something. Answer in at most 25 words: one or two short, warm, plain sentences in their language and regional Spanish if Spanish. Never name a diagnosis as certain, never give medicine doses, never promise. You may say what the pod is checking and that the health worker and a doctor will explain and treat. If urgency is red, say calmly that help is being arranged now. Reply with the spoken words only.`,
     JSON.stringify({ patient_question: input.question, urgency: input.urgency, what_the_pod_is_considering: input.likely, recent_conversation: input.conversation.slice(-6) }),
+    input.timeoutMs,
   );
 }
 
 // For complaints the triage tree does not cover: one follow-up question a nurse would ask next.
-export async function followUpQuestion(input: { conversation: Record<string, string>[]; language: string; locale: string }): Promise<{ text: string; english: string } | null> {
+export async function followUpQuestion(input: { conversation: Record<string, string>[]; language: string; locale: string; timeoutMs?: number }): Promise<{ text: string; english: string } | null> {
   const out = await ask(
     `You are the triage nurse voice of a health pod at a rural health post (${input.locale}). Read the conversation and write the ONE most useful next question a careful nurse would ask to understand this complaint better (where exactly, what makes it better or worse, other symptoms, danger signs). Never diagnose. Under 20 words, plain and warm. Reply with exactly two lines: "PATIENT: <question in the patient's language and regional Spanish if Spanish>" and "ENGLISH: <the same in English>". If enough is known already, reply "DONE".`,
     JSON.stringify({ conversation: input.conversation.slice(-10) }),
+    input.timeoutMs,
   );
   if (/^\s*DONE/i.test(out)) return null;
   const text = out.match(/PATIENT:\s*(.+)/i)?.[1]?.trim();
@@ -106,7 +114,7 @@ export function provincialBriefing(state: Record<string, unknown>): Promise<stri
 
 // The patient's own words for everyday medical things, whatever dialect they speak. The pod
 // reuses them in its questions and remembers them for the village.
-export async function extractWords(input: { conversation: unknown[]; language: "en" | "es" }): Promise<Record<string, string>> {
+export async function extractWords(input: { conversation: unknown[]; language: "en" | "es"; timeoutMs?: number }): Promise<Record<string, string>> {
   const keys =
     input.language === "es"
       ? { child: "a child / their child", fever: "fever", poop: "stool / poop", belly: "the belly or stomach", dizzy: "dizzy", talk: "to talk" }
@@ -114,6 +122,7 @@ export async function extractWords(input: { conversation: unknown[]; language: "
   const out = await ask(
     `From the patient's own words in the conversation, list the exact word or short phrase THEY used for each of these things, only if they actually said one (any dialect or slang, e.g. "patojo", "wawa", "running stomach", "pikin", "stooling", "body is hot"). Reply with a JSON object whose keys are exactly these: ${JSON.stringify(keys)}. Omit keys they did not use. Values are the patient's words, lowercase, nothing else. JSON only.`,
     JSON.stringify(input.conversation),
+    input.timeoutMs,
   );
   try {
     const parsed = JSON.parse(out.replace(/^```json|```$/g, "").trim()) as Record<string, unknown>;
@@ -126,13 +135,14 @@ export async function extractWords(input: { conversation: unknown[]; language: "
 // Fixed wordings (closings, test instructions, re-asks) exist in English and Spanish only. For any
 // other language the patient speaks, Claude renders them, with a cache so each line costs once.
 const translations = new Map<string, string>();
-export async function translateTo(text: string, locale: string): Promise<string> {
+export async function translateTo(text: string, locale: string, timeoutMs?: number): Promise<string> {
   const key = `${locale}|${text}`;
   const hit = translations.get(key);
   if (hit) return hit;
   const out = await ask(
     `Translate what a village health pod says to a patient into the language and regional variety "${locale}" exactly as people speak it (for ar-MA that is Moroccan Darija in Arabic script, not Modern Standard Arabic). Keep it short, warm and plain. Reply with the translation only.`,
     text,
+    timeoutMs,
   );
   translations.set(key, out);
   return out;
@@ -140,10 +150,11 @@ export async function translateTo(text: string, locale: string): Promise<string>
 
 // Reflective listening: say back what the patient told us, so a speech-to-text slip ("tóxica
 // lentura" for "tos y calentura") is caught before the pod reasons on it.
-export async function confirmComplaint(input: { said: string; language: string; locale: string }): Promise<{ text: string; english: string } | "UNCLEAR"> {
+export async function confirmComplaint(input: { said: string; language: string; locale: string; timeoutMs?: number }): Promise<{ text: string; english: string } | "UNCLEAR"> {
   const out = await ask(
     `You are the triage nurse voice of a health pod (${input.locale}). The speech-to-text heard the patient describe why they came. If it makes sense, restate it briefly and warmly in the patient's language and regional Spanish if Spanish, then ask if that is right (e.g. "Entiendo que tiene tos y calentura desde hace cuatro días, ¿es así?"). Under 25 words. Restate only: no advice, no alarm, never tell them to call anyone (the pod itself calls for help when needed). If the words look garbled, nonsensical or mis-heard, reply only UNCLEAR. Otherwise reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
     input.said,
+    input.timeoutMs,
   );
   if (/^\s*UNCLEAR/i.test(out)) return "UNCLEAR";
   const text = out.match(/PATIENT:\s*(.+)/i)?.[1]?.trim();
@@ -160,6 +171,7 @@ export async function phraseNext(input: {
   english: string;
   open?: boolean; // an open prompt ("tell me more about the pain: where, what it feels like...") keeps every part
   locale: string;
+  timeoutMs?: number;
 }): Promise<{ text: string; english: string } | null> {
   const out = await ask(
     `You are the voice of a warm, experienced triage nurse at a health post (${input.locale}). Rewrite NEXT_QUESTION so it fits this conversation.
@@ -174,6 +186,7 @@ ${
 - Never mention a diagnosis, a probability, or what the answer would mean.
 Reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
     JSON.stringify({ ...input.context, NEXT_QUESTION: input.question, NEXT_QUESTION_ENGLISH: input.english }),
+    input.timeoutMs,
   );
   const text = out.match(/PATIENT:\s*(.+)/i)?.[1]?.trim();
   const english = out.match(/ENGLISH:\s*(.+)/i)?.[1]?.trim();
@@ -182,10 +195,11 @@ Reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
 
 // Safety-netting, like a nurse at the end of a visit: one self-care step and exactly when to
 // come back. Only for green and yellow visits; emergencies keep their fixed message.
-export async function closingAdvice(input: { context: Record<string, unknown>; locale: string }): Promise<{ text: string; english: string } | null> {
+export async function closingAdvice(input: { context: Record<string, unknown>; locale: string; timeoutMs?: number }): Promise<{ text: string; english: string } | null> {
   const out = await ask(
     `You are a triage nurse at a health post (${input.locale}) finishing a visit. In at most 55 words, in the patient's language and regional variety: (1) if context.likely is set, say plainly what it most likely is, in everyday words a villager understands (not the medical name alone), and what is being given for it (context.sending); if context.verdict is "uncertain" say it is not clear yet and the health worker will check today; if "nothing_found" say nothing serious came up; (2) two practical self-care steps that fit this condition and what they told you (water, rest, food, bed net, keep the wound clean...); (3) exactly which warning signs mean they must come back right away. No doses, no probabilities. Reply with exactly two lines: "PATIENT: ..." and "ENGLISH: ...".`,
     JSON.stringify(input.context),
+    input.timeoutMs,
   );
   const text = out.match(/PATIENT:\s*(.+)/i)?.[1]?.trim();
   const english = out.match(/ENGLISH:\s*(.+)/i)?.[1]?.trim();

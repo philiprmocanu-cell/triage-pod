@@ -70,6 +70,23 @@ export type StatsResult = { data: Record<string, CountryStats>; fetchedAt: strin
 // unreachable (it was, from the venue): `live` says which you got.
 export async function liveStats(): Promise<StatsResult> {
   if (cache && Date.now() - cache.at < 12 * 3600_000) return { data: cache.data, fetchedAt: new Date(cache.at).toISOString(), live: true };
+  // Cold start: answer from the saved copy at once if it is less than a day old, and refresh it
+  // in the background, so the first page after a restart doesn't wait 3 s on the World Bank.
+  if (!cache) {
+    try {
+      const saved = JSON.parse(await fs.readFile(DISK(), "utf8")) as { fetchedAt: string; data: Record<string, CountryStats> };
+      const age = Date.now() - new Date(saved.fetchedAt).getTime();
+      if (age < 24 * 3600_000) {
+        cache = { at: new Date(saved.fetchedAt).getTime(), data: saved.data };
+        if (age > 12 * 3600_000) void refresh().catch(() => {});
+        return { ...saved, live: true };
+      }
+    } catch {}
+  }
+  return refresh();
+}
+
+async function refresh(): Promise<StatsResult> {
   const codes = COUNTRIES.map((c) => c.iso3).join(";");
   const data: Record<string, CountryStats> = Object.fromEntries(COUNTRIES.map((c) => [c.iso3, {}]));
   try {

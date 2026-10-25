@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listenForUtterance, mergeWavs, playBlob, speakWithBrowser } from "@/lib/audio";
+import { getMic, listenForUtterance, mergeWavs, micErrorText, playPcmStream, speakWithBrowser, splitForSpeech, testMicrophone, unlockAudio } from "@/lib/audio";
 import { PATHWAYS, type Lang } from "@/lib/triage/tree";
 import { TRAITS, TraitScan } from "@/lib/triage/traits";
 import type { CameraSignals, Frame, Intake, Seen, SpeechStats, TestResults, TriageResult, Turn, Urgency } from "@/lib/triage/types";
@@ -50,6 +50,30 @@ const URGENCY_STYLE: Record<Urgency, { label: string; cls: string }> = {
 
 const DELIVERY: Record<string, string> = { on_site: "In kit", drone: "Drone", road: "Road" };
 
+// What the microphone is doing right now, shown on both screens so "the mic chose not to work"
+// becomes a sentence with a fix in it.
+type MicState = { state: "idle" | "listening" | "heard" | "blocked" | "testing"; words?: number; reason?: string; note?: string };
+
+// One turn, stamped end to end (performance.now() ms): the patient stops talking -> the pod's
+// voice is heard -> the mic opens again. Printed to the console and shown on the operator view.
+type TurnTiming = {
+  speechEnd: number;
+  spokeMs?: number;
+  sttDone?: number;
+  triageDone?: number;
+  jevMs?: number;
+  stepMs?: number;
+  ttsFirstByte?: number;
+  audioPlaying?: number;
+  audioEnded?: number;
+  listeningAgain?: number;
+  transcript?: string;
+};
+
+const LISTENING = { en: "I'm listening. Please go ahead.", es: "Le escucho. Adelante, hable." };
+const SAY_AGAIN = { en: "Sorry, could you say that again?", es: "Perdón, ¿me lo puede repetir?" };
+const AFTER_SPEECH_MS = 250; // the mic opens this long after the pod's voice ends, so it never hears the pod
+
 
 const FRAME_EVERY_MS = 100; // 10 pictures a second: Jev sees movement, almost video
 const FRAME_KEEP = 40; // the last four seconds
@@ -85,8 +109,21 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
   const [tooFar, setTooFar] = useState(false); // someone is there, but not close or facing enough to judge
   const [autoStart, setAutoStart] = useState(true);
   const [level, setLevel] = useState(0);
+  const [mic, setMic] = useState<MicState>({ state: "idle" });
+  const [micTest, setMicTest] = useState<string | null>(null);
+  const [heard, setHeard] = useState<{ text: string; spokeMs: number; langs: string } | null>(null);
+  const [timing, setTiming] = useState<TurnTiming | null>(null);
+  const timingRef = useRef<TurnTiming | null>(null);
+  const [soundBlocked, setSoundBlocked] = useState(false);
+  const blockedRef = useRef(false);
+  const lastSaid = useRef<{ text: string; loc: string; community?: string } | null>(null);
+  const startingRef = useRef(false); // auto-start and the Start button must not both start the visit
+  const reprompted = useRef(false); // "I'm listening" said once per question
+  const reasked = useRef(false); // "could you say that again?" once per question
+  const misses = useRef(0);
   const listenAbort = useRef<AbortController | null>(null);
   const hearRef = useRef<() => Promise<void>>(async () => {});
+  const statusRef = useRef<Status>("ready");
   // Wireless pod head: its finger sensor and its button.
   const [podVitals, setPodVitals] = useState<{ finger: boolean; hr: number; spo2: number; presses: number; camera: boolean } | null>(null);
   const podPresses = useRef<number | null>(null);
@@ -129,31 +166,91 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     return picked.map((f) => ({ secondsAgo: t - f.t, b64: f.b64 }));
   };
 
-  // Always Cartesia first (the health check is only advice; a Start pressed before it answers must
-  // not condemn the whole visit to the browser voice). The browser voice is the last resort, and
-  // when it is used the screen says so in red, with the reason.
-  const speak = useCallback(async (text: string, loc: string, community?: string) => {
-    setStatus("speaking");
-    try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, locale: loc, community }),
-      });
-      if (res.ok) {
-        setVoiceInfo(`${decodeURIComponent(res.headers.get("X-Voice-Name") ?? "")} · ${res.headers.get("X-Voice-Match")} match`);
-        await playBlob(await res.blob());
-        return;
-      }
-      const why = (await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`;
-      throw new Error(why);
-    } catch (e) {
-      const why = e instanceof Error ? e.message : String(e);
-      console.warn("Cartesia speech failed, using the browser voice:", why);
-      setError(`Cartesia voice failed (${why}) — using the browser voice for this sentence.`);
-    }
-    await speakWithBrowser(text, loc);
+  statusRef.current = status;
+
+  const publishTiming = useCallback((t: TurnTiming) => {
+    setTiming({ ...t });
+    const d = (a?: number, b?: number) => (a != null && b != null ? `${((a - b) / 1000).toFixed(2)} s` : "–");
+    console.log(
+      `[turn timing] spoke ${((t.spokeMs ?? 0) / 1000).toFixed(1)} s · stop→transcript ${d(t.sttDone, t.speechEnd)} · →decision ${d(t.triageDone, t.sttDone)} (Jev ${t.jevMs ?? "?"} ms, Claude+other ${t.stepMs != null && t.jevMs != null ? t.stepMs - t.jevMs : "?"} ms) · →voice first byte ${d(t.ttsFirstByte, t.triageDone)} · →sound ${d(t.audioPlaying, t.ttsFirstByte)} · STOP→SOUND ${d(t.audioPlaying, t.speechEnd)} · sound ended→listening ${d(t.listeningAgain, t.audioEnded)}`,
+    );
   }, []);
+
+  // Always Cartesia first (the health check is only advice; a Start pressed before it answers must
+  // not condemn the whole visit to the browser voice). The voice streams: the first sentence is
+  // played while the rest is still being generated. The browser voice is the last resort, and
+  // when it is used the screen says so in red, with the reason.
+  const speak = useCallback(
+    async (text: string, loc: string, community?: string) => {
+      setStatus("speaking");
+      lastSaid.current = { text, loc, community };
+      const t = timingRef.current;
+      const parts = splitForSpeech(text);
+      let i = 0;
+      try {
+        if (!(await unlockAudio())) {
+          blockedRef.current = true;
+          setSoundBlocked(true);
+          throw new Error("the browser will not play sound until someone taps the screen");
+        }
+        setSoundBlocked(false);
+        const fetches = parts.map((p) =>
+          fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: p, locale: loc, community }) }),
+        );
+        for (; i < parts.length; i++) {
+          const res = await fetches[i];
+          if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+          if (i === 0) {
+            if (t) t.ttsFirstByte ??= performance.now();
+            setVoiceInfo(`${decodeURIComponent(res.headers.get("X-Voice-Name") ?? "")} · ${res.headers.get("X-Voice-Match")} match${res.headers.get("X-Cache") === "hit" ? " · cached" : ""}`);
+          }
+          const first = i === 0;
+          await playPcmStream(res, {
+            sampleRate: Number(res.headers.get("X-Sample-Rate") ?? 24000),
+            onFirstAudio: () => {
+              if (t && first) {
+                t.audioPlaying ??= performance.now();
+                publishTiming(t);
+              }
+            },
+          });
+        }
+        if (t) t.audioEnded = performance.now();
+        return;
+      } catch (e) {
+        const why = e instanceof Error ? e.message : String(e);
+        console.warn("Cartesia speech failed, using the browser voice:", why);
+        setError(`Cartesia voice failed (${why}) — using the browser voice for this sentence.`);
+      }
+      await speakWithBrowser(parts.slice(i).join(" "), loc);
+      if (t) t.audioEnded = performance.now();
+    },
+    [publishTiming],
+  );
+
+  // Browsers only play sound after a tap or key press. The kiosk auto-starts without one, so the
+  // first tap anywhere turns sound on, and if the pod's question was lost to silence it is said
+  // again and the mic opens after it.
+  useEffect(() => {
+    const unlock = async () => {
+      if (!(await unlockAudio())) return;
+      setSoundBlocked(false);
+      if (blockedRef.current && lastSaid.current) {
+        blockedRef.current = false;
+        const s = lastSaid.current;
+        listenAbort.current?.abort();
+        await speak(s.text, s.loc, s.community);
+        await new Promise((r) => setTimeout(r, AFTER_SPEECH_MS));
+        if (!["done", "ready", "testing"].includes(statusRef.current)) void hearRef.current();
+      }
+    };
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, [speak]);
 
   const cameraSnapshot = useCallback(
     (): CameraSignals => ({
@@ -234,6 +331,7 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Triage failed");
       const r = data as TriageResult;
+      if (timingRef.current) Object.assign(timingRef.current, { triageDone: performance.now(), jevMs: r.jev_ms, stepMs: r.step_ms });
       setResult(r);
       setSeen(r.seen);
       const lang = r.patient_text ? r.language : language ?? (region.locale.startsWith("en") ? "en" : "es");
@@ -299,11 +397,19 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
         return triage("answer", undefined, { turns: nextTurns, tests: nextTests, intake: nextIntake, smile });
       }
       setStatus(r.done ? "done" : "idle");
-      // Listen for the answer, no tapping. Read through the ref: a Start pressed before /api/health
-      // answered must not leave this closure believing there is no Cartesia and stop the loop.
-      if (!r.done && cartesiaRef.current !== false) void hearRef.current();
+      reprompted.current = false;
+      reasked.current = false;
+      misses.current = 0;
+      // Listen for the answer, no tapping, but never while the pod's own voice is still in the
+      // air: the mic opens 250 ms after playback ended, so it does not hear the pod and cancel.
+      // Read through the ref: a Start pressed before /api/health answered must not leave this
+      // closure believing there is no Cartesia and stop the loop.
+      if (!r.done && cartesiaRef.current !== false) {
+        await new Promise((res) => setTimeout(res, AFTER_SPEECH_MS));
+        void hearRef.current();
+      }
     },
-    [turns, tests, intake, seen, scanAvg, cameraSnapshot, language, spoken, locale, region, speak, runTest, smileTest, services.cartesia],
+    [turns, tests, intake, seen, scanAvg, cameraSnapshot, language, spoken, locale, region, speak, runTest, smileTest, services.cartesia, village],
   );
 
   const run = useCallback(async (fn: () => Promise<void>) => {
@@ -318,41 +424,128 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
 
   const onStart = () =>
     run(async () => {
-      setStatus("looking");
-      askedAt.current = now() - 3; // look at the last few seconds
-      await triage("look");
+      // Auto-start (3 s in front of the camera) and the Start button can fire together: one visit.
+      if (startingRef.current || statusRef.current !== "ready") return;
+      startingRef.current = true;
+      try {
+        // The Start click is the gesture browsers need: turn sound on and open the mic right now,
+        // once, for the whole visit (a permission prompt appears here, not mid-conversation).
+        setSoundBlocked(!(await unlockAudio()));
+        getMic()
+          .then(() => setMic((m) => (m.state === "blocked" ? { state: "idle" } : m)))
+          .catch((e) => setMic({ state: "blocked", reason: micErrorText(e) }));
+        setStatus("looking");
+        askedAt.current = now() - 3; // look at the last few seconds
+        await triage("look");
+      } finally {
+        startingRef.current = false;
+      }
     });
 
-  // Hands-free: listen until the patient finishes speaking, transcribe in Spanish and English,
-  // and let Jev pick the real language every turn (so switching languages works).
+  // Both candidate languages until the patient's language has settled (two spoken turns); then
+  // only theirs: one transcription instead of two, and no extra Jev call to pick between them.
+  const sttLanguages = () => {
+    const spokenTurns = turns.filter((t) => t.role === "patient").length;
+    if (spoken && spokenTurns >= 2 && region.languages.includes(spoken)) return [spoken];
+    return region.languages;
+  };
+
+  // Hands-free: listen until the patient finishes speaking, transcribe, and let Jev read it.
   const hear = async () => {
     listenAbort.current?.abort();
     const ctl = new AbortController();
     listenAbort.current = ctl;
+    const lang: Lang = language ?? (region.locale.startsWith("en") ? "en" : "es");
+    const loc = locale ?? region.locale;
+    const community = village ?? intake.community;
+    // The previous turn's clock stops when the mic opens again.
+    const prev = timingRef.current;
+    if (prev?.audioEnded && !prev.listeningAgain) {
+      prev.listeningAgain = performance.now();
+      publishTiming(prev);
+    }
     setStatus("listening");
-    const wav = await listenForUtterance({ signal: ctl.signal, waitMs: 15000, onLevel: (l) => setLevel(l) });
+    setMic({ state: "listening" });
+    let got: Awaited<ReturnType<typeof listenForUtterance>>;
+    try {
+      got = await listenForUtterance({ signal: ctl.signal, waitMs: 8000, silenceMs: 1200, maxMs: 20000, onLevel: (l) => setLevel(l) });
+    } catch (e) {
+      const why = micErrorText(e);
+      setMic({ state: "blocked", reason: why });
+      setStatus("idle");
+      throw new Error(why);
+    }
     if (ctl.signal.aborted) return;
-    if (wav && wav.size > 48_000) clips.current.push(await wav.arrayBuffer()); // 1.5 s or more of real speech
-    if (!wav) {
-      setStatus("idle"); // nobody spoke: the mic button starts listening again
+    if (!got) {
+      // Nobody spoke for 8 s: say so once and listen again; the second time, wait for the button.
+      if (!reprompted.current) {
+        reprompted.current = true;
+        setMic({ state: "idle", note: "Heard nothing for 8 s — saying so and listening again" });
+        await speak(LISTENING[lang], loc, community);
+        await new Promise((r) => setTimeout(r, AFTER_SPEECH_MS));
+        return hear();
+      }
+      setMic({ state: "idle", note: "Heard nothing — tap the microphone (or the pod's button) to talk" });
+      setStatus("idle");
       return;
     }
+    const t: TurnTiming = { speechEnd: got.t.speechEnd, spokeMs: got.spokeMs };
+    timingRef.current = t;
+    if (got.wav.size > 48_000) clips.current.push(await got.wav.arrayBuffer()); // 1.5 s or more of real speech
     setStatus("transcribing");
+    setMic({ state: "heard", note: `${(got.spokeMs / 1000).toFixed(1)} s of speech — understanding…` });
+    const langs = sttLanguages();
     const form = new FormData();
-    form.append("audio", wav, "speech.wav");
-    form.append("languages", region.languages.join(","));
+    form.append("audio", got.wav, "speech.wav");
+    form.append("languages", langs.join(","));
     const res = await fetch("/api/stt", { method: "POST", body: form });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? "Transcription failed");
-    const t = data.transcripts as Record<string, { text: string; speech: SpeechStats }>;
-    if (Object.values(t).every((x) => !x.text)) {
+    t.sttDone = performance.now();
+    const tr = data.transcripts as Record<string, { text: string; speech: SpeechStats }>;
+    const best = tr[language ?? langs[0]] ?? Object.values(tr)[0];
+    const text = best?.text ?? "";
+    const words = text.split(/\s+/).filter(Boolean).length;
+    t.transcript = text;
+    setHeard({ text, spokeMs: got.spokeMs, langs: langs.join("+") });
+    setMic({ state: "heard", words });
+    const empty = Object.values(tr).every((x) => !x.text);
+    if ((empty || words <= 1) && got.spokeMs > 1500 && !reasked.current) {
+      // They clearly said more than a word and almost nothing came back: ask once, instead of
+      // letting a mis-hear count as "no".
+      reasked.current = true;
+      setMic({ state: "idle", note: `Heard ${(got.spokeMs / 1000).toFixed(1)} s of speech but only ${words} word${words === 1 ? "" : "s"} came back — asking again` });
+      await speak(SAY_AGAIN[lang], loc, community);
+      await new Promise((r) => setTimeout(r, AFTER_SPEECH_MS));
+      return hear();
+    }
+    if (empty) {
+      if (misses.current++ >= 1) {
+        setError("Didn't catch that. Tap the microphone and try again, or type the answer.");
+        setStatus("idle");
+        return;
+      }
       setError("Didn't catch that — listening again.");
       return hear();
     }
-    const best = t[language ?? region.languages[0]] ?? Object.values(t)[0];
-    await triage("answer", { candidates: Object.fromEntries(Object.entries(t).map(([l, x]) => [l, x.text])), speech: best.speech });
+    await triage("answer", { candidates: Object.fromEntries(Object.entries(tr).map(([l, x]) => [l, x.text])), speech: best.speech });
   };
   hearRef.current = () => run(hear);
+
+  // "Test my microphone": open it, show the level for 5 s, say "working" or the exact error.
+  const onTestMic = async () => {
+    listenAbort.current?.abort();
+    setMic({ state: "testing" });
+    setMicTest("Testing… say something for 5 seconds");
+    const r = await testMicrophone({ ms: 5000, onLevel: setLevel });
+    if (r.ok) {
+      setMic({ state: "idle" });
+      setMicTest(`Microphone working — peak level ${Math.round(Math.min(1, r.peak / 0.1) * 100)}%`);
+    } else {
+      setMic({ state: "blocked", reason: r.error });
+      setMicTest(r.error);
+    }
+  };
 
   const onMic = () => {
     if (status === "listening") {
@@ -386,6 +579,13 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
     setSaved(null);
     setScanNow({});
     setScanMax({});
+    setMic((m) => (m.state === "blocked" ? m : { state: "idle" }));
+    setHeard(null);
+    setTiming(null);
+    timingRef.current = null;
+    reprompted.current = false;
+    reasked.current = false;
+    misses.current = 0;
     cam.current?.reset();
     clips.current = [];
     learned.current = false;
@@ -615,11 +815,10 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
                   <span className="ml-3 text-2xl font-normal text-slate-400">{testClock.label}</span>
                 </p>
               )}
-              {status === "listening" && (
-                <div className="mt-10 h-4 w-[32rem] overflow-hidden rounded-full bg-slate-800">
-                  <div className="h-4 bg-red-500 transition-all" style={{ width: `${Math.round(level * 100)}%` }} />
-                </div>
-              )}
+              <div className="mt-10">
+                <MicLine mic={mic} level={level} big />
+              </div>
+              {soundBlocked && <p className="mt-6 text-2xl text-amber-300">🔈 Tap the screen once to turn on sound · Toque la pantalla una vez para activar el sonido</p>}
               {status === "idle" && (
                 <button onClick={onMic} className="mt-10 rounded-full bg-sky-600 px-10 py-5 text-2xl font-semibold hover:bg-sky-500">
                   🎙️ Hablar · Talk
@@ -711,6 +910,14 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
             </div>
           ))}
           <QuestionCard turns={turns} why={result?.why ?? null} status={status} />
+          {heard && (
+            <p className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-2 text-sm">
+              <span className="text-slate-500">
+                I heard ({heard.langs}, {(heard.spokeMs / 1000).toFixed(1)} s of speech):
+              </span>{" "}
+              {heard.text ? `“${heard.text}”` : <span className="text-amber-300">nothing — the transcript came back empty</span>}
+            </p>
+          )}
           <MalariaPressureCard village={village ?? "Katete"} region={region.name} fromVisit={result?.malaria_pressure ?? null} />
           <div className="relative">
             <CameraPanel ref={cam} onSignals={setCamera} smileTest={smileTest} remote={podUrl} />
@@ -758,11 +965,6 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
               </button>
             )}
             <div className="flex-1 space-y-2">
-              {status === "listening" && (
-                <div className="h-2 overflow-hidden rounded bg-slate-800">
-                  <div className="h-2 bg-red-500 transition-all" style={{ width: `${Math.round(level * 100)}%` }} />
-                </div>
-              )}
               <div className="flex items-center justify-between gap-2">
                 <p className="text-lg">{tooFar && status === "ready" ? "Patient too far or side-on: the camera won't judge until they sit close, facing it" : STATUS_TEXT[status]}</p>
                 <label className="flex items-center gap-1.5 text-xs text-slate-400">
@@ -770,6 +972,17 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
                   auto-start
                 </label>
               </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <MicLine mic={mic} level={level} />
+                </div>
+                <button onClick={onTestMic} disabled={mic.state === "testing"} className="rounded-lg border border-slate-700 px-2.5 py-1 text-xs hover:bg-slate-800 disabled:opacity-40">
+                  Test my microphone
+                </button>
+              </div>
+              {micTest && <p className={`text-xs ${micTest.startsWith("Microphone working") ? "text-emerald-300" : micTest.startsWith("Testing") ? "text-slate-400" : "text-amber-300"}`}>{micTest}</p>}
+              {soundBlocked && <p className="text-xs text-amber-300">🔈 Sound is blocked until someone taps or clicks the page once.</p>}
+              <TimingLine t={timing} />
               <input
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
@@ -821,6 +1034,55 @@ function MalariaPressureCard({ village, region, fromVisit }: { village: string; 
       <span className="font-semibold">Malaria pressure in {p.village} this week: {p.level.toUpperCase()}</span> — {p.reasons.join(", ")}.
       <span className="ml-1 text-xs opacity-70">Malaria starts {p.priorShift >= 0 ? "+" : ""}{Math.round(p.priorShift * 100)}% among fever causes; the rapid test still decides.</span>
     </div>
+  );
+}
+
+// The microphone, in one line: on with a live level, how many words came back, or blocked and why.
+function MicLine({ mic, level, big }: { mic: MicState; level: number; big?: boolean }) {
+  const meter = (color: string) => (
+    <div className={`${big ? "h-4 w-[32rem]" : "h-2 w-full"} overflow-hidden rounded-full bg-slate-800`}>
+      <div className={`${big ? "h-4" : "h-2"} ${color} transition-all`} style={{ width: `${Math.round(level * 100)}%` }} />
+    </div>
+  );
+  const text = big ? "mt-3 text-xl text-slate-300" : "text-xs text-slate-400";
+  if (mic.state === "blocked")
+    return (
+      <p className={`${big ? "text-2xl" : "text-xs"} text-amber-300`}>
+        🎙️ Microphone blocked: {mic.reason}
+      </p>
+    );
+  if (mic.state === "listening")
+    return (
+      <div className={big ? "flex flex-col items-center" : ""}>
+        {meter("bg-red-500")}
+        <p className={text}>
+          <span className="mr-1.5 inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
+          Microphone on — I&apos;m listening
+        </p>
+      </div>
+    );
+  if (mic.state === "testing")
+    return (
+      <div className={big ? "flex flex-col items-center" : ""}>
+        {meter("bg-emerald-500")}
+        <p className={text}>Testing the microphone — say something</p>
+      </div>
+    );
+  if (mic.state === "heard") return <p className={text}>🎙️ {mic.note ?? `Heard ${mic.words ?? 0} word${mic.words === 1 ? "" : "s"}`}</p>;
+  return mic.note ? <p className={text}>🎙️ {mic.note}</p> : big ? null : <p className={text}>🎙️ Microphone idle</p>;
+}
+
+// One turn's clock for the operator: where the seconds went between the patient falling silent
+// and the pod's voice.
+function TimingLine({ t }: { t: TurnTiming | null }) {
+  if (!t) return null;
+  const s = (a?: number, b?: number) => (a != null && b != null ? `${((a - b) / 1000).toFixed(1)} s` : "…");
+  const claude = t.stepMs != null && t.jevMs != null ? `${((t.stepMs - t.jevMs) / 1000).toFixed(1)} s` : "…";
+  return (
+    <p className="text-xs tabular-nums text-slate-500">
+      Turn timing · spoke {((t.spokeMs ?? 0) / 1000).toFixed(1)} s · stop→transcript {s(t.sttDone, t.speechEnd)} · →decision {s(t.triageDone, t.sttDone)} (Jev {t.jevMs != null ? `${(t.jevMs / 1000).toFixed(1)} s` : "…"}, Claude+other {claude}) · →voice {s(t.ttsFirstByte, t.triageDone)} · →sound {s(t.audioPlaying, t.ttsFirstByte)} ·{" "}
+      <span className="font-semibold text-slate-300">stop→sound {s(t.audioPlaying, t.speechEnd)}</span> · sound ended→listening {s(t.listeningAgain, t.audioEnded)}
+    </p>
   );
 }
 

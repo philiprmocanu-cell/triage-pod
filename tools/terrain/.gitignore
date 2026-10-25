@@ -1,0 +1,11 @@
+# Python environment (rebuilt by setup.sh) and every downloaded raster / CSV / cache.
+.venv/
+data/
+*.tif
+*.tiff
+*.vrt
+*.csv
+*.csv.gz
+*.pbf
+*.zip
+__pycache__/
