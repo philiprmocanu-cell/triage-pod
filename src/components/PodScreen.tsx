@@ -930,9 +930,9 @@ export default function PodScreen({ kiosk = false, podUrl, village }: { kiosk?: 
           </div>
           <div className="grid grid-cols-3 gap-3 text-sm">
             <Vital
-              label="Heart rate (camera)"
-              value={camera?.heartRateBpm ? `${Math.round(camera.heartRateBpm)} bpm` : `hold still… ${Math.min(100, Math.round(((camera?.hrCoverage ?? 0) / 8) * 100))}%`}
-              note={camera?.heartRateBpm ? `confidence ${Math.round((camera.heartRateConfidence ?? 0) * 100)}%` : "needs ~8 s of a still face"}
+              label="Pulse (finger sensor)"
+              value={podVitals?.finger && podVitals.hr > 0 ? `${Math.round(podVitals.hr)} bpm` : podVitals?.finger ? "measuring…" : "place a finger on the sensor"}
+              note={podVitals?.finger && podVitals.spo2 > 0 ? `oxygen ${podVitals.spo2}%` : "pulse comes from the sensor, not the camera"}
             />
             <Vital
               label="Face symmetry"
