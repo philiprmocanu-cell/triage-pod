@@ -2,11 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TerrainMeta, TerrainPad, TerrainPostSummary, TerrainTrack } from "@/lib/terrain";
+import { GROUND } from "@/lib/map/pin";
 
 // Proposed off-road tracks (motorbike and bicycle, never trucks) and drone landing pads, worked out
 // from free satellite data by tools/terrain: Copernicus 30 m elevation, ESA WorldCover land cover,
 // Sentinel-2 wetness, Google Open Buildings for where the houses are, OpenStreetMap/OSRM for the
 // roads that already exist. Every line is a proposal until a rider has done it with a GPS.
+//
+// Posts, villages, pads and the lines all sit at altitude 0: anything lifted above the ground in
+// globe units slides off its spot when the view is oblique (0.003 was ~85 px at the near zoom).
 
 type Post = { id: number; name: string; lat: number; lng: number };
 type Marker =
@@ -80,13 +84,14 @@ export default function TracksPage() {
         .htmlElementsData([])
         .htmlLat((d: object) => (d as Marker).lat)
         .htmlLng((d: object) => (d as Marker).lng)
-        .htmlAltitude(0.003)
+        .htmlAltitude(GROUND)
+        .htmlTransitionDuration(0)
         .htmlElement((d: object) => markerEl(d as Marker))
         .pathsData([])
         .pathPoints((d: object) => (d as PathRow).points)
         .pathPointLat((p: unknown) => (p as [number, number])[0])
         .pathPointLng((p: unknown) => (p as [number, number])[1])
-        .pathPointAlt(0.004)
+        .pathPointAlt(GROUND)
         .pathResolution(1)
         .pathColor((d: object) => (d as PathRow).color)
         .pathStroke((d: object) => (d as PathRow).stroke)
@@ -108,6 +113,7 @@ export default function TracksPage() {
       });
       g.onGlobeReady(() => setGlobeReady(true));
       globeRef.current = g;
+      (window as unknown as { __globe?: unknown }).__globe = g; // for measuring from the console
       fit();
     })();
     const ro = new ResizeObserver(fit);

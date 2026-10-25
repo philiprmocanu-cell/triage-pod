@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { DbConnection } from "@/module_bindings";
+import type { Settlement } from "@/lib/settlements/geo";
+import { GROUND, bandOf, restrokePaths, type Band } from "@/lib/map/pin";
+import { KIND_COLOR, KIND_WORD, alongPath, routeColor, routeStroke, runOf, type RouteState } from "@/lib/map/routes";
+import { RouteLegend } from "@/lib/map/legend";
+import { dotTexture, settlementGroups, settlementStyle, type ThreeLite } from "@/lib/map/settlements";
 
 // Where every delivery actually goes: the real carriers (ZAMMSA trucks, district pickups, CHA
 // motorbikes, CHW bicycles, Luangwa boats, proposed drones) and the road each planned order
@@ -12,6 +17,12 @@ import { DbConnection } from "@/module_bindings";
 // is open for them (the same rule as the live map); idle carriers are small dots at their base
 // and only a moving carrier gets an icon. Carriers glide along the road on the order's own
 // clock (departedAt / travelSeconds, exactly as the live map moves its markers).
+//
+// Everything on the ground is at altitude 0 (posts, carriers, stops, roads, the village dots):
+// a marker lifted above the ground in globe units slides off its village when the view is oblique
+// (0.004 was ~90 px at the near zoom). Marker moves are written without a tween, so a carrier is
+// where its road says it is on this very frame. Line colours, widths and the legend are shared
+// with the live map (src/lib/map).
 
 const SPACETIME_URI = process.env.NEXT_PUBLIC_SPACETIME_URI ?? "ws://localhost:3000";
 const DB_NAME = process.env.NEXT_PUBLIC_SPACETIME_DB ?? "podnet";
@@ -25,24 +36,16 @@ type Marker =
   | { kind: "village"; id: number; lat: number; lng: number; name: string; hub: boolean; active: boolean; picked: boolean }
   | { kind: "carrier"; id: number; lat: number; lng: number; name: string; ckind: string; status: string; moving: boolean; picked: boolean }
   | { kind: "stop"; id: string; lat: number; lng: number; n: number; run: string; name: string };
-type PathRow = { id: string; points: [number, number][]; color: string; high: boolean; status: string; stroke: number };
-type Settlement = { lat: number; lng: number; name?: string };
+type PathRow = { id: string; points: [number, number][]; kind: string | undefined; flood: string; status: string; state: RouteState };
 type Surface = { pavedKm: number; gravelKm: number; trackKm: number; assumedKm: number; worstSurface: string; totalKm: number; text: string };
 type Recheck = { at: string | null; checked: number; rerouted: { orderId: number; from: string; to: string; after: string }[]; changed: unknown[]; errors: string[] };
 type Meta = { router: string; googleKey: boolean; cachedPairs: number; surfacedPairs: number; surfaces: Record<string, Surface | null>; lastRecheck: Recheck | null };
 
-const KIND_COLOR: Record<string, string> = { truck: "#f59e0b", pickup: "#fb923c", motorbike: "#38bdf8", bicycle: "#34d399", boat: "#22d3ee", drone: "#a78bfa" };
-const KIND_WORD: Record<string, string> = { truck: "Truck", pickup: "Pickup", motorbike: "Motorbike", bicycle: "Bicycle", boat: "Boat", drone: "Drone (proposed)" };
 const short = (name: string) => name.replace(/ \(.*\)$/, "");
-// A multi-stop run writes "run A stop 2 of 4 (Chipata → Katete → …)" in every order's reason.
-const RUN_RE = /run ([A-Z0-9]+) stop (\d+) of (\d+) \(([^)]+)\)/;
-const runOf = (reason: string) => { const m = RUN_RE.exec(reason); return m ? { key: `${m[1]}|${m[4]}`, id: m[1], stop: Number(m[2]), of: Number(m[3]), tour: m[4] } : null; };
 const RECHECK_EVERY_MS = 10 * 60_000; // the watcher re-scores every live route this often while the page is open
 const WEATHER_POLL_MS = 60_000; // and as soon as the forecast cache has been refreshed
 const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-// Everything on the ground sits at one height so posts, carriers and the roads line up.
-const GROUND_ALT = 0.004;
-const STROKE = { picked: 0.9, normal: 0.55, run: 0.6, done: 0.4 };
+const DONE_ROADS_SHOWN = 40;
 
 export default function RoutesPage() {
   const el = useRef<HTMLDivElement>(null);
@@ -67,6 +70,7 @@ export default function RoutesPage() {
   const pickedCarrierRef = useRef<number | null>(null);
   const settlements = useRef<Settlement[] | null>(null);
   const markerPool = useRef(new Map<string, Marker>());
+  const band = useRef<Band>("far");
 
   const vname = (id: number) => short(villages.current.get(id)?.name ?? `#${id}`);
   const pickRoad = (id: bigint | null) => { pickedRef.current = id; setPicked(id); if (id !== null) { pickedCarrierRef.current = null; setPickedCarrier(null); } };
@@ -115,14 +119,22 @@ export default function RoutesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Every small settlement as a quiet grey point, when another agent's layer exists.
+  // Every settlement (23k of them) as a quiet dot on the ground: the same particles layer as the
+  // live map, one GPU draw, sized and faded by zoom band.
+  const drawSettlements = () => {
+    const g = globeRef.current;
+    if (!g || !settlements.current) return;
+    g.particlesData(settlementGroups(settlements.current));
+    const st = settlementStyle(band.current);
+    g.particlesSize(st.size);
+    g.particlesColor(st.color);
+  };
   useEffect(() => {
     fetch("/api/settlements")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        const list: Settlement[] = Array.isArray(j) ? j : j?.settlements ?? j?.points ?? j?.features?.map((f: { geometry?: { coordinates?: [number, number] }; properties?: { name?: string } }) => ({ lng: f.geometry?.coordinates?.[0], lat: f.geometry?.coordinates?.[1], name: f.properties?.name })) ?? [];
-        settlements.current = list.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
-        globeRef.current?.pointsData(settlements.current);
+      .then((r) => (r.ok ? r.json() : fetch("/settlements/eastern-province.json").then((f) => f.json())))
+      .then((j: { points?: Settlement[] }) => {
+        settlements.current = (j?.points ?? []).filter((s) => Number.isFinite(s.la) && Number.isFinite(s.ln));
+        drawSettlements();
       })
       .catch(() => undefined);
   }, []);
@@ -130,13 +142,14 @@ export default function RoutesPage() {
   // ---- the map ----
   useEffect(() => {
     let disposed = false;
-    let raf = 0;
+    let timer: ReturnType<typeof setInterval> | undefined;
     const fit = () => {
       const r = el.current?.getBoundingClientRect();
       if (r && r.width && r.height) globeRef.current?.width(r.width).height(r.height);
     };
     (async () => {
-      const Globe = (await import("globe.gl")).default;
+      // `three` ships no types here; only CanvasTexture is needed, for the round dot sprite.
+      const [{ default: Globe }, THREE] = await Promise.all([import("globe.gl"), import(("three") as string) as Promise<ThreeLite>]);
       if (disposed || !el.current) return;
       const g = new Globe(el.current)
         .globeImageUrl("/globe/earth-blue-marble.jpg")
@@ -148,57 +161,65 @@ export default function RoutesPage() {
         .htmlElementsData([])
         .htmlLat((d: object) => (d as Marker).lat)
         .htmlLng((d: object) => (d as Marker).lng)
-        .htmlAltitude(GROUND_ALT)
+        .htmlAltitude(GROUND) // on the ground, or it slides off its village when the view is oblique
+        .htmlTransitionDuration(0) // a moving carrier is drawn where it is now, not where it was a second ago
         .htmlElement((d: object) => markerEl(d as Marker, pickCarrier))
-        .pointsData(settlements.current ?? [])
-        .pointLat((d: object) => (d as Settlement).lat)
-        .pointLng((d: object) => (d as Settlement).lng)
-        .pointAltitude(0.001)
-        .pointRadius(0.15)
-        .pointColor(() => "rgba(148,163,184,.55)")
-        .pointsMerge(true)
+        .particlesData([])
+        .particlesList("list")
+        .particleLat("la")
+        .particleLng("ln")
+        .particleAltitude(GROUND)
+        .particlesSize("size")
+        .particlesSizeAttenuation(true)
+        .particlesColor("rgba(226,232,240,0.5)")
+        .particlesTexture(dotTexture(THREE))
+        .particleLabel(() => "")
         .pathsData([])
         .pathPoints((d: object) => (d as PathRow).points)
         .pathPointLat((p: unknown) => (p as [number, number])[0])
         .pathPointLng((p: unknown) => (p as [number, number])[1])
-        .pathPointAlt(GROUND_ALT)
+        .pathPointAlt(GROUND)
         .pathResolution(1)
-        .pathColor((d: object) => (d as PathRow).color)
-        .pathStroke((d: object) => (d as PathRow).stroke)
-        .pathDashLength((d: object) => ((d as PathRow).status === "moving" ? 0.08 : (d as PathRow).status === "done" ? 0.02 : 1))
-        .pathDashGap((d: object) => ((d as PathRow).status === "moving" ? 0.04 : (d as PathRow).status === "done" ? 0.02 : 0))
-        .pathDashAnimateTime((d: object) => ((d as PathRow).status === "moving" ? 6000 : 0))
+        .pathColor((d: object) => routeColor((d as PathRow).kind, (d as PathRow).flood, (d as PathRow).state))
+        .pathStroke((d: object) => routeStroke(band.current, (d as PathRow).state)) // pixels; re-stroked when the zoom band changes
+        .pathDashLength((d: object) => ((d as PathRow).status === "moving" ? 0.08 : 1))
+        .pathDashGap((d: object) => ((d as PathRow).status === "moving" ? 0.05 : 0))
+        .pathDashAnimateTime((d: object) => ((d as PathRow).status === "moving" ? 2600 : 0))
         .pathTransitionDuration(0)
         .onPathClick((p: object) => pickRoad(BigInt((p as PathRow).id)));
+      // The particle mesh would otherwise catch clicks meant for the roads and carriers near a village.
+      g.pointerEventsFilter((o: object) => (o as { __globeObjType?: string }).__globeObjType !== "particles");
       g.pointOfView({ lat: -13.3, lng: 32.2, altitude: 0.26 });
       g.controls().autoRotate = false;
       g.controls().zoomSpeed = 1.2;
       g.onGlobeClick(() => { pickRoad(null); pickCarrier(null); });
       globeRef.current = g;
+      (window as unknown as { __globe?: unknown }).__globe = g; // for measuring from the console
       fit();
-      const loop = () => {
-        raf = requestAnimationFrame(loop);
-        refresh();
-      };
-      let last = 0;
+      drawSettlements();
+      // A timer rather than requestAnimationFrame, so the roads and carriers are current the moment
+      // a hidden tab is shown again (rAF stops while the page is not visible).
       const refresh = () => {
-        const now = performance.now();
-        if (now - last < 120) return;
-        last = now;
         const conn = connRef.current;
-        if (!conn) return;
+        if (!conn || disposed) return;
         const alt = g.pointOfView()?.altitude ?? 1;
         el.current?.classList.toggle("far", alt > 0.12);
+        const b = bandOf(alt);
+        if (b !== band.current) {
+          band.current = b;
+          drawSettlements();
+          restrokePaths(g.pathsData() as PathRow[], (d) => routeStroke(b, d.state));
+        }
         draw(conn);
       };
-      loop();
+      timer = setInterval(refresh, 120);
     })();
     const ro = new ResizeObserver(fit);
     if (el.current) ro.observe(el.current);
     window.addEventListener("resize", fit);
     return () => {
       disposed = true;
-      cancelAnimationFrame(raf);
+      if (timer) clearInterval(timer);
       ro.disconnect();
       window.removeEventListener("resize", fit);
       globeRef.current?._destructor?.();
@@ -228,7 +249,9 @@ export default function RoutesPage() {
       }
     }
     const runPicked = p !== null ? [...runsDrawn.values()].find((r) => r.ids.has(p)) ?? null : null;
-    for (const plan of plansNow) {
+    // Delivered routes stay as dim lines, but only the most recent few dozen (a crisis leaves hundreds).
+    let doneShown = 0;
+    for (const plan of [...plansNow].sort((a, b) => Number(b.id - a.id))) {
       let points: [number, number][] = [];
       try {
         points = JSON.parse(plan.waypoints);
@@ -244,21 +267,25 @@ export default function RoutesPage() {
       // formula the live map uses for its movers, so both pages show it in the same place.
       if (c && o && o.status === "on_the_way" && o.departedAt && o.travelSeconds > 0 && !where.has(c.id)) {
         const t = Math.min(1, Number(nowUs - o.departedAt.microsSinceUnixEpoch) / 1e6 / o.travelSeconds);
-        const [lat, lng] = along(points, t);
+        const [lat, lng] = alongPath(points, t);
         where.set(c.id, { lat, lng });
       }
-      if (run && o) {
+      if (run && o && o.status !== "delivered" && plan.status !== "done") { // numbered stops only while the run is open
         const v = villages.current.get(o.toVillageId);
         if (v && !stopMarkers.some((m) => m.kind === "stop" && m.id === `${run.key}#${run.stop}`)) stopMarkers.push({ kind: "stop", id: `${run.key}#${run.stop}`, lat: v.lat, lng: v.lng, n: run.stop, run: run.id, name: short(v.name) });
       }
       if (drawn && drawn.planId !== plan.id) continue; // the run's road is drawn once
       const isPicked = p === plan.id || (runPicked !== null && drawn !== undefined && runPicked.planId === drawn.planId);
       const mine = (p === null && pc === null) || isPicked || (pc !== null && plan.carrierId === pc);
-      const high = plan.floodRisk === "high";
-      const color = high ? "#ef4444" : KIND_COLOR[c?.kind ?? ""] ?? "#e2e8f0";
-      paths.push({ id: String(plan.id), points, color: mine ? color : dim(color), high, status: plan.status, stroke: isPicked ? STROKE.picked : plan.status === "done" ? STROKE.done : run ? STROKE.run : STROKE.normal });
+      const done = plan.status === "done" || o?.status === "delivered";
+      if (done && !isPicked && ++doneShown > DONE_ROADS_SHOWN) continue;
+      // Bright and thick when picked, dashed while moving, dim once delivered or when another route is picked.
+      const state: RouteState = isPicked ? "picked" : !mine ? "dim" : done ? "done" : plan.status === "moving" || o?.status === "on_the_way" ? "moving" : "planned";
+      paths.push({ id: String(plan.id), points, kind: c?.kind, flood: plan.floodRisk, status: done ? "done" : plan.status, state });
     }
-    g.pathsData(paths);
+    // Keep the same row object while nothing about a road changed, so globe.gl leaves its line alone.
+    const prev = new Map((g.pathsData() as PathRow[]).map((r) => [r.id, r]));
+    g.pathsData(paths.map((r) => { const old = prev.get(r.id); return old && old.state === r.state && old.flood === r.flood && old.kind === r.kind && old.status === r.status && old.points.length === r.points.length ? old : r; }));
     // Markers keep their identity between frames (globe.gl only builds the element once per
     // object), so nothing flickers; a marker whose look changes (active, moving, picked) gets a
     // new key and a fresh element. Positions are updated in place.
@@ -428,20 +455,15 @@ export default function RoutesPage() {
           <span className="text-slate-500">(every 10 min while open, and when the forecast refreshes)</span>
         </p>
         {note && <p className="pointer-events-auto mt-2 rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-200">{note}</p>}
-        <div className="pointer-events-auto mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400">
-          {Object.entries(KIND_WORD).map(([k, w]) => (
-            <span key={k}>
-              <span className="mr-1 inline-block h-2 w-4 rounded-sm align-middle" style={{ background: KIND_COLOR[k] }} />
-              {w}
-            </span>
-          ))}
-          <span>
-            <span className="mr-1 inline-block h-2 w-4 rounded-sm bg-red-500 align-middle" />
-            Flood risk high
-          </span>
+        <RouteLegend className="pointer-events-auto mt-3" />
+        <div className="pointer-events-auto mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400">
           <span>
             <span className="mr-1 inline-block h-2 w-2 rounded-full bg-amber-400 align-middle" />
             Post with an open order
+          </span>
+          <span>
+            <span className="mr-1 inline-block h-2 w-2 rounded-full bg-slate-400 align-middle opacity-70" />
+            Idle carrier at its base
           </span>
         </div>
       </div>
@@ -568,32 +590,6 @@ export default function RoutesPage() {
 }
 
 const STATUS_TONE: Record<string, string> = { planned: "bg-amber-900/70 text-amber-200", moving: "bg-sky-900 text-sky-200", done: "bg-emerald-900/70 text-emerald-200", rerouted: "bg-orange-900 text-orange-200" };
-
-function dim(hex: string) {
-  return hex + "40";
-}
-
-// A point a fraction t of the way along a polyline (by straight segment length).
-function along(points: [number, number][], t: number): [number, number] {
-  if (t <= 0) return points[0];
-  if (t >= 1) return points[points.length - 1];
-  const seg: number[] = [];
-  let total = 0;
-  for (let i = 1; i < points.length; i++) {
-    const d = Math.hypot(points[i][0] - points[i - 1][0], (points[i][1] - points[i - 1][1]) * Math.cos((points[i][0] * Math.PI) / 180));
-    seg.push(d);
-    total += d;
-  }
-  let want = t * total;
-  for (let i = 0; i < seg.length; i++) {
-    if (want <= seg[i]) {
-      const f = seg[i] ? want / seg[i] : 0;
-      return [points[i][0] + (points[i + 1][0] - points[i][0]) * f, points[i][1] + (points[i + 1][1] - points[i][1]) * f];
-    }
-    want -= seg[i];
-  }
-  return points[points.length - 1];
-}
 
 function markerEl(m: Marker, onPickCarrier: (id: number) => void) {
   const d = document.createElement("div");

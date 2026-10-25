@@ -4,6 +4,10 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { DbConnection } from "@/module_bindings";
 import { SettlementIndex, catchments, earthUrl, fmtPeople, kindOf, kmBetween, mapsSatelliteUrl, nameOf, servedBy, type Catchment, type Settlement, type SettlementSources } from "@/lib/settlements/geo";
+import { GROUND, bandOf, kmPerPx, polar2Cartesian, restrokePaths, type Band } from "@/lib/map/pin";
+import { FLOOD_COLOR, KIND_COLOR, parseWaypoints, routeColor, routeStroke, runOf, type RouteState } from "@/lib/map/routes";
+import { RouteLegend } from "@/lib/map/legend";
+import { dotTexture, settlementGroups, settlementStyle, type ThreeLite } from "@/lib/map/settlements";
 
 // Live 3D view of the pod network, fed straight from SpacetimeDB. Nothing on it is pre-made:
 // a dot is a health post, and it only lights up when a pod there flags a need. The need becomes
@@ -14,9 +18,16 @@ import { SettlementIndex, catchments, earthUrl, fmtPeople, kindOf, kmBetween, ma
 // Under the posts, every settlement in the province (tens of thousands: GeoNames names plus
 // Google Open Buildings roof clusters, see tools/settlements/fetch.py) is drawn as a tiny dot with
 // the particles layer — one GPU draw, no DOM. Hover shows the name, a click opens the post that
-// serves it. Everything sits at ground level (altitude 0) so dots stay on their pixel when the
-// camera tilts or zooms; the HTML markers keep their element between frames and only the movers'
+// serves it. EVERYTHING sits at ground level (altitude 0: posts, village dots, movers, pops, pins,
+// roads) so it stays on its pixel when the view is oblique or zoomed in; anything lifted above the
+// ground in globe units parallaxes away from its spot (0.004 was ~90 px at the near zoom). Depth
+// cues (the mover icon above the road, the "+1" bubble floating up) are CSS transforms inside a
+// zero-size anchor. The HTML markers keep their element between frames and only the movers'
 // positions are written per frame.
+//
+// Planned routes (route_plan.waypoints) are drawn as fat lines in the carrier's colour, red where
+// the flood check said high, dashed and animated while moving, dim once delivered; multi-stop runs
+// get numbered stop markers; drones fly as arcs. A click on a line opens the destination's panel.
 
 const SPACETIME_URI = process.env.NEXT_PUBLIC_SPACETIME_URI ?? "ws://localhost:3000";
 const DB_NAME = process.env.NEXT_PUBLIC_SPACETIME_DB ?? "podnet";
@@ -43,28 +54,38 @@ type Carrier = { id: number; name: string; kind: string; operator: string; statu
 type FeedItem = { id: number; at: string; text: string; tone: "need" | "move" | "done" | "alert" | "live" | "restock" | "agent" };
 type VillageMarker = { kind: "village"; v: Village; lat: number; lng: number; state: "quiet" | "active" | "picked"; online: boolean; el?: HTMLElement };
 type MoverMarker = { kind: "mover"; id: string; lat: number; lng: number; mode: string; label: string; el?: HTMLElement };
+type StopMarker = { kind: "stop"; id: string; lat: number; lng: number; n: number; run: string; name: string };
 type Marker =
   | VillageMarker
   | { kind: "pop"; id: number; lat: number; lng: number; text: string; tone: string }
   | MoverMarker
+  | StopMarker
   | { kind: "pin"; lat: number; lng: number };
 type Layers = { flights: boolean; hubs: boolean; labels: boolean; villages: boolean; pin: boolean };
 // A planned road, ready to draw and to walk a mover along.
-type RoadPath = { key: string; pts: [number, number][]; cum: number[]; total: number; mode: string; flood: string; moving: boolean; orderId: string };
+type RoadPath = {
+  key: string;
+  planId: string;
+  pts: [number, number][];
+  cum: number[];
+  total: number;
+  mode: string;
+  carrier: string | undefined; // carrier kind: truck, pickup, motorbike, bicycle, boat, drone
+  flood: string;
+  state: RouteState;
+  moving: boolean;
+  orderId: string;
+  toVillageId: number;
+  run: ReturnType<typeof runOf>;
+};
+type Arc = { a: Village; b: Village; mode: string; kind: string; flood: string; state: RouteState };
 type Pin = { lat: number; lng: number; hamlet: (Settlement & { km: number }) | null; post: { v: Village; km: number } | null };
 type PickedSettlement = { s: Settlement; served: { post: Village; km: number } | null };
 
 let feedSeq = 0;
 const short = (name: string) => name.replace(/ \(.*\)$/, "");
 const plain = (text: string) => text.replace(/[\p{Extended_Pictographic}️]/gu, "").trim();
-const GLOBE_R = 100; // three-globe's sphere radius, for writing marker positions in place
-const polar2Cartesian = (lat: number, lng: number, alt = 0) => {
-  const phi = ((90 - lat) * Math.PI) / 180, theta = ((90 - lng) * Math.PI) / 180, r = GLOBE_R * (1 + alt);
-  return { x: r * Math.sin(phi) * Math.cos(theta), y: r * Math.cos(phi), z: r * Math.sin(phi) * Math.sin(theta) };
-};
-// How many km one screen pixel covers at this camera altitude (fov 50°, view height in px).
-const kmPerPx = (alt: number, heightPx: number) => (2 * alt * GLOBE_R * Math.tan((25 * Math.PI) / 180) * 63.71) / Math.max(1, heightPx);
-const ALT_MOVER = 0.0025, ALT_POP = 0.002, ALT_PIN = 0;
+const DONE_ROADS_SHOWN = 40; // delivered routes stay as dim lines, the most recent few dozen
 
 export default function GlobePage() {
   const el = useRef<HTMLDivElement>(null);
@@ -81,6 +102,9 @@ export default function GlobePage() {
   const layersRef = useRef<Layers>({ flights: true, hubs: true, labels: false, villages: true, pin: false });
   const roads = useRef(new Map<string, RoadPath>()); // by plan key, so globe.gl keeps the same path object between redraws
   const roadByOrder = useRef(new Map<string, RoadPath>());
+  const stops = useRef(new Map<string, StopMarker>()); // numbered stops of multi-stop runs, stable objects
+  const pickedPlanRef = useRef<string | null>(null); // a route the user clicked: drawn bright and thick
+  const [pickedPlan, setPickedPlan] = useState<string | null>(null);
   const settlements = useRef<Settlement[]>([]);
   const index = useRef<SettlementIndex | null>(null);
   const catchRef = useRef<{ assign: Int32Array; byPost: Map<number, Catchment> } | null>(null);
@@ -135,18 +159,30 @@ export default function GlobePage() {
   };
 
   const lastPickAt = useRef(0);
-  const pick = (v: Village | null, focus?: { lat: number; lng: number }, keepSettlement = false) => {
+  const pick = (v: Village | null, focus?: { lat: number; lng: number }, keepSettlement = false, opts: { fly?: boolean; keepRoute?: boolean } = {}) => {
     if (v) lastPickAt.current = Date.now();
     else if (Date.now() - lastPickAt.current < 500) return; // the globe's own click lands right after the dot's
     pickedRef.current = v;
     setPicked(v);
     if (!keepSettlement) setPickedSettlement(null);
+    if (!opts.keepRoute) { pickedPlanRef.current = null; setPickedPlan(null); }
     setCatchment(v && catchRef.current ? catchRef.current.byPost.get(v.id) ?? null : null);
     rebuildVillages();
     // Fly to the exact dot, close enough that zooming further lands on the village itself.
     const f = focus ?? (v ? { lat: v.lat, lng: v.lng } : null);
-    if (f) globeRef.current?.pointOfView({ lat: f.lat, lng: f.lng, altitude: focus ? 0.012 : 0.02 }, 900);
+    if (f && opts.fly !== false) globeRef.current?.pointOfView({ lat: f.lat, lng: f.lng, altitude: focus ? 0.012 : 0.02 }, 900);
     redrawRoutes();
+  };
+
+  // A route line (or its row in the panel) was clicked: light it up and open the destination's panel
+  // where it is, without flying off.
+  const pickRoute = (planId: string, toVillageId: number) => {
+    const v = villages.current.get(toVillageId) ?? null;
+    pickedPlanRef.current = planId;
+    setPickedPlan(planId);
+    lastPickAt.current = Date.now();
+    if (v && pickedRef.current?.id !== v.id) pick(v, undefined, false, { fly: false, keepRoute: true });
+    else redrawRoutes();
   };
 
   // A settlement dot was clicked: open the post that serves it, centred on the village.
@@ -188,78 +224,99 @@ export default function GlobePage() {
   // dot. Sizes are in globe units with perspective, so a hamlet is under a pixel from far out and
   // a few pixels up close; the opacity follows the zoom band (23,000 dots over a province-sized
   // patch of screen would otherwise fill it white). Band changes only touch the material.
-  const band = useRef<"far" | "mid" | "near">("far");
+  const band = useRef<Band>("far");
   const drawSettlements = () => {
     const g = globeRef.current;
     if (!g) return;
     if (!layersRef.current.villages || !settlements.current.length) { g.particlesData([]); return; }
-    const small: Settlement[] = [], mid: Settlement[] = [], big: Settlement[] = [], town: Settlement[] = [];
-    for (const s of settlements.current) {
-      const h = s.h ?? (s.n ? 20 : 3);
-      (h >= 1500 ? town : h >= 150 ? big : h >= 25 ? mid : small).push(s);
-    }
-    g.particlesData([
-      { list: small, size: 0.011, tone: 0 },
-      { list: mid, size: 0.017, tone: 1 },
-      { list: big, size: 0.026, tone: 2 },
-      { list: town, size: 0.042, tone: 3 },
-    ]);
+    g.particlesData(settlementGroups(settlements.current));
     restyleSettlements();
   };
   const restyleSettlements = () => {
     const g = globeRef.current;
     if (!g) return;
-    const b = band.current;
-    const scale = b === "far" ? 1 : b === "mid" ? 0.8 : 0.55;
-    const alpha = b === "far" ? [0.22, 0.3, 0.45, 0.7] : b === "mid" ? [0.4, 0.5, 0.65, 0.85] : [0.6, 0.7, 0.8, 0.9];
-    g.particlesSize((d: object) => (d as { size: number }).size * scale);
-    g.particlesColor((d: object) => `rgba(${(d as { tone: number }).tone >= 2 ? "248,250,252" : "226,232,240"},${alpha[(d as { tone: number }).tone]})`);
+    const st = settlementStyle(band.current);
+    g.particlesSize(st.size);
+    g.particlesColor(st.color);
   };
 
-  // Routes: a planned road is drawn as the road (pathsData); drones, and road orders the planner
-  // has not touched yet, keep the arc. Only open orders, only when the layer is on, and only the
-  // picked post's when one is picked.
+  // Routes: every plan in route_plan is drawn on its road (pathsData) in the carrier's colour, red
+  // where the flood risk is high; drones, and orders the planner has not touched yet, fly as arcs.
+  // Moving routes are bright and dashed, planned ones plain, delivered ones dim; a multi-stop run
+  // is drawn once with numbered stops. Only when the layer is on, and only the picked post's when
+  // one is picked.
   const redrawRoutes = () => {
     const conn = connRef.current, g = globeRef.current;
     if (!conn || !g) return;
     const p = pickedRef.current;
     const orders = [...conn.db.deliveryOrder.iter()] as Order[];
     const orderById = new Map(orders.map((o) => [String(o.id), o]));
+    const carrierKind = new Map([...conn.db.carrier.iter()].map((c) => [c.id, (c as Carrier).kind]));
     const mine = (o: Order) => !p || o.toVillageId === p.id || o.fromVillageId === p.id;
     const paths: RoadPath[] = [];
+    const droneArcs: Arc[] = [];
     const planned = new Set<string>();
     const seen = new Set<string>();
+    const stopIds = new Set<string>();
+    const runsDrawn = new Set<string>();
+    let doneShown = 0;
     roadByOrder.current.clear();
     if (layersRef.current.flights) {
-      for (const plan of conn.db.routePlan.iter() as Iterable<Plan>) {
+      // Newest plans first, so the dim delivered ones that are kept are the recent ones.
+      const plans = ([...conn.db.routePlan.iter()] as Plan[]).sort((a, b) => Number(b.id - a.id));
+      for (const plan of plans) {
         const o = orderById.get(String(plan.orderId));
-        if (!o || plan.status === "done" || o.status === "delivered") continue;
-        const key = `${plan.id}:${plan.status}:${plan.waypoints.length}:${o.mode}`;
+        if (!o) continue;
+        const done = plan.status === "done" || o.status === "delivered";
+        const carrier = carrierKind.get(plan.carrierId);
+        const pickedRoute = pickedPlanRef.current === String(plan.id);
+        const state: RouteState = pickedRoute ? "picked" : done ? "done" : plan.status === "moving" || o.status === "on_the_way" ? "moving" : "planned";
+        const key = `${plan.id}:${plan.waypoints.length}:${state}:${plan.floodRisk}:${carrier}`;
         let r = roads.current.get(key);
         if (!r) {
           const pts = parseWaypoints(plan.waypoints);
           if (pts.length < 2) continue;
           const cum = [0];
           for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + kmBetween(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]));
-          r = { key, pts, cum, total: cum[cum.length - 1], mode: o.mode, flood: plan.floodRisk, moving: plan.status === "moving" || o.status === "on_the_way", orderId: String(o.id) };
+          r = { key, planId: String(plan.id), pts, cum, total: cum[cum.length - 1], mode: o.mode, carrier, flood: plan.floodRisk, state, moving: state === "moving", orderId: String(o.id), toVillageId: o.toVillageId, run: runOf(plan.reason) };
           roads.current.set(key, r);
         }
         seen.add(key);
-        roadByOrder.current.set(r.orderId, r);
-        planned.add(r.orderId);
-        if (mine(o)) paths.push(r);
+        if (!done) { roadByOrder.current.set(r.orderId, r); planned.add(r.orderId); }
+        if (!mine(o)) continue;
+        if (done && !pickedRoute && ++doneShown > DONE_ROADS_SHOWN) continue;
+        if (r.run && !done) {
+          // Numbered stop at this order's destination; the run's shared road is drawn once.
+          const v = villages.current.get(o.toVillageId);
+          if (v) {
+            const id = `${r.run.key}#${r.run.stop}`;
+            stopIds.add(id);
+            if (!stops.current.has(id)) { stops.current.set(id, { kind: "stop", id, lat: v.lat, lng: v.lng, n: r.run.stop, run: r.run.id, name: short(v.name) }); markersDirty.current = true; }
+          }
+          if (runsDrawn.has(r.run.key)) continue;
+          runsDrawn.add(r.run.key);
+        }
+        if (carrier === "drone" || o.mode === "drone") {
+          if (done) continue; // a finished flight leaves no arc in the sky
+          const a = villages.current.get(o.fromVillageId), b = villages.current.get(o.toVillageId);
+          if (a && b) droneArcs.push({ a, b, mode: "drone", kind: o.kind, flood: plan.floodRisk, state });
+          continue;
+        }
+        paths.push(r);
       }
     }
     for (const key of [...roads.current.keys()]) if (!seen.has(key)) roads.current.delete(key);
+    for (const id of [...stops.current.keys()]) if (!stopIds.has(id)) { stops.current.delete(id); markersDirty.current = true; }
     g.pathsData(paths);
-    const arcs = layersRef.current.flights
+    // Open orders the planner has not touched yet keep the straight arc, by mode.
+    const arcs: Arc[] = layersRef.current.flights
       ? orders
           .filter((o) => o.status !== "delivered" && o.mode !== "walk" && !planned.has(String(o.id)))
           .filter(mine)
-          .map((o) => ({ a: villages.current.get(o.fromVillageId), b: villages.current.get(o.toVillageId), mode: o.mode, kind: o.kind }))
+          .map((o) => ({ a: villages.current.get(o.fromVillageId)!, b: villages.current.get(o.toVillageId)!, mode: o.mode, kind: o.kind, flood: "low", state: (o.status === "on_the_way" ? "moving" : "planned") as RouteState }))
           .filter((x) => x.a && x.b)
       : [];
-    g.arcsData(arcs);
+    g.arcsData([...arcs, ...droneArcs]);
   };
 
   // ---- globe ----
@@ -285,15 +342,16 @@ export default function GlobePage() {
         .htmlElementsData([])
         .htmlLat((d: object) => (d as Marker).lat)
         .htmlLng((d: object) => (d as Marker).lng)
-        // Posts and pins sit ON the ground; anything above it parallaxes away from its spot when the camera tilts.
-        .htmlAltitude((d: object) => ((d as Marker).kind === "mover" ? ALT_MOVER : (d as Marker).kind === "pop" ? ALT_POP : (d as Marker).kind === "pin" ? ALT_PIN : 0))
+        // Every marker sits ON the ground (altitude 0); anything above it parallaxes away from its
+        // spot when the view is oblique. Depth cues are CSS inside the zero-size anchor.
+        .htmlAltitude(GROUND)
         .htmlTransitionDuration(0)
         .htmlElement((d: object) => markerEl(d as Marker, (v) => pick(v)))
         .particlesData([])
         .particlesList("list")
         .particleLat("la")
         .particleLng("ln")
-        .particleAltitude(0.0012)
+        .particleAltitude(GROUND)
         .particlesSize("size")
         .particlesSizeAttenuation(true)
         .particlesColor("rgba(226,232,240,0.5)")
@@ -303,25 +361,29 @@ export default function GlobePage() {
         .pathPoints("pts")
         .pathPointLat((p: object) => (p as [number, number])[0])
         .pathPointLng((p: object) => (p as [number, number])[1])
-        .pathPointAlt(0.0015)
-        .pathColor((d: object) => roadColor(d as RoadPath))
-        .pathStroke(0.028)
+        .pathPointAlt(GROUND)
+        .pathResolution(1)
+        .pathColor((d: object) => routeColor((d as RoadPath).carrier, (d as RoadPath).flood, (d as RoadPath).state))
+        .pathStroke((d: object) => routeStroke(band.current, (d as RoadPath).state)) // pixels; re-stroked when the zoom band changes
         .pathDashLength((d: object) => ((d as RoadPath).moving ? 0.08 : 1))
         .pathDashGap((d: object) => ((d as RoadPath).moving ? 0.05 : 0))
         .pathDashAnimateTime((d: object) => ((d as RoadPath).moving ? 2600 : 0))
         .pathTransitionDuration(0)
         .pathLabel((d: object) => {
           const r = d as RoadPath;
-          return `<div class="tip">${r.mode === "drone" ? "drone" : "road"} · ${r.total.toFixed(0)} km · flood risk ${r.flood}${r.moving ? " · moving" : ""}</div>`;
+          const who = r.carrier ? r.carrier : r.mode === "drone" ? "drone" : "road";
+          return `<div class="tip">${r.run ? `run ${r.run.id} · ` : ""}${who} · ${r.total.toFixed(0)} km · flood risk ${r.flood} · ${r.state === "done" ? "delivered" : r.state === "picked" ? "selected" : r.state}</div>`;
         })
+        .onPathClick((d: object) => { const r = d as RoadPath; pickRoute(r.planId, r.toVillageId); })
         .arcsData([])
-        .arcStartLat((d: object) => (d as { a: Village }).a.lat)
-        .arcStartLng((d: object) => (d as { a: Village }).a.lng)
-        .arcEndLat((d: object) => (d as { b: Village }).b.lat)
-        .arcEndLng((d: object) => (d as { b: Village }).b.lng)
+        .arcStartLat((d: object) => (d as Arc).a.lat)
+        .arcStartLng((d: object) => (d as Arc).a.lng)
+        .arcEndLat((d: object) => (d as Arc).b.lat)
+        .arcEndLng((d: object) => (d as Arc).b.lng)
         .arcColor((d: object) => {
-          const o = d as { mode: string; kind: string };
-          return o.kind === "restock" ? ["#34d399", "#d1fae5"] : o.mode === "drone" ? ["#38bdf8", "#e0f2fe"] : ["#a78bfa", "#ede9fe"];
+          const o = d as Arc;
+          if (o.flood === "high") return [FLOOD_COLOR, "#fecaca"];
+          return o.mode === "drone" ? [KIND_COLOR.drone, "#ede9fe"] : o.kind === "restock" ? ["#34d399", "#d1fae5"] : [KIND_COLOR.truck, "#fef3c7"];
         })
         .arcAltitude(0.012)
         .arcStroke(0.05)
@@ -354,6 +416,9 @@ export default function GlobePage() {
       fit();
       (window as unknown as { __globe?: unknown }).__globe = g; // for debugging from the console
       drawSettlements();
+      // The tables may have arrived before the globe did: draw what is already there.
+      rebuildVillages();
+      redrawRoutes();
 
       // Movers (drones/trucks) glide between posts. Their positions are written straight into the
       // marker's three.js object every frame; the data list only changes when a mover appears or ends.
@@ -399,19 +464,23 @@ export default function GlobePage() {
         // Write mover positions in place (no data re-bind, no element churn).
         for (const m of movers.current.values()) {
           const obj = (m as unknown as { __threeObjHtml?: { position: { x: number; y: number; z: number } } }).__threeObjHtml;
-          if (obj) Object.assign(obj.position, polar2Cartesian(m.lat, m.lng, ALT_MOVER));
+          if (obj) Object.assign(obj.position, polar2Cartesian(m.lat, m.lng, GROUND));
           const eta = m.el?.querySelector(".eta");
           if (eta && eta.textContent !== m.label) eta.textContent = m.label;
         }
         const alt = g.pointOfView()?.altitude ?? 1;
         el.current?.classList.toggle("far", alt > 0.16); // names of small posts only once you zoom in
         el.current?.classList.toggle("near", alt < 0.11);
-        const b = alt > 0.16 ? "far" : alt < 0.11 ? "near" : "mid";
-        if (b !== band.current) { band.current = b; restyleSettlements(); }
+        const b = bandOf(alt);
+        if (b !== band.current) {
+          band.current = b;
+          restyleSettlements();
+          restrokePaths(g.pathsData() as RoadPath[], (d) => routeStroke(b, d.state));
+        }
         if (markersDirty.current) {
           markersDirty.current = false;
           const pinMarker: Marker[] = pinRef.current ? [{ kind: "pin", lat: pinRef.current.lat, lng: pinRef.current.lng }] : [];
-          g.htmlElementsData([...villageMarkers.current.values(), ...pops.current, ...movers.current.values(), ...pinMarker]);
+          g.htmlElementsData([...villageMarkers.current.values(), ...stops.current.values(), ...pops.current, ...movers.current.values(), ...pinMarker]);
         }
       };
       loop();
@@ -649,6 +718,7 @@ export default function GlobePage() {
           <Toggle on={layers.labels} onClick={() => setLayer("labels", !layers.labels)} label="All names" />
           <Toggle on={layers.pin} onClick={() => setLayer("pin", !layers.pin)} label={layers.pin ? "Drop a pin: click the map" : "Drop a pin"} warn />
         </div>
+        {layers.flights && <RouteLegend className="pointer-events-auto mt-2" />}
         <div className="pointer-events-auto mt-2 flex flex-wrap gap-2 text-xs">
           <Toggle on={simulate} onClick={() => conn?.reducers.setSimulation({ on: !simulate })} label={simulate ? "Simulated visits: on" : "Simulated visits: off"} warn />
           <button onClick={() => conn?.reducers.resetDemo({})} className="rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-1.5 hover:bg-slate-800">
@@ -764,14 +834,23 @@ export default function GlobePage() {
                 <Section title={`Roads planned · ${plansOf.length}`}>
                   {plansOf.map((p) => {
                     const c = carriers.get(p.carrierId);
+                    const on = pickedPlan === String(p.id);
+                    const o = asked.concat(sent).find((x) => x.id === p.orderId);
+                    const run = runOf(p.reason);
                     return (
-                      <div key={String(p.id)} className="flex items-baseline justify-between gap-2 border-l-2 border-slate-700 py-0.5 pl-2 text-[12px] leading-4">
+                      <button
+                        key={String(p.id)}
+                        onClick={() => pickRoute(String(p.id), o?.toVillageId ?? picked.id)}
+                        className={`flex w-full items-baseline justify-between gap-2 border-l-2 py-0.5 pl-2 text-left text-[12px] leading-4 ${on ? "border-sky-400 bg-sky-950/50" : "border-slate-700 hover:bg-slate-900/60"}`}
+                        style={{ borderLeftColor: p.floodRisk === "high" ? FLOOD_COLOR : c ? KIND_COLOR[c.kind] : undefined }}
+                        title="show this route on the map"
+                      >
                         <span className="truncate">
-                          <span className="text-slate-100">order #{String(p.orderId)}</span>
+                          <span className="text-slate-100">{run ? `run ${run.id} · stop ${run.stop}/${run.of}` : `order #${String(p.orderId)}`}</span>
                           <span className="text-slate-500"> · {c ? `${c.kind} · ${c.operator}` : `carrier ${p.carrierId}`} · {p.km.toFixed(0)} km · {p.minutes} min</span>
                         </span>
                         <span className={`shrink-0 ${p.floodRisk === "high" ? "text-red-400" : p.floodRisk === "medium" ? "text-amber-300" : "text-emerald-300"}`}>{p.status === "moving" ? "moving" : p.status} · flood {p.floodRisk}</span>
-                      </div>
+                      </button>
                     );
                   })}
                 </Section>
@@ -804,16 +883,6 @@ const TONE: Record<FeedItem["tone"], string> = {
   agent: "t-agent",
 };
 
-function parseWaypoints(json: string): [number, number][] {
-  try {
-    const raw = JSON.parse(json) as unknown;
-    if (!Array.isArray(raw)) return [];
-    return raw.filter((p): p is [number, number] => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p) => [p[0], p[1]]);
-  } catch {
-    return [];
-  }
-}
-
 // Where along the road a mover is at fraction t of its journey (by distance, not by waypoint count).
 function alongRoad(r: RoadPath, t: number): [number, number] {
   const d = Math.max(0, Math.min(1, t)) * r.total;
@@ -823,27 +892,6 @@ function alongRoad(r: RoadPath, t: number): [number, number] {
   const seg = r.cum[i] - r.cum[i - 1];
   const f = seg > 0 ? (d - r.cum[i - 1]) / seg : 0;
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
-}
-
-const roadColor = (r: RoadPath) => (r.flood === "high" ? "rgba(248,113,113,0.95)" : r.flood === "medium" ? "rgba(251,191,36,0.9)" : r.mode === "drone" ? "rgba(56,189,248,0.9)" : "rgba(167,139,250,0.9)");
-
-type ThreeLite = { CanvasTexture: new (c: HTMLCanvasElement) => { needsUpdate: boolean } };
-
-// A soft round sprite for the settlement dots (points are square without one).
-function dotTexture(THREE: ThreeLite) {
-  const c = document.createElement("canvas");
-  c.width = c.height = 32;
-  const ctx = c.getContext("2d")!;
-  const grd = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-  grd.addColorStop(0, "rgba(255,255,255,1)");
-  grd.addColorStop(0.55, "rgba(255,255,255,1)");
-  grd.addColorStop(0.75, "rgba(255,255,255,0.6)");
-  grd.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = grd;
-  ctx.fillRect(0, 0, 32, 32);
-  const tex = new THREE.CanvasTexture(c);
-  tex.needsUpdate = true;
-  return tex;
 }
 
 function GoogleLinks({ lat, lng }: { lat: number; lng: number }) {
@@ -956,6 +1004,10 @@ function markerEl(d: Marker, onPick: (v: Village) => void): HTMLElement {
   } else if (d.kind === "pin") {
     n.className = "pin";
     n.innerHTML = `<span class="needle"></span><span class="head"></span>`;
+  } else if (d.kind === "stop") {
+    n.className = "stop";
+    n.innerHTML = `<i>${d.n}</i>`;
+    n.title = `run ${d.run}, stop ${d.n}: ${d.name}`;
   } else {
     n.className = `mover ${d.mode}`;
     n.innerHTML = `<span class="ic"></span><span class="eta">${d.label}</span>`;
@@ -1001,6 +1053,8 @@ const CSS = `
 .pop.done{background:#34d399;color:#052e16}
 .pop.alert{background:#ef4444;color:white}
 .pop.restock{background:#38bdf8;color:#082f49}
+.stop{position:absolute;left:0;top:0;transform:translate(-50%,-50%);pointer-events:none}
+.stop i{display:grid;place-items:center;width:16px;height:16px;border-radius:50%;background:#0f766e;color:#ecfeff;font:700 10px/1 ui-monospace,Menlo,monospace;font-style:normal;box-shadow:0 0 0 2px #99f6e4,0 0 0 3.5px rgba(2,6,23,.9)}
 .pin{position:relative;width:0;height:0}
 .pin .head{position:absolute;left:-7px;top:-24px;width:14px;height:14px;border-radius:999px 999px 999px 0;transform:rotate(-45deg);background:#f472b6;box-shadow:0 0 0 2px rgba(2,6,23,.85),0 0 14px rgba(244,114,182,.9)}
 .pin .needle{position:absolute;left:-3px;top:-3px;width:6px;height:6px;border-radius:999px;background:#fff;box-shadow:0 0 0 2px rgba(2,6,23,.85)}
