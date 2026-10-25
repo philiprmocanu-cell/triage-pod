@@ -12,7 +12,12 @@ let client: Anthropic | null = null;
 const anthropic = () => (client ??= new Anthropic());
 
 export const OPINION_MODEL = "claude-opus-5-5";
-export const hasOpinion = () => Boolean(process.env.ANTHROPIC_API_KEY);
+// When the key is capped or the API is down, every call fails the same way for a while: remember
+// it (shared across route bundles) and stop asking for ten minutes instead of paying the wait each burst.
+const g = globalThis as unknown as { __triageOpinionDown?: { until: number; why: string } };
+export const UNAVAILABLE_FOR_MS = 10 * 60_000;
+export const opinionDown = (): string | null => (g.__triageOpinionDown && Date.now() < g.__triageOpinionDown.until ? g.__triageOpinionDown.why : null);
+export const hasOpinion = () => Boolean(process.env.ANTHROPIC_API_KEY) && !opinionDown();
 
 export type Verdict = { verdict: "yes" | "no" | "unclear"; reason: string };
 export type Opinion = { verdicts: Record<string, Verdict>; ms: number; model: string; error?: string };
@@ -70,7 +75,12 @@ export async function secondOpinion(frames: Frame[], traitIds: string[], opts: {
     return { verdicts, ms: Date.now() - t0, model: response.model ?? OPINION_MODEL };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // No answer in time counts as unclear: the pod does not ask, and tries again on the next burst.
+    // A capped key, bad key or dead API: every call would fail. Stand down for a while and say why.
+    if (/usage limits|invalid_request_error|authentication|permission|credit|overloaded/i.test(msg) || /\b(400|401|402|403|529)\b/.test(msg)) {
+      const why = /usage limits/i.test(msg) ? "Anthropic key at its usage limit" : `Anthropic API error (${msg.slice(0, 60)})`;
+      g.__triageOpinionDown = { until: Date.now() + UNAVAILABLE_FOR_MS, why };
+    }
+    // No answer counts as unclear and is NOT remembered: the caller decides what an unanswered check means.
     return { verdicts: Object.fromEntries(ids.map((id) => [id, { verdict: "unclear" as const, reason: `no answer: ${msg.slice(0, 80)}` }])), ms: Date.now() - t0, model: OPINION_MODEL, error: msg };
   }
 }

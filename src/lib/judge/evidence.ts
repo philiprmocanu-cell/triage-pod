@@ -47,13 +47,14 @@ export type Evidence = {
   streak: number; // consecutive bursts at or above the hunch threshold
   needed: number;
   persisted: boolean; // streak reached and every burst in it had a clear, evenly lit view
+  strong: boolean; // persisted AND every burst in the streak was at the old single-burst bar (threshold / 0.875): the bar when no second opinion can be had
   blocker: string | null; // why the streak doesn't count (face not clear, uneven light, body not in view)
   verdict: Verdict | null; // Claude's second opinion, when it was asked
   passed: boolean; // the sign may reach the engine
   line: string; // what the operator reads
 };
 
-type Session = { bursts: Burst[]; verdicts: Map<string, { verdict: Verdict; at: number }>; lastEvidence: Evidence[]; lastAt: number; notes: { line: string; at: number }[] };
+type Session = { bursts: Burst[]; verdicts: Map<string, { verdict: Verdict; at: number }>; misses: Map<string, number>; lastEvidence: Evidence[]; lastAt: number; notes: { line: string; at: number }[] };
 export const NOTE_TTL_MS = 60_000;
 // One memory for the whole server process: /api/scan, /api/judge and /api/test are bundled
 // separately by Next, each with its own copy of this module, so a plain module variable would
@@ -63,7 +64,7 @@ const sessions = (g.__triageJudgeSessions ??= new Map<string, Session>());
 
 export function session(id = "pod"): Session {
   let s = sessions.get(id);
-  if (!s) sessions.set(id, (s = { bursts: [], verdicts: new Map(), lastEvidence: [], lastAt: 0, notes: [] }));
+  if (!s) sessions.set(id, (s = { bursts: [], verdicts: new Map(), misses: new Map(), lastEvidence: [], lastAt: 0, notes: [] }));
   return s;
 }
 export function resetSession(id = "pod") {
@@ -86,11 +87,13 @@ export function assess(id: string, trait: string): Evidence {
   const th = hunchThreshold(trait);
   let streak = 0;
   let blocker: string | null = null;
+  let weakest = 1;
   for (let i = s.bursts.length - 1; i >= 0; i--) {
     const b = s.bursts[i];
     if ((b.raw[trait] ?? 0) < th) break;
     streak++;
     if (streak > NEEDED_BURSTS) continue;
+    weakest = Math.min(weakest, b.raw[trait] ?? 0);
     if (def.face) {
       if (b.face < FACE_CLEAR_STRICT) blocker ??= `face not clear enough (${pct(b.face)} < ${pct(FACE_CLEAR_STRICT)})`;
       else if (!b.lighting) blocker ??= "no face close-up in this burst";
@@ -98,6 +101,7 @@ export function assess(id: string, trait: string): Evidence {
     } else if (b.body < BODY_CLEAR_STRICT) blocker ??= `body not clearly in view (${pct(b.body)})`;
   }
   const persisted = streak >= NEEDED_BURSTS && !blocker;
+  const strong = persisted && weakest >= th / 0.875;
   const cached = s.verdicts.get(trait);
   const verdict = cached && Date.now() - cached.at < VERDICT_TTL_MS ? cached.verdict : null;
   const passed = persisted && (SMILE_CONFIRMS.has(trait) || verdict?.verdict === "yes");
@@ -110,12 +114,20 @@ export function assess(id: string, trait: string): Evidence {
   else if (!verdict) line = `${label} ${raw.toFixed(2)} × ${n} — asking Claude for a second opinion…`;
   else if (verdict.verdict === "yes") line = `${label} ${raw.toFixed(2)} × ${n} — Claude agrees (${verdict.reason}) → ${trait === "face_droop" ? "smile test next" : "will ask"}`;
   else line = `${label} ${raw.toFixed(2)} × ${n} — Claude says ${verdict.verdict} (${verdict.reason}) → not asked`;
-  return { trait, label, raw, streak, needed: NEEDED_BURSTS, persisted, blocker, verdict, passed, line };
+  return { trait, label, raw, streak, needed: NEEDED_BURSTS, persisted, strong, blocker, verdict, passed, line };
 }
 
 export function rememberVerdict(id: string, trait: string, verdict: Verdict) {
   session(id).verdicts.set(trait, { verdict, at: Date.now() });
+  session(id).misses.delete(trait);
 }
+// Bursts on which Claude was asked and gave no answer in time (a slow answer is not a "no").
+export function noteMiss(id: string, trait: string): number {
+  const s = session(id);
+  s.misses.set(trait, (s.misses.get(trait) ?? 0) + 1);
+  return s.misses.get(trait)!;
+}
+export const misses = (id: string, trait: string) => session(id).misses.get(trait) ?? 0;
 export function cachedVerdict(id: string, trait: string): Verdict | null {
   const c = session(id).verdicts.get(trait);
   return c && Date.now() - c.at < VERDICT_TTL_MS ? c.verdict : null;

@@ -4,9 +4,9 @@
 // the same pictures. /api/scan (the pod) and /api/judge (the stress test) both call this.
 
 import type { Frame } from "@/lib/triage/types";
-import { assess, cachedVerdict, Evidence, HIGH_STAKES, recordBurst, rememberVerdict, setEvidence, SMILE_CONFIRMS } from "./evidence";
+import { assess, cachedVerdict, Evidence, HIGH_STAKES, hunchThreshold, misses, noteMiss, recordBurst, rememberVerdict, setEvidence, SMILE_CONFIRMS } from "./evidence";
 import { faceLighting, Lighting } from "./lighting";
-import { hasOpinion, logOpinion, Opinion, secondOpinion } from "./opinion";
+import { hasOpinion, logOpinion, Opinion, opinionDown, secondOpinion } from "./opinion";
 import { gateByView, jevScan, ScanOptions, ScanRaw } from "./scan";
 
 export const OPINION_TIMEOUT_MS = 3000; // the live pod waits at most this long for the second opinion
@@ -42,17 +42,31 @@ export async function scanBurst(frames: Frame[], sid = "pod", opts: ScanOptions 
     opinion = await secondOpinion(frames, toJudge, { timeoutMs: opts.opinionTimeoutMs ?? OPINION_TIMEOUT_MS });
     for (const t of toJudge) {
       const v = opinion.verdicts[t];
-      if (!opinion.error) rememberVerdict(sid, t, v); // a timeout is not a verdict: try again next burst
+      if (!opinion.error) rememberVerdict(sid, t, v);
+      else noteMiss(sid, t); // a timeout is not a verdict: try again next burst
       void logOpinion({ session: sid, trait: t, jev: Math.round(viewed[t] * 100) / 100, claude: v.verdict, reason: v.reason, agree: v.verdict === "yes", ms: opinion.ms, error: opinion.error });
     }
   }
+  // No second opinion to be had (no key, key at its usage cap, API down, or no answer within the
+  // wait): that is not a "no". A heart attack must not go unasked because a monthly cap was hit, so
+  // persistence (at the stricter bar), the clear view and the smile test guard the question alone,
+  // and the line says so.
+  const down = !process.env.ANTHROPIC_API_KEY ? "no Anthropic key" : opinionDown();
   const evidence: Evidence[] = [];
   for (const t of Object.keys(HIGH_STAKES)) {
     const ev = assess(sid, t);
-    // Without an Anthropic key there is no second opinion: persistence and the smile test still guard the question.
-    const passed = ev.persisted && (SMILE_CONFIRMS.has(t) || ev.verdict?.verdict === "yes" || !hasOpinion());
+      // Unanswered: Claude is unavailable, or was too slow on two bursts in a row (one slow answer just
+    // waits a burst). Then the sign has to be strong on every burst (the old single-burst bar), not
+    // merely present: without a second opinion the camera alone sets the bar higher.
+    const unanswered = !SMILE_CONFIRMS.has(t) && ev.strong && !ev.verdict && (Boolean(down) || misses(sid, t) >= 2);
+    const passed = ev.persisted && (SMILE_CONFIRMS.has(t) || ev.verdict?.verdict === "yes" || unanswered);
+    const line = unanswered
+      ? `${ev.label} ${ev.raw.toFixed(2)} × ${ev.streak} bursts — Claude ${down ?? "gave no answer in time, twice"}: asked on persistence alone`
+      : ev.persisted && !ev.strong && !ev.verdict && !SMILE_CONFIRMS.has(t) && down
+        ? `${ev.label} ${ev.raw.toFixed(2)} × ${ev.streak} bursts — not asked: Claude ${down}, and the sign is not strong enough (needs ${(hunchThreshold(t) / 0.875).toFixed(2)} on every burst) to ask without a second opinion`
+        : ev.line;
     traits[t] = passed ? viewed[t] : 0;
-    if (ev.line) evidence.push({ ...ev, passed });
+    if (line) evidence.push({ ...ev, passed, line });
   }
   setEvidence(sid, evidence);
   return { raw, judged, bodyJudged, viewed, traits, lighting, evidence, opinion, ms: Date.now() - t0 };

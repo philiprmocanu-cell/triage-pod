@@ -21,9 +21,10 @@ export async function POST(req: Request) {
       const op = await secondOpinion(frames, ["face_droop"], { rubric: "smile", timeoutMs: SMILE_OPINION_TIMEOUT_MS, wholeFrames: 4, closeups: 0 });
       const v = op.verdicts.face_droop;
       const agree = v.verdict === "yes";
-      if (!agree) out.results.face_or_arm_weakness = Math.min(jev, 0.3);
+      // No answer at all (capped key, outage) is not a "no": Jev's uneven smile stands, and the line says so.
+      if (!agree && !op.error) out.results.face_or_arm_weakness = Math.min(jev, 0.3);
       void logOpinion({ session: session ?? "pod", trait: "face_droop", stage: "smile", jev: Math.round(jev * 100) / 100, claude: v.verdict, reason: v.reason, agree, ms: op.ms, error: op.error });
-      addNote(session ?? "pod", `smile test: Jev uneven ${jev.toFixed(2)}, Claude ${v.verdict} (${v.reason}) → ${agree ? "stroke question" : "not asked"}`);
+      addNote(session ?? "pod", op.error ? `smile test: Jev uneven ${jev.toFixed(2)}, Claude gave no answer (${v.reason}) → stroke question on the smile test alone` : `smile test: Jev uneven ${jev.toFixed(2)}, Claude ${v.verdict} (${v.reason}) → ${agree ? "stroke question" : "not asked"}`);
       return NextResponse.json({ ...out, opinion: op });
     }
     return NextResponse.json(out);
