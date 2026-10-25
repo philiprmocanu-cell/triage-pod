@@ -769,6 +769,13 @@ export const planRoute = spacetimedb.reducer(
     const rerouted = /^rerouted/i.test(reason.trim()) || (old.length > 0 && old.some((p) => p.carrierId !== carrierId || p.waypoints !== waypoints));
     const status = order.status === 'delivered' ? 'done' : order.status === 'on_the_way' ? 'moving' : rerouted ? 'rerouted' : 'planned';
     ctx.db.routePlan.insert({ id: 0n, orderId, carrierId, waypoints, km, minutes, floodRisk, status, reason, createdAt: ctx.timestamp });
+    // The plan is the truth for how the order travels: the carrier decides drone vs road, and the
+    // road time replaces the straight-line guess made when the order was created (unless it has
+    // already left, when only the ETA shown is corrected so the mover doesn't jump).
+    const carrier = ctx.db.carrier.id.find(carrierId)!;
+    const mode = order.mode === 'walk' ? 'walk' : carrier.kind === 'drone' ? 'drone' : 'road';
+    if (order.status === 'ordered') ctx.db.deliveryOrder.id.update({ ...order, mode, etaMinutes: minutes, travelSeconds: Math.min(240, Math.max(5, minutes)) });
+    else if (order.mode !== mode) ctx.db.deliveryOrder.id.update({ ...order, mode, etaMinutes: minutes });
     if (order.status === 'on_the_way') {
       const c = ctx.db.carrier.id.find(carrierId);
       if (c && c.status !== 'down') ctx.db.carrier.id.update({ ...c, status: 'out' });

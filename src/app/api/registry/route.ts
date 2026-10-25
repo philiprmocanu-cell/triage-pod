@@ -59,6 +59,8 @@ export async function POST(req: Request) {
     summary: result.reason,
     needs: needsFrom(result.resources, result.orders),
   }).catch((e) => console.error("SpacetimeDB report failed (is `spacetime start` running?)", e));
+  // Put every new order on a real road with a real carrier (fire-and-forget; the Routes page can redo it).
+  void fetch(`http://localhost:${process.env.PORT ?? 3417}/api/routes/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }) }).catch(() => {});
   // Opt-ins: company for a hard time, or volunteering to give it. First names only, consent required.
   if (consent && patch.name) {
     const v = village ?? patch.community ?? "Katete";
