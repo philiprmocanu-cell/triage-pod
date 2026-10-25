@@ -3,19 +3,22 @@
 import { FaceLandmarker, FilesetResolver, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { DroopTracker, measureFrame } from "@/lib/camera/faceDroop";
+import { HeartRateEstimator } from "@/lib/camera/heartRate";
 import type { CameraSignals } from "@/lib/triage/types";
 
 // Served from this app (public/mediapipe), so the face model loads in well under a second and works offline.
 const WASM = "/mediapipe/wasm";
 const MODEL = "/mediapipe/face_landmarker.task";
 
-// Skin patches for the heart-rate signal: forehead centre and both cheeks.
+// Skin patches for the heart-rate signal: forehead centre and both cheeks. Landmarks pick the
+// patches. Nothing is drawn on the face.
 
 export type CameraHandle = {
   capture: (maxWidth?: number) => string | null; // base64 JPEG of the current frame, for Jev
   captureFace: () => string | null; // square close-up of the face (360 px), null when no face
   startSmileTest: () => void;
   finishSmileTest: () => "normal" | "asymmetric" | null;
+  readPulse: () => { bpm: number | null; confidence: number };
   reset: () => void;
 };
 
@@ -23,19 +26,30 @@ export type LiveCamera = CameraSignals & { faceVisible: boolean; hrCoverage: num
 
 // `remote`: address of the wireless pod head (e.g. http://triagepod.local); pictures come from its
 // camera over Wi-Fi instead of a webcam plugged into this computer.
-type Props = { onSignals: (s: LiveCamera) => void; smileTest: CameraSignals["smileTest"]; remote?: string };
+type Props = {
+  onSignals: (s: LiveCamera) => void;
+  smileTest: CameraSignals["smileTest"];
+  remote?: string;
+  measurePulse?: boolean; // true only while the visit is on the camera-pulse step
+  externalBpm?: number | null; // pulse already read from the watch or the arm sensor
+  armPrompt?: boolean; // the visit is asking them to place an arm so the pulse can show on this video
+};
 
-export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel({ onSignals, smileTest, remote }, ref) {
+export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel({ onSignals, smileTest, remote, measurePulse = false, externalBpm = null, armPrompt = false }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const overlayRef = useRef<HTMLCanvasElement>(null);
   const droop = useRef(new DroopTracker());
+  const pulse = useRef(new HeartRateEstimator());
   const smileRef = useRef(smileTest);
+  const measureRef = useRef(measurePulse);
+  const wasMeasuring = useRef(false);
   const lastFace = useRef<{ x: number; y: number }[] | null>(null);
   const onSignalsRef = useRef(onSignals);
   const [status, setStatus] = useState("Starting camera…");
   const [evidence, setEvidence] = useState<string[]>([]);
+  const [hr, setHr] = useState<{ bpm: number | null; confidence: number; coverage: number; live: boolean }>({ bpm: null, confidence: 0, coverage: 0, live: false });
 
   smileRef.current = smileTest;
+  measureRef.current = measurePulse;
   onSignalsRef.current = onSignals;
 
   useImperativeHandle(ref, () => ({
@@ -67,8 +81,14 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
     },
     startSmileTest: () => droop.current.startSmileTest(),
     finishSmileTest: () => droop.current.finishSmileTest(),
+    readPulse: () => {
+      const est = pulse.current.estimate();
+      return { bpm: est?.bpm ?? null, confidence: est?.confidence ?? 0 };
+    },
     reset: () => {
       droop.current.reset();
+      pulse.current.reset();
+      wasMeasuring.current = false;
     },
   }));
 
@@ -80,6 +100,8 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
     let lastVideoTime = -1;
     let faceVisible = false;
     let lastEmit = 0;
+    const scratch = document.createElement("canvas");
+    const sctx = scratch.getContext("2d", { willReadFrequently: true });
 
     (async () => {
       try {
@@ -118,48 +140,42 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
       const lm = res.faceLandmarks?.[0];
       faceVisible = Boolean(lm);
       lastFace.current = lm ?? null;
-      const overlay = overlayRef.current;
-      const octx = overlay?.getContext("2d");
-      if (overlay && octx) {
-        overlay.width = video.videoWidth;
-        overlay.height = video.videoHeight;
-        octx.clearRect(0, 0, overlay.width, overlay.height);
-      }
 
-      if (lm) {
-        droop.current.push(measureFrame(lm, res.faceBlendshapes?.[0]?.categories));
-        if (overlay && octx) drawOverlay(octx, lm, overlay.width, overlay.height);
+      if (lm) droop.current.push(measureFrame(lm, res.faceBlendshapes?.[0]?.categories));
+
+      // Pulse is sampled only while the visit asked for it. The estimator keeps the last window
+      // after that, so the reading stays on screen for the rest of the visit.
+      if (measureRef.current) {
+        if (!wasMeasuring.current) {
+          pulse.current.reset();
+          wasMeasuring.current = true;
+        }
+        const rgb = sctx ? sampleSkin(sctx, scratch, video, lm) : null;
+        if (rgb) pulse.current.push(now / 1000, rgb.r, rgb.g, rgb.b);
+      } else if (wasMeasuring.current) {
+        wasMeasuring.current = false;
       }
 
       if (now - lastEmit > 500) {
         lastEmit = now;
-        // Pulse comes from the finger sensor, never from the face: the camera only reads the face.
+        const est = pulse.current.estimate();
+        const coverage = pulse.current.coverage();
+        const reading = {
+          bpm: est?.bpm ?? null,
+          confidence: est?.confidence ?? 0,
+          coverage,
+          live: measureRef.current,
+        };
+        setHr(reading);
         onSignalsRef.current({
-          heartRateBpm: null,
-          heartRateConfidence: 0,
-          droop: faceVisible ? droop.current.state() : null,
+          heartRateBpm: est?.bpm ?? null,
+          heartRateConfidence: est?.confidence ?? 0,
+          droop: null,
           smileTest: smileRef.current,
           faceVisible,
-          hrCoverage: 0,
+          hrCoverage: coverage,
         });
       }
-    }
-
-
-    function drawOverlay(ctx: CanvasRenderingContext2D, lm: NormalizedLandmark[], w: number, h: number) {
-      const p = (i: number) => [lm[i].x * w, lm[i].y * h] as const;
-      const flagged = droop.current.state().flagged;
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "rgba(56,189,248,0.9)";
-      ctx.beginPath();
-      ctx.moveTo(...p(33));
-      ctx.lineTo(...p(263));
-      ctx.stroke();
-      ctx.strokeStyle = flagged ? "rgba(239,68,68,0.95)" : "rgba(52,211,153,0.9)";
-      ctx.beginPath();
-      ctx.moveTo(...p(61));
-      ctx.lineTo(...p(291));
-      ctx.stroke();
     }
 
     return () => {
@@ -198,12 +214,55 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
     };
   }, []);
 
+  const pulseLabel = hr.live
+    ? hr.bpm != null
+      ? `${Math.round(hr.bpm)}`
+      : "…"
+    : hr.bpm != null
+      ? `${Math.round(hr.bpm)}`
+      : "—";
+
   return (
-    <div className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-black">
+    <div className="pod-cam relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-black">
       <video ref={videoRef} playsInline muted className="absolute inset-0 h-full w-full -scale-x-100 object-cover" />
-      <canvas ref={overlayRef} className="absolute inset-0 h-full w-full -scale-x-100 object-cover" />
+      <div className="pointer-events-none absolute inset-3 rounded-xl border border-cyan-200/25" />
+      <div className="pointer-events-none absolute left-5 top-5 h-4 w-4 border-l border-t border-cyan-200/80" />
+      <div className="pointer-events-none absolute right-5 top-5 h-4 w-4 border-r border-t border-cyan-200/80" />
+      <div className="pointer-events-none absolute bottom-5 left-5 h-4 w-4 border-b border-l border-cyan-200/80" />
+      <div className="pointer-events-none absolute bottom-5 right-5 h-4 w-4 border-b border-r border-cyan-200/80" />
+      {hr.live && <div className="pod-sweep pointer-events-none absolute inset-x-6 top-0 h-px bg-cyan-200/80" />}
+      {armPrompt && (
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center bg-black/45 px-4 text-center">
+          <p className="text-xl font-semibold text-white">Place your arm on the sensor and hold still.</p>
+          <p className="mt-4 font-mono text-6xl font-semibold tabular-nums leading-none text-white">
+            {externalBpm != null ? externalBpm : "—"}
+            <span className="ml-2 text-lg font-normal text-cyan-100">bpm</span>
+          </p>
+          <p className="mt-3 text-sm text-cyan-100">{externalBpm != null ? "Pulse, on the video" : "The number shows here once the arm is on"}</p>
+        </div>
+      )}
+      <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between gap-3 rounded-lg bg-black/55 px-3 py-2 font-mono text-[11px] text-cyan-100 backdrop-blur-sm">
+        <div>
+          <p className="tracking-[0.22em] text-cyan-200/70">{armPrompt ? "SHOW YOUR PULSE" : hr.live ? "READING PULSE" : externalBpm != null || hr.bpm != null ? "PULSE" : "PULSE STANDBY"}</p>
+          <p className="text-2xl font-semibold tabular-nums leading-none text-white">
+            {externalBpm != null ? externalBpm : pulseLabel}
+            <span className="ml-1 text-xs font-normal text-cyan-100/70">bpm</span>
+          </p>
+        </div>
+        <p className="max-w-[11rem] text-right leading-snug text-cyan-100/80">
+          {armPrompt
+            ? "Arm on the sensor"
+            : externalBpm != null
+              ? "from the watch"
+              : hr.live && hr.coverage < 8
+                ? `Hold still ${Math.max(0, Math.ceil(8 - hr.coverage))}s`
+                : hr.bpm != null
+                  ? `confidence ${Math.round(hr.confidence * 100)}%`
+                  : "Asked only if the heart is part of it"}
+        </p>
+      </div>
       {status && (
-        <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-slate-300">{status}</div>
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50 p-6 text-center text-sm text-slate-300">{status}</div>
       )}
       {evidence.length > 0 && (
         <div className="absolute inset-x-0 top-0 space-y-0.5 bg-slate-950/75 px-3 py-2 font-mono text-[11px] leading-snug text-amber-200">
@@ -215,6 +274,53 @@ export const CameraPanel = forwardRef<CameraHandle, Props>(function CameraPanel(
     </div>
   );
 });
+
+// Average colour of a small skin patch. Landmarks aim it at the forehead and cheeks;
+// with no mesh, the upper middle of the frame is used. Nothing is stroked onto the picture.
+function sampleSkin(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  lm: NormalizedLandmark[] | undefined,
+): { r: number; g: number; b: number } | null {
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (!w || !h) return null;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  ctx.drawImage(video, 0, 0, w, h);
+  const patches = lm
+    ? [10, 67, 297, 50, 280].filter((i) => lm[i]).map((i) => ({ x: lm[i].x * w - 7, y: lm[i].y * h - 7, w: 14, h: 14 }))
+    : [{ x: w * 0.35, y: h * 0.2, w: w * 0.3, h: h * 0.16 }];
+  let r = 0, g = 0, b = 0, n = 0;
+  for (const p of patches) {
+    const hit = avgRect(ctx, p.x, p.y, p.w, p.h, w, h);
+    if (!hit) continue;
+    r += hit.r;
+    g += hit.g;
+    b += hit.b;
+    n++;
+  }
+  return n ? { r: r / n, g: g / n, b: b / n } : null;
+}
+
+function avgRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, maxW: number, maxH: number) {
+  const x0 = Math.max(0, Math.min(maxW - 2, Math.round(x)));
+  const y0 = Math.max(0, Math.min(maxH - 2, Math.round(y)));
+  const rw = Math.max(2, Math.min(maxW - x0, Math.round(w)));
+  const rh = Math.max(2, Math.min(maxH - y0, Math.round(h)));
+  const data = ctx.getImageData(x0, y0, rw, rh).data;
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    r += data[i];
+    g += data[i + 1];
+    b += data[i + 2];
+    n++;
+  }
+  return n ? { r: r / n, g: g / n, b: b / n } : null;
+}
 
 // Turn the pod head's pictures (base64 JPEGs over Wi-Fi) into a normal video stream, so the face
 // tracking, the live scan and the tests all work exactly as with a webcam.

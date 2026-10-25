@@ -244,7 +244,7 @@ const RULES: Rule[] = [
   },
   {
     id: "heart_rate_abnormal",
-    label: "Heart rate outside normal range (camera estimate)",
+    label: "Heart rate outside normal range",
     urgency: "yellow",
     source: "camera",
     resources: ["Manual pulse check"],
@@ -252,7 +252,8 @@ const RULES: Rule[] = [
       if (c.heartRateBpm == null || c.heartRateConfidence < 0.5) return null;
       const high = isChild(f) ? 160 : 120;
       const low = isChild(f) ? 70 : 45;
-      return c.heartRateBpm > high || c.heartRateBpm < low ? `~${Math.round(c.heartRateBpm)} bpm from face video` : null;
+      const from = c.heartRateSource === "watch" ? "the watch" : c.heartRateSource === "finger" ? "the finger sensor" : "face video";
+      return c.heartRateBpm > high || c.heartRateBpm < low ? `~${Math.round(c.heartRateBpm)} bpm from ${from}` : null;
     },
   },
 ];

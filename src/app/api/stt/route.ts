@@ -1,26 +1,32 @@
 import { NextResponse } from "next/server";
-import { cartesia, STT_MODEL } from "@/lib/cartesia";
+import { grokTranscribe } from "@/lib/grokVoice";
+import { communityLexicon, dialectKeyterms } from "@/lib/triage/dialect";
 
 export const runtime = "nodejs";
 
-// Transcribe one recording. On the first turn the client sends several candidate languages;
-// we transcribe under each and let the triage brain pick the one that reads as real speech.
+// Transcribe one recording with Grok Voice. On the first turn the client sends several
+// candidate languages; we transcribe under each, biased toward that variety's words, and
+// let the triage brain pick the transcript that reads as real speech.
 export async function POST(req: Request) {
   const form = await req.formData();
   const audio = form.get("audio");
   const languages = String(form.get("languages") ?? "es").split(",").filter(Boolean);
+  const locale = String(form.get("locale") ?? languages[0] ?? "en");
+  const community = form.get("community") ? String(form.get("community")) : undefined;
   if (!(audio instanceof File)) return NextResponse.json({ error: "No audio" }, { status: 400 });
 
   try {
+    const learned = await communityLexicon(community);
     const results = await Promise.all(
       languages.map(async (language) => {
-        const res = await cartesia().stt.transcribe({ file: audio, model: STT_MODEL, language, timestamp_granularities: ["word"] });
-        return [language, { text: res.text.trim(), speech: speechStats(res.words ?? []) }] as const;
+        const variety = locale.split("-")[0] === language.split("-")[0] ? locale : language;
+        const res = await grokTranscribe(audio, variety, dialectKeyterms(variety, variety === locale ? learned : {}));
+        return [language, { text: res.text, speech: speechStats(res.words) }] as const;
       }),
     );
-    return NextResponse.json({ transcripts: Object.fromEntries(results) });
+    return NextResponse.json({ transcripts: Object.fromEntries(results), model: "grok-voice-transcribe-2.0" });
   } catch (err) {
-    console.error("stt failed", err);
+    console.error("grok voice stt failed", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Transcription failed" }, { status: 500 });
   }
 }

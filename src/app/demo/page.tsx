@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import DemoStage from "@/components/DemoStage";
 
 // The presenter's tab for Cal Hacks, Sunday 25 October 2026 (judging 10:30-12:30): the demo in the
 // exact order, what to say and what to click at each step, the one-line facts with their sources
@@ -22,8 +23,8 @@ const STEPS = [
     title: "Open the map",
     href: "/globe",
     open: "Live map",
-    say: "This is Eastern Province, Zambia: 40 health posts, each a dot on real satellite imagery. The medicine is in Chipata, the hub in green, and the posts around it run out. In Zambia three in ten clinics ran out of malaria drugs while the warehouse was full.",
-    do: "Let the planet fly in. The map is quiet on purpose: nothing on it is pre-made. Show the three layer buttons once (Flights and routes, Hubs, All names) and leave them on.",
+    say: "This is Eastern Province on live satellite imagery. Forty posts. Chipata is the hub. The hairlines are unique distribution runs, each a different shade, drawn through the villages they actually serve.",
+    do: "Let the planet fly in. Leave Routes and Villages on. Leave Orders off so the map stays readable. Point at a thin corridor, then a named hamlet sitting on it.",
     check: "Top-left reads 'SpacetimeDB live' and 'posts 40'. If it says offline, run spacetime start and reload.",
   },
   {
@@ -83,11 +84,11 @@ const STEPS = [
   {
     n: 8,
     title: "If there is time: Routes, Tracks, Mosquitoes",
-    href: "/routes",
-    open: "Routes",
-    say: "Routes: Zambia's real fleet and every planned road, re-checked every ten minutes against the weather. Tracks: new motorbike tracks proposed from satellite terrain where no road exists. Mosquitoes: the pod listens for the wingbeat of the malaria carrier and raises the village's malaria likelihood before anyone has a fever.",
-    do: "Routes: click a road for its flood and surface reasons. Tracks: pick Jumbe. Mosquitoes: play the Anopheles clip from your phone near the laptop mic.",
-    check: "Close on the one-line facts below.",
+    href: "/globe?view=tracks",
+    open: "Satellite · tracks",
+    say: "Same satellite. Switch Tracks on, Routes off. Those hairlines are proposed motorbike paths from elevation and land cover, stuck to the ground, through the villages the line actually serves.",
+    do: "On Satellite, click Tracks. Zoom toward Jumbe. Point at a named hamlet sitting on the line.",
+    check: "Close on the facts below.",
   },
 ];
 
@@ -129,22 +130,26 @@ export default function DemoPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#060b14] text-slate-100">
-      <header className="border-b border-amber-900/50 bg-gradient-to-r from-amber-950/40 via-[#060b14] to-[#060b14] px-6 py-5">
-        <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-amber-300">Demo · Cal Hacks · Sunday 25 October 2026 · judging 10:30–12:30</p>
-        <h1 className="mt-1 text-2xl font-bold">Run the demo</h1>
-        <p className="mt-1 max-w-3xl text-sm text-slate-400">Six steps in order, about three minutes. Each has the screen to open, one thing to say, one thing to do, and what you should see. The map starts quiet: everything the judges see is caused by the visit you do in front of them.</p>
-        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
-          <button onClick={resetAll} className="rounded-lg border border-amber-600 bg-amber-900/40 px-3 py-1.5 text-amber-100 hover:bg-amber-800/50">Reset everything for a fresh run</button>
-          <Link href="/globe" className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-1.5 hover:bg-slate-800">Open the map</Link>
-          <Link href="/staff" className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-1.5 hover:bg-slate-800">Open the health-worker screen</Link>
-          <Link href="/government" className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-1.5 hover:bg-slate-800">Open the government view</Link>
-          {resetting && <span className="text-slate-300">{resetting}</span>}
+    <div className="bg-black text-white">
+      <DemoStage />
+      <details className="border-t border-white/10">
+        <summary className="cursor-pointer px-8 py-4 text-[11px] uppercase tracking-[0.28em] text-white/40">Presenter notes</summary>
+        <div>
+      <header className="border-b border-white/10 px-8 py-10 md:px-16">
+        <p className="text-[11px] uppercase tracking-[0.42em] text-white/45">Brief · Eastern Province</p>
+        <h1 className="mt-3 text-4xl font-light tracking-tight">Run it quietly</h1>
+        <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/55">One satellite. Layers, not extra tabs. Start with Routes and Villages on, Orders off. The visit you do in front of them is what lights the map.</p>
+        <div className="mt-8 flex flex-wrap items-center gap-8 text-[11px] uppercase tracking-[0.28em]">
+          <button onClick={resetAll} className="border-b border-white pb-1">Reset</button>
+          <Link href="/globe" className="border-b border-white/25 pb-1 text-white/70 hover:text-white">Satellite</Link>
+          <Link href="/staff" className="border-b border-white/25 pb-1 text-white/70 hover:text-white">Operator</Link>
+          <Link href="/government" className="border-b border-white/25 pb-1 text-white/70 hover:text-white">Network</Link>
+          {resetting && <span className="normal-case tracking-normal text-white/50">{resetting}</span>}
         </div>
       </header>
 
-      <main className="space-y-6 p-6">
-        <section className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
+      <main className="space-y-0">
+        <section className="border-b border-white/10 px-8 py-8 md:px-16">
           <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-slate-400">Before you start (10 minutes at the venue)</h2>
           <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-300">
             {BEFORE.map((b) => (
@@ -153,21 +158,21 @@ export default function DemoPage() {
           </ol>
         </section>
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid border-b border-white/10 lg:grid-cols-2">
           {STEPS.map((s) => (
-            <section key={s.n} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
+            <section key={s.n} className="border-white/10 px-8 py-8 md:px-16 lg:border-r lg:odd:border-r lg:[&:nth-child(2n)]:border-r-0 lg:border-b">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="font-mono text-xs text-amber-300">STEP {s.n}</p>
-                  <h2 className="mt-1 text-lg font-semibold">{s.title}</h2>
+                  <p className="text-[11px] uppercase tracking-[0.28em] text-white/40">{String(s.n).padStart(2, "0")}</p>
+                  <h2 className="mt-2 text-xl font-light tracking-tight">{s.title}</h2>
                 </div>
-                <Link href={s.href} target="_blank" className="whitespace-nowrap rounded-lg bg-sky-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-sky-400">
-                  Open {s.open}
+                <Link href={s.href} className="whitespace-nowrap border-b border-white/40 pb-0.5 text-[11px] uppercase tracking-[0.22em] text-white/70 hover:text-white">
+                  {s.open}
                 </Link>
               </div>
-              <p className="mt-3 text-sm"><span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">Say · </span>{s.say}</p>
-              <p className="mt-2 text-sm text-slate-300"><span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">Do · </span>{s.do}</p>
-              <p className="mt-2 text-sm text-emerald-200/90"><span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">See · </span>{s.check}</p>
+              <p className="mt-4 text-sm leading-relaxed text-white/70"><span className="text-white/35">Say · </span>{s.say}</p>
+              <p className="mt-2 text-sm leading-relaxed text-white/55"><span className="text-white/35">Do · </span>{s.do}</p>
+              <p className="mt-2 text-sm leading-relaxed text-white/45"><span className="text-white/35">See · </span>{s.check}</p>
             </section>
           ))}
         </div>
@@ -207,6 +212,8 @@ export default function DemoPage() {
           <li>Everything else: &quot;Reset everything&quot; above, then reload the screen you are showing.</li>
         </ul>
       </footer>
+        </div>
+      </details>
     </div>
   );
 }

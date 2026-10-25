@@ -31,12 +31,16 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
+    ".next-3417/types/**/*.ts",
+    ".next-prod-listener/types/**/*.ts",
+    ".next-prod-wing/types/**/*.ts",
+    ".next-prod/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-prod/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
-    "spacetime"
+    "spacetime",
+    "scripts"
   ]
 }

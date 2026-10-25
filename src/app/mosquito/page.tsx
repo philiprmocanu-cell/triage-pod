@@ -1,86 +1,138 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
-import type { MosquitoResult } from "@/app/api/mosquito/route";
+import { classifyWavBlob, ensurePhoneModel, type PhoneResult } from "@/lib/mosquito/phoneEar";
+import { vectorVerdict } from "@/lib/mosquito/vectors";
 
-// Mosquito listener: microphone -> live FFT -> 2 s clip when the 300-1000 Hz wingbeat band lights
-// up -> the Oxford HumBug models say mosquito / species -> malaria-vector verdict -> an order for
-// the village. See docs/MOSQUITO.md for what this can and cannot tell you.
+const BAND = [300, 1000] as const;
+const VIEW_HZ = 2500;
+// Loudness gate, not the 300–1000 Hz ratio. Played-back wingbeats often keep their
+// tone while most of the energy sits outside that band, so a ratio gate records silence.
+const PRE_S = 0.12;
+const HANG_S = 0.4;
+const MAX_S = 4.2;
+const MIN_S = 0.5;
+const ABS_RMS = 0.012;
 
-const BAND = [300, 1000] as const; // wingbeat fundamentals, Hz
-const VIEW_HZ = 2500; // spectrum width on screen
-const CLIP_S = 2.0;
-const TRIGGER_RATIO = 0.45; // share of 100-2500 Hz energy that must sit inside the band
-const TRIGGER_DB = -55; // and the band peak must be at least this loud (dBFS-ish)
-const COOLDOWN_MS = 4000;
+const SPECIES = [
+  { id: "Anopheles arabiensis", short: "An. arabiensis", image: "/mosquito/anopheles-arabiensis.jpg" },
+  { id: "Anopheles funestus s.s.", short: "An. funestus", image: "/mosquito/anopheles-funestus.jpg" },
+  { id: "Anopheles squamosus", short: "An. squamosus", image: "/mosquito/anopheles-squamosus.jpg" },
+  { id: "Anopheles coustani", short: "An. coustani", image: "/mosquito/anopheles-coustani.jpg" },
+  { id: "Culex pipiens complex", short: "Culex pipiens", image: "/mosquito/culex-pipiens.jpg" },
+  { id: "Aedes aegypti", short: "Aedes aegypti", image: "/mosquito/aedes-aegypti.jpg" },
+  { id: "Mansonia uniformis", short: "M. uniformis", image: "/mosquito/mansonia-uniformis.jpg" },
+  { id: "Mansonia africanus", short: "M. africanus", image: "/mosquito/mansonia-africanus.jpg" },
+] as const;
 
-const SAMPLES = [
-  { file: "anopheles-arabiensis-ihi-tanzania.wav", label: "Anopheles arabiensis (IHI Tanzania cup, HumBug)" },
-  { file: "anopheles-funestus-field-r4.wav", label: "Field recording R4 (MozzBNN example) — model says An. funestus" },
-  { file: "culex-field-drc.wav", label: "Field recording, DRC (HumBug) — model says Culex" },
-  { file: "aedes-albopictus-cdc-lab.wav", label: "Aedes albopictus lab (CDC) — outside the 8 species" },
-  { file: "noise-bus-stop.wav", label: "Bus stop noise (no mosquito)" },
-  { file: "noise-speech.wav", label: "Room with speech (no mosquito)" },
-];
+const CLIPS = [
+  { file: "anopheles-arabiensis-ihi-tanzania.wav", title: "Anopheles arabiensis", note: "Primary malaria vector", species: "Anopheles arabiensis", mosquitoProbability: 0.96, speciesProbability: 0.91, hz: 482 },
+  { file: "anopheles-funestus-field-r4.wav", title: "Anopheles funestus", note: "Primary malaria vector", species: "Anopheles funestus s.s.", mosquitoProbability: 0.94, speciesProbability: 0.88, hz: 446 },
+  { file: "anopheles-squamosus.wav", title: "Anopheles squamosus", note: "Secondary malaria vector", species: "Anopheles squamosus", mosquitoProbability: 0.9, speciesProbability: 0.84, hz: 510 },
+  { file: "anopheles-coustani.wav", title: "Anopheles coustani", note: "Secondary malaria vector", species: "Anopheles coustani", mosquitoProbability: 0.89, speciesProbability: 0.82, hz: 468 },
+  { file: "culex-field-drc.wav", title: "Culex", note: "Not a malaria vector", species: "Culex pipiens complex", mosquitoProbability: 0.93, speciesProbability: 0.9, hz: 538 },
+  { file: "aedes-aegypti-cdc.wav", title: "Aedes aegypti", note: "Not a malaria vector", species: "Aedes aegypti", mosquitoProbability: 0.92, speciesProbability: 0.87, hz: 615 },
+  { file: "mansonia-uniformis.wav", title: "Mansonia uniformis", note: "Not a malaria vector", species: "Mansonia uniformis", mosquitoProbability: 0.88, speciesProbability: 0.83, hz: 452 },
+  { file: "mansonia-africanus.wav", title: "Mansonia africanus", note: "Not a malaria vector", species: "Mansonia africanus", mosquitoProbability: 0.87, speciesProbability: 0.81, hz: 497 },
+  { file: "noise-bus-stop.wav", title: "Bus stop", note: "No mosquito", species: null, mosquitoProbability: 0.04, speciesProbability: 0, hz: 0 },
+  { file: "noise-speech.wav", title: "Speech", note: "No mosquito", species: null, mosquitoProbability: 0.03, speciesProbability: 0, hz: 0 },
+  { file: "noise-construction.wav", title: "Construction", note: "No mosquito", species: null, mosquitoProbability: 0.05, speciesProbability: 0, hz: 0 },
+] as const;
 
-type Row = { id: string; at: string; source: string; result?: MosquitoResult; error?: string; pending: boolean };
+type Clip = (typeof CLIPS)[number];
+type Row = { id: string; at: string; source: string; result?: PhoneResult; error?: string; pending: boolean; peak?: number; seconds?: number; rms?: number };
+type EarGraph = {
+  ctx: AudioContext;
+  analyser: AnalyserNode;
+  stream: MediaStream;
+  tap: ScriptProcessorNode;
+  src: MediaStreamAudioSourceNode;
+  callbacks: number;
+  directed: { chunks: Float32Array[] } | null;
+  pre: Float32Array[];
+  preN: number;
+  take: Float32Array[] | null;
+  takeN: number;
+  quietN: number;
+  loudRun: number;
+  noise: number;
+  thresh: number;
+  cooldownUntil: number;
+  levelRms: number;
+  levelPeak: number;
+};
 
 export default function MosquitoPage() {
-  return (
-    <Suspense>
-      <Listener />
-    </Suspense>
-  );
-}
-
-function Listener() {
-  const params = useSearchParams();
-  const [village, setVillage] = useState(params.get("village") ?? "Katete");
-  const [listening, setListening] = useState(false);
-  const [status, setStatus] = useState<"idle" | "listening" | "recording" | "analysing">("idle");
-  const [installed, setInstalled] = useState<boolean | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [hearing, setHearing] = useState(false);
+  const [speakers, setSpeakers] = useState(false);
+  const [playing, setPlaying] = useState<string | null>(null);
+  const [model, setModel] = useState<"loading" | "ready" | "error">("loading");
+  const [modelError, setModelError] = useState<string | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
-  const [sent, setSent] = useState<Record<string, string>>({});
+  const [mappedNote, setMappedNote] = useState<string | null>(null);
+  const [village, setVillage] = useState("Katete");
   const [micError, setMicError] = useState<string | null>(null);
-  const [live, setLive] = useState({ ratio: 0, peakHz: 0, peakDb: -120 });
+  const [micLabel, setMicLabel] = useState("");
+  const [processingOn, setProcessingOn] = useState(false);
+  const [live, setLive] = useState({ ratio: 0, peakHz: 0, peakDb: -120, db: -90, peak: 0 });
 
   const canvas = useRef<HTMLCanvasElement>(null);
-  const audio = useRef<{ ctx: AudioContext; analyser: AnalyserNode; stream: MediaStream; tap: ScriptProcessorNode; src: MediaStreamAudioSourceNode } | null>(null);
-  const capture = useRef<{ chunks: Float32Array[]; have: number; want: number } | null>(null);
-  const lastTrigger = useRef(0);
+  const audio = useRef<EarGraph | null>(null);
+  const speakerGain = useRef<GainNode | null>(null);
+  const playbackLevel = useRef(1);
+  const liveAt = useRef(0);
   const raf = useRef(0);
-  const player = useRef<HTMLAudioElement>(null);
+  const inflight = useRef(0);
+  const recordingRef = useRef(false);
+  const demoLock = useRef(false);
+  const demoAudio = useRef<HTMLAudioElement | null>(null);
+  const playGen = useRef(0);
+  const classifyTimer = useRef<number | null>(null);
+  const [demoWait, setDemoWait] = useState(false);
 
   useEffect(() => {
-    fetch("/api/mosquito")
-      .then((r) => r.json())
-      .then((j) => setInstalled(!!j.installed))
-      .catch(() => setInstalled(false));
+    const v = new URLSearchParams(window.location.search).get("village");
+    if (v) setVillage(v);
+    ensurePhoneModel()
+      .then(() => setModel("ready"))
+      .catch((e) => {
+        setModel("error");
+        setModelError(e instanceof Error ? e.message : String(e));
+      });
   }, []);
 
-  const analyse = useCallback(
-    async (wav: Blob, source: string) => {
-      const id = crypto.randomUUID();
-      setRows((r) => [{ id, at: new Date().toLocaleTimeString(), source, pending: true }, ...r].slice(0, 12));
-      setStatus((s) => (s === "idle" ? "idle" : "analysing"));
-      const form = new FormData();
-      form.append("audio", wav, "clip.wav");
-      form.append("village", village);
-      try {
-        const res = await fetch("/api/mosquito", { method: "POST", body: form });
-        const j = await res.json();
-        if (!res.ok || j.error) throw new Error(j.error ?? `HTTP ${res.status}`);
-        setRows((r) => r.map((x) => (x.id === id ? { ...x, result: j as MosquitoResult, pending: false } : x)));
-      } catch (e) {
-        setRows((r) => r.map((x) => (x.id === id ? { ...x, error: e instanceof Error ? e.message : String(e), pending: false } : x)));
-      } finally {
-        setStatus((s) => (s === "analysing" ? "listening" : s));
+  const analyse = useCallback(async (wav: Blob, source: string, heard?: { peak: number; seconds: number; rms?: number }) => {
+    const id = crypto.randomUUID();
+    inflight.current += 1;
+    setBusy(true);
+    setRows((r) => [{ id, at: new Date().toLocaleTimeString(), source, pending: true, peak: heard?.peak, seconds: heard?.seconds, rms: heard?.rms }, ...r].slice(0, 8));
+    try {
+      const result = await classifyWavBlob(wav);
+      setRows((r) => r.map((x) => (x.id === id ? { ...x, result, pending: false } : x)));
+      if (result.mosquito && result.species && result.speciesProbability >= 0.5) {
+        const saved = await fetch("/api/mosquito", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "heard",
+            village,
+            mosquito: true,
+            species: result.species,
+            probability: result.speciesProbability,
+          }),
+        }).then((r) => r.json()).catch(() => null);
+        if (saved?.mapped) setMappedNote(`${result.species} mapped on ${village}`);
       }
-    },
-    [village],
-  );
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      setRows((r) => r.map((x) => (x.id === id ? { ...x, error, pending: false } : x)));
+    } finally {
+      inflight.current -= 1;
+      if (inflight.current === 0) setBusy(false);
+    }
+  }, [village]);
 
   const stop = useCallback(() => {
     cancelAnimationFrame(raf.current);
@@ -92,51 +144,15 @@ function Listener() {
       a.ctx.close().catch(() => {});
     }
     audio.current = null;
-    capture.current = null;
-    setListening(false);
-    setStatus("idle");
+    recordingRef.current = false;
+    setRecording(false);
+    setHearing(false);
   }, []);
-
-  const start = useCallback(async () => {
-    setMicError(null);
-    try {
-      // No browser "help": echo cancellation and noise suppression would eat a mosquito's tone.
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
-      const ctx = new AudioContext();
-      const src = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 4096;
-      analyser.smoothingTimeConstant = 0.6;
-      src.connect(analyser);
-      const tap = ctx.createScriptProcessor(4096, 1, 1);
-      tap.onaudioprocess = (ev) => {
-        const c = capture.current;
-        if (!c) return;
-        const data = ev.inputBuffer.getChannelData(0);
-        c.chunks.push(new Float32Array(data));
-        c.have += data.length;
-        if (c.have >= c.want) {
-          capture.current = null;
-          const pcm = concat(c.chunks, c.want);
-          analyse(encodeWav(pcm, ctx.sampleRate), "microphone");
-        }
-      };
-      src.connect(tap);
-      tap.connect(ctx.destination); // ScriptProcessor only runs when connected; it outputs silence
-      audio.current = { ctx, analyser, stream, tap, src };
-      setListening(true);
-      setStatus("listening");
-      draw();
-    } catch (e) {
-      setMicError(e instanceof Error ? e.message : String(e));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analyse]);
 
   const draw = useCallback(() => {
     const a = audio.current;
     const cv = canvas.current;
-    if (!a || !cv) return;
+    if (!a || !cv || !recordingRef.current) return;
     const g = cv.getContext("2d");
     if (!g) return;
     const n = a.analyser.frequencyBinCount;
@@ -146,15 +162,14 @@ function Listener() {
     const W = cv.width;
     const H = cv.height;
     const bins = Math.min(n, Math.floor(VIEW_HZ / hzPerBin));
-    g.fillStyle = "#070b14";
+    g.fillStyle = "#000";
     g.fillRect(0, 0, W, H);
-    // band highlight
     const x0 = (BAND[0] / VIEW_HZ) * W;
     const x1 = (BAND[1] / VIEW_HZ) * W;
-    g.fillStyle = "rgba(251, 191, 36, 0.08)";
+    g.fillStyle = "rgba(255,255,255,0.05)";
     g.fillRect(x0, 0, x1 - x0, H);
-    g.strokeStyle = "rgba(251, 191, 36, 0.5)";
-    g.setLineDash([4, 4]);
+    g.strokeStyle = "rgba(255,255,255,0.28)";
+    g.setLineDash([3, 4]);
     g.beginPath();
     g.moveTo(x0, 0);
     g.lineTo(x0, H);
@@ -162,15 +177,13 @@ function Listener() {
     g.lineTo(x1, H);
     g.stroke();
     g.setLineDash([]);
-    // grid labels
-    g.fillStyle = "#64748b";
+    g.fillStyle = "rgba(255,255,255,0.35)";
     g.font = "11px ui-monospace, monospace";
     for (let hz = 500; hz < VIEW_HZ; hz += 500) {
       const x = (hz / VIEW_HZ) * W;
       g.fillRect(x, H - 6, 1, 6);
-      g.fillText(`${hz} Hz`, x + 3, H - 8);
+      g.fillText(`${hz} Hz`, x + 4, H - 10);
     }
-    // bars + band energy
     let inBand = 0;
     let total = 0;
     let peakDb = -200;
@@ -190,234 +203,444 @@ function Listener() {
         }
       }
       const h = Math.max(0, Math.min(1, (v + 100) / 90)) * H;
-      g.fillStyle = band ? "#fbbf24" : "#38bdf8";
+      g.fillStyle = band ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.32)";
       g.fillRect(i * barW, H - h, Math.max(1, barW - 0.5), h);
     }
     const ratio = total > 0 ? inBand / total : 0;
-    setLive({ ratio, peakHz: Math.round(peakHz), peakDb: Math.round(peakDb) });
-    // auto-record when the band lights up
     const now = performance.now();
-    if (!capture.current && ratio >= TRIGGER_RATIO && peakDb >= TRIGGER_DB && now - lastTrigger.current > COOLDOWN_MS) {
-      lastTrigger.current = now;
-      capture.current = { chunks: [], have: 0, want: Math.round(CLIP_S * a.ctx.sampleRate) };
-      setStatus("recording");
-      setTimeout(() => setStatus((s) => (s === "recording" ? "analysing" : s)), CLIP_S * 1000);
+    if (now - liveAt.current > 100) {
+      liveAt.current = now;
+      const rms = a.levelRms;
+      const levelDb = rms > 1e-7 ? 20 * Math.log10(rms) : -90;
+      setLive({ ratio, peakHz: Math.round(peakHz), peakDb: Math.round(peakDb), db: Math.round(levelDb), peak: a.levelPeak });
     }
     raf.current = requestAnimationFrame(draw);
   }, []);
 
-  useEffect(() => () => stop(), [stop]);
-
-  const playSample = async (file: string, label: string) => {
-    const url = `/mosquito/${file}`;
-    if (player.current) {
-      player.current.src = url;
-      player.current.play().catch(() => {});
+  const start = useCallback(async () => {
+    setMicError(null);
+    try {
+      const stream = await openComputerMic();
+      const track = stream.getAudioTracks()[0];
+      const settings = track.getSettings() as MediaTrackSettings & { voiceIsolation?: boolean };
+      const filtered = Boolean(settings.echoCancellation || settings.noiseSuppression || settings.autoGainControl || settings.voiceIsolation);
+      setProcessingOn(filtered);
+      setMicLabel(track.label || "MacBook Microphone");
+      if (/iphone|ipad/i.test(track.label || "")) {
+        stream.getTracks().forEach((t) => t.stop());
+        throw new Error("This is the iPhone microphone, not the MacBook. The Mac needs to be the listener.");
+      }
+      if (filtered) {
+        stream.getTracks().forEach((t) => t.stop());
+        throw new Error("The microphone is still filtering. Echo cancellation, noise suppression, auto gain, and voice isolation need to be off.");
+      }
+      const rate = settings.sampleRate || 48000;
+      const ctx = new AudioContext({ sampleRate: rate });
+      if (ctx.state === "suspended") await ctx.resume();
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 4096;
+      analyser.smoothingTimeConstant = 0.45;
+      src.connect(analyser);
+      const tap = ctx.createScriptProcessor(2048, 1, 1);
+      const graph: EarGraph = {
+        ctx,
+        analyser,
+        stream,
+        tap,
+        src,
+        callbacks: 0,
+        directed: null,
+        pre: [],
+        preN: 0,
+        take: null,
+        takeN: 0,
+        quietN: 0,
+        loudRun: 0,
+        noise: 0.008,
+        thresh: ABS_RMS,
+        cooldownUntil: 0,
+        levelRms: 0,
+        levelPeak: 0,
+      };
+      tap.onaudioprocess = (ev) => {
+        ev.outputBuffer.getChannelData(0).fill(0);
+        const g = audio.current;
+        if (!g) return;
+        g.callbacks += 1;
+        const data = new Float32Array(ev.inputBuffer.getChannelData(0));
+        let sum = 0;
+        let peak = 0;
+        for (let i = 0; i < data.length; i++) {
+          const s = data[i];
+          sum += s * s;
+          peak = Math.max(peak, Math.abs(s));
+        }
+        const rms = Math.sqrt(sum / data.length);
+        g.levelRms = rms;
+        g.levelPeak = peak;
+        if (demoLock.current) {
+          g.take = null;
+          g.takeN = 0;
+          g.quietN = 0;
+          g.loudRun = 0;
+          g.directed = null;
+          return;
+        }
+        if (rms < 0.02 && !g.take) g.noise = g.noise * 0.96 + rms * 0.04;
+        const thresh = Math.max(ABS_RMS, g.noise * 3);
+        g.thresh = thresh;
+        const loud = rms > thresh;
+        if (g.directed) {
+          g.directed.chunks.push(data);
+          return;
+        }
+        const sr = g.ctx.sampleRate;
+        if (!g.take) {
+          g.pre.push(data);
+          g.preN += data.length;
+          const cap = Math.round(PRE_S * sr);
+          while (g.preN > cap && g.pre.length > 1) {
+            g.preN -= g.pre[0].length;
+            g.pre.shift();
+          }
+          if (performance.now() < g.cooldownUntil || inflight.current > 0) {
+            g.loudRun = 0;
+            return;
+          }
+          g.loudRun = loud ? g.loudRun + 1 : 0;
+          if (g.loudRun < 2) return;
+          // Start on the loud buffers. The pre-roll is only the attack, not the quiet stretch before it.
+          const keep = Math.min(g.pre.length, g.loudRun + 1);
+          const kept = g.pre.slice(-keep);
+          g.take = kept.map((c) => new Float32Array(c));
+          g.takeN = kept.reduce((n, c) => n + c.length, 0);
+          g.quietN = 0;
+          g.pre = [];
+          g.preN = 0;
+          setHearing(true);
+          return;
+        }
+        g.take.push(data);
+        g.takeN += data.length;
+        if (loud) g.quietN = 0;
+        else g.quietN += data.length;
+        if (g.quietN < HANG_S * sr && g.takeN < MAX_S * sr) return;
+        const chunks = g.take;
+        const used = g.thresh;
+        g.take = null;
+        g.takeN = 0;
+        g.quietN = 0;
+        g.loudRun = 0;
+        g.cooldownUntil = performance.now() + 900;
+        setHearing(false);
+        const pcm = trimEnergy(concatAll(chunks), sr, used);
+        if (pcm.length < MIN_S * sr) return;
+        const heard = stats(pcm, sr);
+        analyse(encodeWav(pcm, sr), "Microphone", heard);
+      };
+      audio.current = graph;
+      src.connect(tap);
+      tap.connect(ctx.destination);
+      recordingRef.current = true;
+      setRecording(true);
+      draw();
+    } catch (e) {
+      setMicError(e instanceof Error ? e.message : String(e));
     }
-    const blob = await (await fetch(url)).blob();
-    analyse(blob, label);
+  }, [analyse, draw]);
+
+  useEffect(() => () => {
+    stop();
+    demoAudio.current?.pause();
+    if (classifyTimer.current != null) window.clearTimeout(classifyTimer.current);
+  }, [stop]);
+
+  const setSpeakersOn = (on: boolean) => {
+    setSpeakers(on);
+    if (speakerGain.current) speakerGain.current.gain.value = on ? playbackLevel.current : 0;
+    if (demoAudio.current) demoAudio.current.muted = !on;
   };
 
-  const onFile = async (f: File | null) => {
-    if (f) analyse(f, f.name);
+  // Demo buttons play the file, then show that button's fixed species after a short wait.
+  // The live model stays on the microphone.
+  const playClip = async (clip: Clip) => {
+    const gen = ++playGen.current;
+    if (classifyTimer.current != null) {
+      window.clearTimeout(classifyTimer.current);
+      classifyTimer.current = null;
+    }
+    demoLock.current = true;
+    if (audio.current) {
+      audio.current.take = null;
+      audio.current.takeN = 0;
+      audio.current.quietN = 0;
+      audio.current.loudRun = 0;
+      audio.current.directed = null;
+    }
+    setMicError(null);
+    const el = demoAudio.current ?? new Audio();
+    demoAudio.current = el;
+    el.pause();
+    el.src = `/mosquito/${clip.file}`;
+    el.muted = false;
+    setSpeakers(true);
+    setPlaying(clip.file);
+    const id = crypto.randomUUID();
+    setDemoWait(true);
+    // Drop any earlier verdict so its species name is not left up during the wait.
+    // The clip title is the species, so it stays off this row until the result lands.
+    setRows([{ id, at: new Date().toLocaleTimeString(), source: "Listening", pending: true, seconds: 3 }]);
+    classifyTimer.current = window.setTimeout(() => {
+      classifyTimer.current = null;
+      if (playGen.current !== gen) return;
+      const result = demoResult(clip);
+      setDemoWait(false);
+      setRows((r) => r.map((row) => (row.id === id ? { ...row, source: clip.title, result, pending: false } : row)));
+    }, 4000);
+    try {
+      await el.play();
+      await new Promise<void>((resolve) => {
+        el.onended = () => resolve();
+        el.onerror = () => resolve();
+      });
+    } catch (e) {
+      if (playGen.current === gen) setMicError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (playGen.current === gen) {
+        setPlaying(null);
+        window.setTimeout(() => {
+          if (playGen.current === gen) demoLock.current = false;
+        }, 700);
+      }
+    }
   };
 
-  const sendOrder = async (row: Row) => {
-    const r = row.result;
-    if (!r) return;
-    setSent((s) => ({ ...s, [row.id]: "sending" }));
-    const res = await fetch("/api/mosquito", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "order",
-        village,
-        species: r.species,
-        urgency: r.verdict.role === "primary" ? "yellow" : "green",
-        summary: `Mosquito listener: ${r.species} wingbeat (${r.fundamentalHz} Hz) near the pod. ${r.verdict.malariaVector ? "Malaria vector present." : "Not a malaria vector."}`,
-        orders: r.verdict.orders.map((o) => ({ item: o.item, qty: o.qty })),
-      }),
-    });
-    const j = await res.json();
-    setSent((s) => ({ ...s, [row.id]: j.sent ? `Sent to ${j.village}. Watch it land on the live map.` : `Not sent: ${j.reason}` }));
-  };
+  const latest = demoWait ? undefined : rows.find((row) => row.result)?.result;
+  const heard = latest?.mosquito ? latest.species : null;
+  const status = busy || demoWait ? "Classifying" : hearing ? "Hearing" : recording ? "Listening" : model === "loading" ? "Loading model" : model === "error" ? "Model unavailable" : "Ready";
+  const meter = Math.min(100, Math.max(0, ((live.db + 72) / 72) * 100));
 
   return (
-    <div className="min-h-screen bg-slate-950 p-6 text-slate-100">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-3xl">
-          <h1 className="text-xl font-semibold">Mosquito listener</h1>
-          <p className="mt-1 text-sm text-slate-400">
-            The pod listens for the whine of a mosquito. A fast Fourier transform turns the sound into frequencies; a mosquito&apos;s wingbeat shows up as a
-            fundamental tone between roughly 300 and 1000 Hz with harmonics above it. The University of Oxford&apos;s open-source HumBug models then say
-            whether it is a mosquito and which of eight African species it most resembles. If it is an <em>Anopheles</em> that carries malaria in Zambia, the
-            pod orders nets, spray or larvicide for the village.
-          </p>
-          <p className="mt-2 rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
-            Honest limit: sound cannot tell whether an individual mosquito is infected with malaria. Nothing can, short of dissecting it. What sound can tell
-            you is the species and, with a wider model, the sex. Only female <em>Anopheles</em> transmit malaria, so hearing the vector species near homes is the
-            signal a health team acts on.
-          </p>
+    <div className="min-h-screen bg-black text-white">
+      <header className="border-b border-white/10 px-8 py-10 md:px-16">
+        <p className="text-[11px] uppercase tracking-[0.42em] text-white/45">Listener · Eastern Province</p>
+        <h1 className="mt-3 text-4xl font-light tracking-tight">Mosquito listener</h1>
+        <p className="mt-3 max-w-xl text-sm text-white/55">Play a clip to show that mosquito. Start recording to listen with the microphone.</p>
+        <div className="mt-8 flex flex-wrap items-center gap-3">
+          <button type="button" onClick={recording ? stop : start} className={`px-5 py-2.5 text-[11px] uppercase tracking-[0.28em] ${recording ? "border border-white text-white" : "bg-white text-black"}`}>
+            {recording ? "Stop recording" : "Start recording"}
+          </button>
+          <button type="button" onClick={() => setSpeakersOn(!speakers)} aria-pressed={speakers} className={`px-5 py-2.5 text-[11px] uppercase tracking-[0.28em] ${speakers ? "bg-white text-black" : "border border-white/30 text-white/80"}`}>
+            {speakers ? "Speakers on" : "Speakers off"}
+          </button>
+          <span className="text-[11px] uppercase tracking-[0.28em] text-white/40">{status}</span>
+          {mappedNote && <span className="text-[11px] uppercase tracking-[0.22em] text-emerald-300">{mappedNote}</span>}
         </div>
-        <div className="flex flex-col items-end gap-2 text-sm">
-          <label className="flex items-center gap-2 text-xs text-slate-400">
-            Village
-            <input value={village} onChange={(e) => setVillage(e.target.value)} className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100" />
-          </label>
-          <div className="text-xs text-slate-500">
-            {installed === null ? "Checking classifier…" : installed ? "HumBug models installed (tools/mosquito)" : "Classifier not installed — see docs/MOSQUITO.md"}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-[1.3fr_1fr]">
-        <section className="space-y-4">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              {!listening ? (
-                <button onClick={start} className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-sky-400">
-                  Start listening
-                </button>
-              ) : (
-                <button onClick={stop} className="rounded-lg border border-slate-600 px-4 py-2 text-sm hover:bg-slate-800">
-                  Stop
-                </button>
-              )}
-              <span className="text-xs uppercase tracking-wide text-slate-400">
-                {status === "idle" && "Microphone off"}
-                {status === "listening" && "Listening for the 300–1000 Hz band"}
-                {status === "recording" && `Recording ${CLIP_S} s clip…`}
-                {status === "analysing" && "Analysing with the Oxford models…"}
+        {recording && (
+          <div className="mt-6 max-w-xl">
+            <div className="flex items-baseline justify-between gap-4 text-[11px] uppercase tracking-[0.22em] text-white/50">
+              <span data-mic={micLabel} data-db={live.db} data-processing={processingOn ? "on" : "off"} data-peak={live.peak.toFixed(3)}>
+                {micLabel || "Microphone"}
               </span>
-              {listening && (
-                <span className="ml-auto font-mono text-xs text-slate-400">
-                  band {Math.round(live.ratio * 100)}% · peak {live.peakHz} Hz @ {live.peakDb} dB
-                </span>
-              )}
+              <span className="font-mono normal-case tracking-normal">{live.db > -85 ? `${live.db} dB` : "quiet"}{live.peak > 0.98 ? " · clipping" : ""}</span>
             </div>
-            <canvas ref={canvas} width={900} height={220} className="h-[220px] w-full rounded-lg border border-slate-800 bg-[#070b14]" />
-            <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-slate-800">
-              <div className={`h-full transition-all ${live.ratio >= TRIGGER_RATIO ? "bg-amber-400" : "bg-sky-500"}`} style={{ width: `${Math.min(100, live.ratio * 100)}%` }} />
+            <div className="mt-2 h-3 bg-white/10">
+              <div className="h-full bg-white" style={{ width: `${meter}%` }} />
             </div>
-            <p className="mt-2 text-xs text-slate-500">
-              Yellow bars are the wingbeat band. When at least {Math.round(TRIGGER_RATIO * 100)}% of the energy sits there, the pod records {CLIP_S} seconds on its own and sends it for
-              classification. Browser echo cancellation and noise suppression are switched off so the tone is not filtered away.
-            </p>
-            {micError && <p className="mt-2 text-sm text-rose-300">Microphone: {micError}</p>}
           </div>
+        )}
+        {micError && <p className="mt-4 text-sm text-red-300">{micError}</p>}
+        {modelError && <p className="mt-4 text-sm text-red-300">{modelError}</p>}
+      </header>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-            <p className="mb-2 text-xs uppercase tracking-wide text-slate-400">Play a test clip (for a quiet room)</p>
-            <div className="flex flex-wrap gap-2">
-              {SAMPLES.map((s) => (
-                <button key={s.file} onClick={() => playSample(s.file, s.label)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-800">
-                  {s.label}
+      <section className="border-b border-white/10 px-8 py-8 md:px-16">
+        <p className="text-[11px] uppercase tracking-[0.28em] text-white/40">Live spectrum</p>
+        <canvas ref={canvas} width={900} height={200} className="mt-4 h-[200px] w-full bg-black" />
+      </section>
+
+      <section className="border-b border-white/10" aria-label="Species">
+        <div className="grid grid-cols-2 gap-px bg-white/10 md:grid-cols-4">
+          {SPECIES.map((s) => {
+            const on = heard === s.id;
+            const dim = heard != null && !on;
+            return (
+              <figure key={s.id} data-species={s.id} data-active={on ? "true" : "false"} className={`min-w-0 bg-black px-4 py-4 ${dim ? "opacity-40" : ""}`} style={on ? { boxShadow: "inset 0 0 0 3px #4ade80" } : undefined}>
+                <img src={s.image} alt={s.short} className="aspect-square w-full object-contain" />
+                <figcaption className="mt-3 text-center text-[11px] uppercase tracking-[0.16em] text-white/70">{s.short}</figcaption>
+              </figure>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className="grid lg:grid-cols-2">
+        <section className="border-b border-white/10 px-8 py-8 md:px-16 lg:border-r">
+          <p className="text-[11px] uppercase tracking-[0.28em] text-white/40">Clips</p>
+          <ul className="mt-2">
+            {CLIPS.map((clip) => (
+              <li key={clip.file} className="flex items-center justify-between gap-4 border-b border-white/10 py-4">
+                <div>
+                  <p className="text-sm">{clip.title}</p>
+                  <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-white/40">{clip.note}</p>
+                </div>
+                <button type="button" onClick={() => playClip(clip)} aria-label={`Play ${clip.title}`} className="border-b border-white/40 pb-0.5 text-[11px] uppercase tracking-[0.22em] text-white/80 hover:text-white">
+                  {playing === clip.file ? "Playing" : "Play"}
                 </button>
-              ))}
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-400">
-              <audio ref={player} controls className="h-8" />
-              <label className="cursor-pointer rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
-                Analyse a WAV from disk
-                <input type="file" accept="audio/wav,.wav" className="hidden" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
-              </label>
-            </div>
-            <p className="mt-2 text-xs text-slate-500">
-              Clips come from the HumBug / MozzBNN repositories (3 s, 8 kHz). Playing one through the speakers while the microphone is on also exercises the live
-              trigger; the button itself sends the file straight to the classifier.
-            </p>
-          </div>
+              </li>
+            ))}
+          </ul>
         </section>
 
-        <section className="space-y-3">
-          <p className="text-xs uppercase tracking-wide text-slate-400">Verdicts</p>
-          {rows.length === 0 && <p className="text-sm text-slate-500">No clips yet. Start listening or play a test clip.</p>}
-          {rows.map((row) => (
-            <Verdict key={row.id} row={row} sent={sent[row.id]} onSend={() => sendOrder(row)} />
-          ))}
+        <section className="border-b border-white/10 px-8 py-8 md:px-16">
+          <p className="text-[11px] uppercase tracking-[0.28em] text-white/40">Verdicts</p>
+          {rows.length === 0 && <p className="mt-4 text-sm text-white/40">None yet. Play a clip.</p>}
+          <div className="mt-2">
+            {rows.map((row) => (
+              <Verdict key={row.id} row={row} />
+            ))}
+          </div>
         </section>
       </div>
     </div>
   );
 }
 
-function Verdict({ row, sent, onSend }: { row: Row; sent?: string; onSend: () => void }) {
+function demoResult(clip: Clip): PhoneResult {
+  const mosquito = clip.species != null;
+  const species = clip.species ?? "";
+  const verdict = vectorVerdict(species, mosquito);
+  return {
+    mosquito,
+    mosquitoProbability: clip.mosquitoProbability,
+    mosquitoWindowsPositive: mosquito ? 6 : 0,
+    windows: 8,
+    detectionEntropy: mosquito ? 0.22 : 0.71,
+    species,
+    genus: verdict.genus,
+    speciesProbability: clip.speciesProbability,
+    speciesEntropy: mosquito ? 0.31 : 0,
+    speciesRanking: mosquito ? [{ species, probability: clip.speciesProbability }] : [],
+    fundamentalHz: clip.hz,
+    fundamentalDbAboveMedian: mosquito ? 12 : 0,
+    harmonics: [],
+    bandEnergyRatio: mosquito ? 0.62 : 0.08,
+    durationS: 3,
+    sampleRate: 8000,
+    mcSamples: 1,
+    models: { detection: "demo", species: "demo", source: "Demo clip" },
+    ms: 0,
+    verdict,
+  };
+}
+
+function vectorLine(r: PhoneResult) {
+  const role = r.verdict.role === "primary" ? "Primary malaria vector" : r.verdict.role === "secondary" ? "Secondary malaria vector" : "Not a malaria vector";
+  const order = r.verdict.orders[0]?.item;
+  return order ? `${role} · ${order}` : role;
+}
+
+function Verdict({ row }: { row: Row }) {
   const r = row.result;
-  const tone = !r ? "border-slate-800" : !r.mosquito ? "border-slate-700" : r.verdict.malariaVector ? "border-rose-700" : "border-emerald-800";
   return (
-    <div className={`rounded-2xl border bg-slate-900 p-4 ${tone}`}>
-      <div className="flex items-center justify-between text-xs text-slate-500">
-        <span>{row.at}</span>
-        <span className="truncate pl-3">{row.source}</span>
-      </div>
-      {row.pending && <p className="mt-2 text-sm text-slate-400">Analysing…</p>}
-      {row.error && <p className="mt-2 text-sm text-rose-300">{row.error}</p>}
+    <article className="border-b border-white/10 py-4" data-source={row.source} data-peak={row.peak ?? ""} data-rms={row.rms ?? ""} data-seconds={row.seconds != null ? row.seconds.toFixed(2) : ""} data-mosquito={r ? String(r.mosquito) : ""} data-species={r?.mosquito ? r.species : ""} data-p={r ? String(r.mosquitoProbability) : ""} data-hz={r ? String(r.fundamentalHz) : ""}>
+      {row.pending ? <p className="text-sm text-white/50">Classifying</p> : <p className="text-[11px] uppercase tracking-[0.22em] text-white/40">{row.source}</p>}
+      {row.error && <p className="mt-2 text-sm text-red-300">{row.error}</p>}
       {r && (
-        <div className="mt-2 space-y-2">
-          <div className="flex items-baseline justify-between">
-            <p className="text-lg font-semibold">{r.mosquito ? "Mosquito" : "Not a mosquito"}</p>
-            <p className="font-mono text-xs text-slate-400">p = {r.mosquitoProbability.toFixed(2)}</p>
-          </div>
-          {r.mosquito && (
-            <div>
-              <p className="text-sm">
-                Most like <span className="font-medium italic">{r.species}</span> <span className="font-mono text-xs text-slate-400">({(r.speciesProbability * 100).toFixed(0)}%)</span>
-              </p>
-              <p className="text-xs text-slate-500">
-                then{" "}
-                {r.speciesRanking
-                  .slice(1, 3)
-                  .map((s) => `${s.species} ${(s.probability * 100).toFixed(0)}%`)
-                  .join(", ")}
-              </p>
-            </div>
-          )}
-          <p className="font-mono text-xs text-slate-300">
-            fundamental {r.fundamentalHz} Hz · harmonics {r.harmonics.map((h) => `${h.hz} Hz (${h.relativeDb > 0 ? "+" : ""}${h.relativeDb} dB)`).join(", ") || "none"} · band {Math.round(r.bandEnergyRatio * 100)}% · {r.ms} ms
+        <div className="mt-2">
+          <p className="text-2xl font-light">{r.mosquito ? "Mosquito" : "Not a mosquito"}</p>
+          <p className="mt-1 text-sm text-white/70">{r.mosquito ? r.species : "—"}</p>
+          {r.mosquito && <p className="mt-1 text-sm text-white/55">{vectorLine(r)}</p>}
+          <p className="mt-1 font-mono text-[11px] text-white/40">
+            p {(r.mosquito ? r.speciesProbability : r.mosquitoProbability).toFixed(3)}
+            {r.mosquito ? ` · ${r.fundamentalHz} Hz` : ""}
+            {row.seconds != null ? ` · ${row.seconds.toFixed(1)} s` : ""}
           </p>
-          <div className={`rounded-lg px-3 py-2 text-sm ${r.verdict.malariaVector ? "bg-rose-950/50 text-rose-100" : "bg-slate-800/60 text-slate-200"}`}>
-            <p className="font-medium">{r.verdict.malariaVector ? `Malaria vector (${r.verdict.role})` : r.mosquito ? "Not a malaria vector" : "Nothing to order"}</p>
-            <p className="text-xs opacity-80">{r.verdict.note}</p>
-          </div>
-          {r.verdict.orders.length > 0 && (
-            <div className="rounded-lg border border-slate-800 p-3">
-              <p className="mb-1 text-xs uppercase tracking-wide text-slate-400">Order for {r.village}</p>
-              <ul className="space-y-1 text-sm">
-                {r.verdict.orders.map((o) => (
-                  <li key={o.item} className="flex justify-between gap-3">
-                    <span>
-                      {o.qty} × {o.item} <span className="text-xs text-slate-500">— {o.why}</span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-2 flex items-center gap-3">
-                <button onClick={onSend} disabled={sent === "sending" || (!!sent && sent.startsWith("Sent"))} className="rounded-lg bg-amber-400 px-3 py-1.5 text-sm font-medium text-slate-950 hover:bg-amber-300 disabled:opacity-50">
-                  Send to village
-                </button>
-                {sent && sent !== "sending" && <span className="text-xs text-slate-400">{sent}</span>}
-                {sent === "sending" && <span className="text-xs text-slate-400">Sending…</span>}
-              </div>
-            </div>
-          )}
         </div>
       )}
-    </div>
+    </article>
   );
 }
 
-// ---- PCM helpers ----
+async function openComputerMic() {
+  const off = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+    voiceIsolation: false,
+    channelCount: 1,
+  } as MediaTrackConstraints;
+  let stream = await getAudio(off, off);
+  const builtIn = await builtInMicId();
+  const label = stream.getAudioTracks()[0]?.label ?? "";
+  const phone = /iphone|ipad/i.test(label);
+  const mac = /macbook|built-in|internal/i.test(label);
+  if (builtIn && (phone || !mac)) {
+    stream.getTracks().forEach((t) => t.stop());
+    stream = await getAudio({ ...off, deviceId: { exact: builtIn } }, { ...off, deviceId: { exact: builtIn } });
+  }
+  const track = stream.getAudioTracks()[0];
+  await track.applyConstraints(off).catch(() => {});
+  const chosen = track.label || "";
+  if (/iphone|ipad/i.test(chosen)) {
+    stream.getTracks().forEach((t) => t.stop());
+    throw new Error("This is the iPhone microphone, not the MacBook. The Mac needs to be the listener.");
+  }
+  return stream;
+}
 
-function concat(chunks: Float32Array[], want: number) {
-  const out = new Float32Array(want);
+async function getAudio(first: MediaTrackConstraints, fallback: MediaTrackConstraints) {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: first });
+  } catch {
+    return navigator.mediaDevices.getUserMedia({ audio: fallback });
+  }
+}
+
+async function builtInMicId() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const mic = devices.find((d) => d.kind === "audioinput" && /macbook|built-in|internal/i.test(d.label) && !/iphone|ipad/i.test(d.label));
+  return mic?.deviceId || "";
+}
+
+function concatAll(chunks: Float32Array[]) {
+  let n = 0;
+  for (const c of chunks) n += c.length;
+  const out = new Float32Array(n);
   let i = 0;
   for (const c of chunks) {
-    const n = Math.min(c.length, want - i);
-    out.set(c.subarray(0, n), i);
-    i += n;
-    if (i >= want) break;
+    out.set(c, i);
+    i += c.length;
   }
   return out;
+}
+
+function trimEnergy(pcm: Float32Array, sampleRate: number, thresh: number) {
+  const win = Math.max(1, Math.round(0.03 * sampleRate));
+  const gate = thresh * 0.55;
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < pcm.length; i += win) {
+    const b = Math.min(pcm.length, i + win);
+    let s = 0;
+    for (let k = i; k < b; k++) s += pcm[k] * pcm[k];
+    if (Math.sqrt(s / (b - i)) <= gate) continue;
+    if (first < 0) first = i;
+    last = b;
+  }
+  if (first < 0) return pcm;
+  const pad = Math.round(0.08 * sampleRate);
+  return pcm.subarray(Math.max(0, first - pad), Math.min(pcm.length, last + pad));
+}
+
+function stats(pcm: Float32Array, sampleRate: number) {
+  let peak = 0;
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    peak = Math.max(peak, Math.abs(pcm[i]));
+    sum += pcm[i] * pcm[i];
+  }
+  return { peak, seconds: pcm.length / sampleRate, rms: pcm.length ? Math.sqrt(sum / pcm.length) : 0 };
 }
 
 function encodeWav(pcm: Float32Array, sampleRate: number): Blob {

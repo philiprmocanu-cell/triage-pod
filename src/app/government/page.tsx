@@ -314,13 +314,13 @@ export default function GovernmentPage() {
   const fmtM = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} million` : n.toLocaleString());
 
   return (
-    <div className="min-h-screen bg-[#060b14] text-slate-100">
+    <div className="min-h-screen bg-black text-white">
       <style>{CSS}</style>
-      <header className="border-b border-emerald-900/60 bg-gradient-to-r from-emerald-950/70 via-[#060b14] to-[#060b14] px-6 py-4">
+      <header className="border-b border-white/10 px-6 py-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-emerald-400">Provincial Health Office · Eastern Province · Zambia</p>
-            <h1 className="mt-1 text-2xl font-bold">Supply command: {rows.length ? `${posts.length} health posts and the Chipata hub` : "every health post"}, stock against what pods are flagging</h1>
+            <p className="text-[11px] uppercase tracking-[0.42em] text-white/45">Provincial Health Office · Eastern Province · Zambia</p>
+            <h1 className="mt-2 text-2xl font-light tracking-tight">Supply · {rows.length ? `${posts.length} posts and the Chipata hub` : "every health post"}</h1>
             <p className="mt-1 max-w-3xl text-sm text-slate-400">
               Every post, every item it must hold, what its pod asked for this period, the satellite weather over it and who there is due a vaccine. The AI agents move stock before a post runs out and write down why.
             </p>

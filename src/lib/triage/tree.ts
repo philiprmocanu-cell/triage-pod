@@ -17,7 +17,7 @@ export const FINDINGS = {
   sweating: {
     label: "Sweating or clammy",
     ask: { en: "Are you sweating a lot right now, or breaking into a cold sweat, even without heat or hard work?", es: "¿Está sudando mucho ahorita, o le da sudor frío, aunque no haga calor ni esté trabajando duro?" },
-    seen: "Is the person's face visibly sweaty, wet or shiny with sweat?",
+    seen: "Is the face wet with sweat: beads, a damp forehead, temples, upper lip or nose? Not dry skin or one highlight from the lights.",
   },
   short_of_breath: {
     label: "Short of breath",
@@ -33,7 +33,7 @@ export const FINDINGS = {
   // Speech test from stroke scales: repeat a simple sentence; Jev checks the transcript.
   confused_speech: {
     label: "Slurred or confused speech",
-    ask: { en: "Please repeat after me: \"Today the sky is blue and the river is calm.\"", es: "Por favor, repita después de mí: \"Hoy el cielo está azul y el río está tranquilo.\"" },
+    ask: { en: "Are your words coming out clearly, or are they slurred or hard to get out?", es: "¿Las palabras le salen claras, o se le traban o le cuesta hablar?" },
   },
   headache: { label: "Headache", ask: { en: "Do you have a headache?", es: "¿Le duele la cabeza?" } },
   worst_headache: {
@@ -187,7 +187,7 @@ export const PATHWAYS: Pathway[] = [
     label: "Chest pain / heart",
     description: "Chest pain, chest pressure or tightness",
     triggers: ["chest_pain"],
-    questions: ["pain_spreads", "sweating", "short_of_breath", "sudden_onset"],
+    questions: ["pain_spreads", "sweating", "short_of_breath", "sudden_onset", "test:pulse"],
     subtypes: [
       { name: "Heart attack", description: "Crushing or pressure pain, spreading to arm/jaw, sweating, breathlessness", urgency: "red", resources: ["Emergency transport", "Aspirin (doctor to approve)", "ECG at receiving clinic"] },
       { name: "Angina", description: "Chest pain on exertion that settles with rest", urgency: "yellow", resources: ["Doctor review", "ECG at receiving clinic"] },
@@ -326,10 +326,21 @@ export const TESTS: Test[] = [
   {
     id: "finger",
     label: "Oxygen + pulse (finger sensor)",
-    say: { en: "Please rest your index finger on the red sensor and keep still for fifteen seconds.", es: "Por favor, ponga su dedo índice sobre el sensor rojo y no lo mueva por quince segundos." },
-    prep: 1,
-    seconds: 15,
-    checks: [], // measured by the pod's sensor, not judged from pictures
+    say: { en: "Place your arm on the sensor and hold still. I am reading your pulse, and it will show on the video.", es: "Ponga el brazo sobre el sensor y no lo mueva. Estoy leyendo su pulso, y se verá en el video." },
+    prep: 2,
+    seconds: 18,
+    checks: [], // measured by the watch or the red light, not judged from pictures
+  },
+  {
+    id: "pulse",
+    label: "Camera pulse",
+    say: {
+      en: "Please look at the camera and hold still. I am reading your pulse from the colour of your skin.",
+      es: "Mire a la cámara y quédese quieto. Estoy leyendo su pulso en el color de su piel.",
+    },
+    prep: 2,
+    seconds: 12,
+    checks: [], // remote photoplethysmography on the camera, not a picture judgment
   },
   {
     id: "smile",
@@ -453,8 +464,8 @@ export const PROBES: Probe[] = [
     pathway: "stroke",
     covers: ["sudden_onset", "face_or_arm_weakness", "confused_speech", "balance_problem", "severe_headache"],
     say: {
-      en: "Tell me what happened: when it started, whether it came on suddenly, and what you noticed first in your face, your arm or your speech.",
-      es: "Cuénteme qué pasó: cuándo empezó, si fue de repente, y qué fue lo primero que notó en la cara, el brazo o el habla.",
+      en: "Tell me what happened, and what you noticed first.",
+      es: "Cuénteme qué pasó y qué notó primero.",
     },
   },
   {
@@ -462,8 +473,8 @@ export const PROBES: Probe[] = [
     pathway: "cardiac",
     covers: ["chest_pain", "pain_spreads", "sudden_onset"],
     say: {
-      en: "Tell me more about the pain: where exactly is it, what does it feel like, and does it move anywhere, like your arm, jaw or back?",
-      es: "Cuénteme más del dolor: dónde exactamente lo siente, cómo es, y si se le pasa a otro lado, como el brazo, la quijada o la espalda.",
+      en: "Tell me more about the pain: where it is, and what it feels like.",
+      es: "Cuénteme más del dolor: dónde lo siente y cómo es.",
     },
   },
   {
@@ -471,8 +482,8 @@ export const PROBES: Probe[] = [
     pathway: "cardiac",
     covers: ["sweating", "short_of_breath"],
     say: {
-      en: "What else have you noticed with it, like sweating or trouble breathing, and is there anything that makes it better or worse, like resting or moving?",
-      es: "¿Qué más ha notado junto con eso, como sudor o que le cueste respirar, y hay algo que lo mejore o lo empeore, como descansar o moverse?",
+      en: "What else have you noticed with it?",
+      es: "¿Qué más ha notado junto con eso?",
     },
   },
   {
@@ -480,12 +491,12 @@ export const PROBES: Probe[] = [
     pathway: "breathing",
     covers: ["cough", "wheeze", "short_of_breath", "fast_breathing", "long_cough"],
     say: {
-      en: "Describe the cough and the breathing for me: what does the cough sound like, how long has it been there, and how is the breathing?",
-      es: "Descríbame la tos y la respiración: cómo suena la tos, desde cuándo la tiene, y cómo está la respiración.",
+      en: "Tell me about the cough, and how the breathing is.",
+      es: "Cuénteme de la tos y de cómo está la respiración.",
     },
     sayChild: {
-      en: "Tell me about the child's cough and breathing: what does the cough sound like, how long has it been there, and how are they breathing?",
-      es: "Cuénteme de la tos y la respiración del niño: cómo suena la tos, desde cuándo la tiene, y cómo está respirando.",
+      en: "Tell me about the child's cough, and how they are breathing.",
+      es: "Cuénteme de la tos del niño y de cómo está respirando.",
     },
   },
   {
@@ -493,12 +504,12 @@ export const PROBES: Probe[] = [
     pathway: "breathing",
     covers: ["fever", "unable_to_drink", "chest_indrawing"],
     say: {
-      en: "What else have you noticed since it started, like a fever, and are you eating and drinking as usual?",
-      es: "¿Qué más ha notado desde que empezó, como calentura, y está comiendo y tomando como siempre?",
+      en: "What else have you noticed since it started?",
+      es: "¿Qué más ha notado desde que empezó?",
     },
     sayChild: {
-      en: "What else have you noticed since it started, like a fever? Is the child drinking and feeding as usual, and does the skin pull in under the ribs when they breathe?",
-      es: "¿Qué más ha notado desde que empezó, como calentura? ¿El niño toma y come como siempre, y se le hunde la piel debajo de las costillas al respirar?",
+      en: "What else have you noticed with the child since it started?",
+      es: "¿Qué más ha notado en el niño desde que empezó?",
     },
   },
   {
@@ -506,12 +517,12 @@ export const PROBES: Probe[] = [
     pathway: "fever",
     covers: ["very_sleepy", "unable_to_drink", "vomits_everything", "seizure"],
     say: {
-      en: "How are you in yourself with this fever: awake and able to drink and keep things down, or very sleepy, vomiting everything, or have there been any fits?",
-      es: "¿Cómo se siente en general con esta calentura: está despierto y puede tomar líquidos sin vomitarlos, o está muy dormido, vomita todo, o ha tenido ataques?",
+      en: "With this fever, are you awake and able to drink, or very sleepy and sick?",
+      es: "Con esta calentura, ¿está despierto y puede tomar líquidos, o está muy dormido y mal?",
     },
     sayChild: {
-      en: "How is the child in themselves with this fever: awake and drinking, or very sleepy, vomiting everything, or have there been any fits?",
-      es: "¿Cómo está el niño con esta calentura: despierto y tomando líquidos, o muy dormido, vomita todo, o ha tenido ataques?",
+      en: "With this fever, is the child awake and drinking, or very sleepy and sick?",
+      es: "Con esta calentura, ¿el niño está despierto y tomando líquidos, o está muy dormido y mal?",
     },
   },
   {
@@ -519,8 +530,8 @@ export const PROBES: Probe[] = [
     pathway: "fever",
     covers: ["chills", "mosquito_bites", "rash", "yellow_eyes", "stiff_neck"],
     say: {
-      en: "Tell me how the fever goes and what else you have noticed with it: chills or sweats, a stiff neck, spots on the skin or yellow eyes, and whether you sleep under a net.",
-      es: "Cuénteme cómo le da la calentura y qué más ha notado con ella: escalofríos o sudores, cuello tieso, manchas en la piel u ojos amarillos, y si duerme con mosquitero.",
+      en: "How has the fever been, and what else have you noticed with it?",
+      es: "¿Cómo le ha dado la calentura, y qué más ha notado con ella?",
     },
   },
   {
@@ -528,12 +539,12 @@ export const PROBES: Probe[] = [
     pathway: "stomach",
     covers: ["diarrhea", "vomits_everything", "blood_in_stool", "unable_to_drink", "belly_pain"],
     say: {
-      en: "Tell me about the diarrhea or vomiting: how many times a day, what it looks like, whether there is blood, and whether you can keep fluids down.",
-      es: "Cuénteme de la diarrea o el vómito: cuántas veces al día, cómo se ve, si hay sangre, y si puede tomar líquidos sin vomitarlos.",
+      en: "Tell me about the diarrhea or the vomiting.",
+      es: "Cuénteme de la diarrea o el vómito.",
     },
     sayChild: {
-      en: "Tell me about the child's diarrhea or vomiting: how many times a day, what it looks like, whether there is blood, and whether they can keep fluids down.",
-      es: "Cuénteme de la diarrea o el vómito del niño: cuántas veces al día, cómo se ve, si hay sangre, y si puede tomar líquidos sin vomitarlos.",
+      en: "Tell me about the child's diarrhea or vomiting.",
+      es: "Cuénteme de la diarrea o el vómito del niño.",
     },
   },
   {
@@ -541,12 +552,12 @@ export const PROBES: Probe[] = [
     pathway: "stomach",
     covers: ["very_sleepy", "sunken_eyes", "fever"],
     say: {
-      en: "How are you in yourself: very thirsty, very sleepy, feeling hot, and what else have you noticed?",
-      es: "¿Cómo se siente en general: con mucha sed, muy dormido, con calentura, y qué más ha notado?",
+      en: "How are you feeling in yourself right now?",
+      es: "¿Cómo se siente en este momento?",
     },
     sayChild: {
-      en: "How is the child in themselves: very thirsty, very sleepy, eyes sunken, feeling hot, and what else have you noticed?",
-      es: "¿Cómo está el niño: con mucha sed, muy dormido, los ojos hundidos, con calentura, y qué más ha notado?",
+      en: "How is the child in themselves right now?",
+      es: "¿Cómo está el niño en este momento?",
     },
   },
   {
@@ -554,8 +565,8 @@ export const PROBES: Probe[] = [
     pathway: "pregnancy",
     covers: ["severe_bleeding", "severe_headache", "seizure", "fever", "swollen_feet"],
     say: {
-      en: "Tell me what has been happening with the pregnancy and what worries you: any bleeding, a strong headache or blurry vision, swelling, fever or fits?",
-      es: "Cuénteme qué ha pasado con el embarazo y qué le preocupa: ¿algún sangrado, dolor de cabeza fuerte o visión borrosa, hinchazón, calentura o ataques?",
+      en: "Tell me what has been happening, and what worries you.",
+      es: "Cuénteme qué ha pasado y qué le preocupa.",
     },
   },
   {
@@ -563,8 +574,8 @@ export const PROBES: Probe[] = [
     pathway: "injury",
     covers: ["injury", "severe_bleeding", "deformed_limb", "cant_bear_weight", "deep_wound", "dirty_wound"],
     say: {
-      en: "Tell me how it happened and show the camera where it hurts: is it still bleeding, how deep is the cut, what did it, and can you move it or put weight on it?",
-      es: "Cuénteme cómo pasó y muéstrele a la cámara dónde le duele: ¿sigue sangrando, qué tan profunda es la herida, con qué fue, y puede moverlo o apoyarse?",
+      en: "Tell me how it happened, and show the camera where it hurts.",
+      es: "Cuénteme cómo pasó y muéstrele a la cámara dónde le duele.",
     },
   },
   {
@@ -572,8 +583,8 @@ export const PROBES: Probe[] = [
     pathway: "headache",
     covers: ["worst_headache", "severe_headache", "light_hurts", "sudden_onset"],
     say: {
-      en: "Tell me more about the headache: how it started, where it is, what it feels like, and whether light or noise make it worse.",
-      es: "Cuénteme más del dolor de cabeza: cómo empezó, dónde lo siente, cómo es, y si la luz o el ruido lo empeoran.",
+      en: "Tell me more about the headache.",
+      es: "Cuénteme más del dolor de cabeza.",
     },
   },
   {
@@ -581,8 +592,8 @@ export const PROBES: Probe[] = [
     pathway: "headache",
     covers: ["fever", "stiff_neck", "face_or_arm_weakness", "chills"],
     say: {
-      en: "What else have you noticed with it, like fever, a stiff neck or weakness anywhere, and what have you taken for it?",
-      es: "¿Qué más ha notado junto con eso, como calentura, cuello tieso o debilidad en alguna parte, y qué ha tomado para el dolor?",
+      en: "What else have you noticed with the headache?",
+      es: "¿Qué más ha notado junto con el dolor de cabeza?",
     },
   },
   {
@@ -590,8 +601,8 @@ export const PROBES: Probe[] = [
     pathway: "pain",
     covers: ["back_pain", "pain_on_bending", "leg_weakness", "injury"],
     say: {
-      en: "Tell me more about the pain: where exactly it is, what it feels like, whether it goes down a leg, and what makes it better or worse, like bending or lifting.",
-      es: "Cuénteme más del dolor: dónde exactamente lo siente, cómo es, si se le baja a una pierna, y qué lo mejora o lo empeora, como agacharse o cargar.",
+      en: "Tell me more about the pain: where it is, and what it feels like.",
+      es: "Cuénteme más del dolor: dónde lo siente y cómo es.",
     },
   },
   {
@@ -599,8 +610,8 @@ export const PROBES: Probe[] = [
     pathway: "pain",
     covers: ["bladder_control", "fever"],
     say: {
-      en: "What else have you noticed since it started, like fever or any trouble holding your urine or stool, and what have you taken for it?",
-      es: "¿Qué más ha notado desde que empezó, como calentura o problemas para aguantar la orina o el popó, y qué ha tomado para el dolor?",
+      en: "What else have you noticed since the pain started?",
+      es: "¿Qué más ha notado desde que empezó el dolor?",
     },
   },
   {
@@ -608,8 +619,8 @@ export const PROBES: Probe[] = [
     pathway: "mental",
     covers: ["low_mood", "little_interest", "anxious", "cant_stop_worrying", "trauma_or_loss", "lonely"],
     say: {
-      en: "Tell me how things have been for you lately: how you have been feeling, how you are sleeping, and whether something hard has happened.",
-      es: "Cuénteme cómo han estado las cosas últimamente: cómo se ha sentido, cómo duerme, y si le ha pasado algo difícil.",
+      en: "Tell me how you have been feeling lately.",
+      es: "Cuénteme cómo se ha sentido últimamente.",
     },
   },
 ];

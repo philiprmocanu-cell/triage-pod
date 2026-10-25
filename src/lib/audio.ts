@@ -95,6 +95,12 @@ export type Utterance = {
   t: { opened: number; speechStart: number; speechEnd: number }; // performance.now() stamps
 };
 
+// How long the patient must actually be quiet before the pod takes the turn.
+// A yes or a no can end sooner. A sentence gets a real pause, so a breath is not the end.
+export function quietBeforeAnswer(spokeMs: number, silenceMs = 2600): number {
+  return spokeMs < 800 ? Math.min(silenceMs, 1600) : silenceMs;
+}
+
 // Hands-free listening: waits for the patient to start talking, and stops by itself after they
 // have been quiet for a moment. Returns null if nobody spoke within `waitMs`.
 export async function listenForUtterance(opts: {
@@ -105,9 +111,8 @@ export async function listenForUtterance(opts: {
   onPhase?: (phase: "waiting" | "speaking" | "finishing") => void;
   signal?: AbortSignal;
 }): Promise<Utterance | null> {
-  // silenceMs: how long the patient must be quiet before the pod answers. 1.2 s reads as a
-  // natural pause; a short "no" ends even sooner (0.7x) because spokeMs is small.
-  const { waitMs = 8000, silenceMs = 1200, maxMs = 20000, onLevel, onPhase, signal } = opts;
+  // 2.6 s of quiet after a sentence. The old 0.8 s cut people off between phrases.
+  const { waitMs = 14000, silenceMs = 2600, maxMs = 45000, onLevel, onPhase, signal } = opts;
   const stream = await getMic();
   const ctx = audioCtx();
   try {
@@ -128,19 +133,26 @@ export async function listenForUtterance(opts: {
 
   const buf = new Float32Array(analyser.fftSize);
   const t0 = performance.now();
-  let noise = 0.01, calibrated = 0, speechAt = 0, lastVoice = 0, spokeMs = 0, last = t0, speechEnd = 0;
+  // The floor starts low and only creeps up during real quiet. It must not jump to the
+  // level of the first words, or the rest of the sentence stops counting and the turn ends.
+  let noise = 0.015, speechAt = 0, lastVoice = 0, spokeMs = 0, last = t0, speechEnd = 0, hangUntil = 0, peak = 0;
+  const armAt = t0 + 400; // the pod's own voice is still in the room for a moment after it stops
   const outcome = await new Promise<"speech" | "none">((resolve) => {
     const step = () => {
       if (signal?.aborted) return resolve("none");
       analyser.getFloatTimeDomainData(buf);
       const rms = Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
       const now = performance.now();
-      if (calibrated < 15) {
-        noise = Math.max(noise, rms);
-        calibrated++;
+      const inSpeech = speechAt > 0 && now - lastVoice < 700;
+      if (!inSpeech) {
+        if (rms < noise) noise = Math.max(0.004, noise * 0.45 + rms * 0.55);
+        else noise = Math.min(0.05, noise * 0.995 + rms * 0.005);
       }
-      const threshold = Math.max(0.02, noise * 2.5);
-      const voiced = rms > threshold;
+      const threshold = Math.min(0.06, Math.max(0.012, noise * 2.5));
+      const loud = rms > threshold;
+      if (loud) hangUntil = now + 500; // a gap between words is still the same sentence
+      const voiced = now >= armAt && (loud || (speechAt > 0 && now < hangUntil));
+      if (now >= armAt) peak = Math.max(peak, rms);
       if (voiced) {
         if (!speechAt) {
           speechAt = now;
@@ -152,21 +164,23 @@ export async function listenForUtterance(opts: {
       last = now;
       onLevel?.(Math.min(1, rms / (threshold * 3)), Boolean(speechAt));
       if (!meterWorks) {
-        // No level meter: take a fixed 7-second window and let speech-to-text decide.
+        // No level meter: take a fixed window long enough to finish a sentence.
         onLevel?.(0.5, true);
-        if (now - t0 > 7000) {
+        if (now - t0 > 12000) {
           speechAt ||= t0;
           speechEnd = now;
           return resolve("speech");
         }
         return void requestAnimationFrame(step);
       }
-      const quietFor = spokeMs < 1500 ? silenceMs * 0.7 : silenceMs; // a one-word answer needs less waiting
-      if (speechAt && spokeMs > 250 && now - lastVoice > quietFor) {
+      const quietFor = quietBeforeAnswer(spokeMs, silenceMs);
+      if (speechAt && spokeMs > 400 && now - lastVoice > quietFor) {
         speechEnd = lastVoice;
         return resolve("speech");
       }
-      if (!speechAt && now - t0 > waitMs) return resolve("none");
+      // Nobody there: give up. If the room was loud the whole time, they may still be talking
+      // and the meter missed it, so keep the recording open instead of talking over them.
+      if (!speechAt && now - t0 > waitMs && peak < Math.max(0.03, threshold * 1.4)) return resolve("none");
       if (now - t0 > maxMs) {
         speechEnd = now;
         return resolve(speechAt ? "speech" : "none");

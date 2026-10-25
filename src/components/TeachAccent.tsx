@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Recorder } from "@/lib/audio";
 
-// A local health worker reads one paragraph; Cartesia clones their voice and the pod speaks with
-// that community's accent from then on. Only for consenting staff, never patients.
+// A local health worker reads one paragraph. Grok Voice clones their voice and the pod
+// speaks to patients in this dialect with it. Only for consenting staff, never patients.
 const PASSAGE: Record<string, string> = {
   es: "Buenos días. Soy promotora de salud de esta comunidad. Aquí cuidamos a las familias, a los niños y a los abuelos. Si alguien tiene calentura, tos o algún dolor, venga a vernos, que con gusto le atendemos.",
   en: "Good morning. I am a health worker in this community. We take care of families, children and grandparents here. If anyone has a fever, a cough or any pain, come and see us.",
@@ -64,7 +64,7 @@ export default function TeachAccent({ locale, onClose }: { locale: string; onClo
           <div>
             <h2 className="text-lg font-semibold">Teach the pod our accent</h2>
             <p className="text-sm text-slate-400">
-              A local health worker reads the text below. The pod will speak to patients in {locale} with this voice.
+              A local health worker reads the text below. Grok Voice will speak to patients in {locale} with this voice.
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white" aria-label="Close">

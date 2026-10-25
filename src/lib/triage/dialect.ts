@@ -85,6 +85,45 @@ export async function communityLexicon(community: string | undefined): Promise<L
   return lex;
 }
 
+// Words the listener should expect, so a village word is not "corrected" into the standard one.
+// A full locale ("es-GT") adds that variety's markers. A bare language ("es") adds every variety.
+const MARKERS: Record<string, string[]> = {
+  "es-MX": ["ahorita", "chamaco", "mande", "calentura", "popó"],
+  "es-GT": ["patojo", "chilero", "cabal", "vos", "calentura"],
+  "es-HN": ["cipote", "catracho", "vos", "pisto"],
+  "es-SV": ["bicho", "cipote", "vos", "chivo"],
+  "es-NI": ["chavalo", "vos", "tuani"],
+  "es-CO": ["parce", "qué más"],
+  "es-PE": ["pata", "chibolo", "ya"],
+  "es-BO": ["wawa", "no ve"],
+  "es-EC": ["guagua", "chuta", "ya", "mande"],
+  "es-ES": ["vosotros", "vale", "tío"],
+  "en-ZM": ["running stomach", "now now", "is it"],
+  "en-NG": ["body is hot", "stooling", "purging", "catarrh", "pikin", "abi"],
+  "en-IN": ["loose motions", "paining", "giddiness"],
+  "en-GB": ["poorly", "tummy bug", "I feel rough"],
+  "ar-MA": ["wakha", "bzaf", "daba", "safi", "labas", "mashi mushkil", "kayn"],
+};
+
+export function dialectKeyterms(locale: string, lex: Lexicon = {}): string[] {
+  const loc = locale || "en";
+  const lang = loc.split("-")[0];
+  const concepts = Object.entries(CONCEPTS).filter(([k]) => (lang === "en" ? k.endsWith("_en") : lang === "es" ? !k.includes("_") : false));
+  const markers = MARKERS[loc] ?? Object.entries(MARKERS).filter(([k]) => k.startsWith(`${lang}-`)).flatMap(([, words]) => words);
+  const learned = Object.values(lex).filter((w): w is string => Boolean(w));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of [...learned, ...markers, ...concepts.flatMap(([, c]) => c.variants)]) {
+    const term = raw.trim();
+    const id = norm(term);
+    if (!term || term.length > 50 || seen.has(id)) continue;
+    seen.add(id);
+    out.push(term);
+    if (out.length >= 100) break;
+  }
+  return out;
+}
+
 export async function rememberWords(community: string | null | undefined, lex: Lexicon) {
   if (!community || !Object.keys(lex).length) return;
   const mem = await readMemory();

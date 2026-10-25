@@ -15,6 +15,7 @@ export type Turn = {
 export type CameraSignals = {
   heartRateBpm: number | null;
   heartRateConfidence: number; // 0..1
+  heartRateSource?: "camera" | "watch" | "finger"; // measured pulse beats a camera estimate
   droop: {
     score: number; // 0..1, higher = more one-sided
     side: "left" | "right" | null; // patient's own left/right
@@ -37,7 +38,19 @@ export type RuleHit = {
   resources: string[];
 };
 
-export type Cause = { name: string; pathway: string; probability: number; urgency: Urgency; why: string; evidence: string[]; against: string[]; early: boolean; confident: boolean; asked?: number };
+export type Cause = {
+  name: string;
+  pathway: string;
+  probability: number; // what the pod acts on, 0..1
+  jev: number; // Jev's own probability for this condition. Equals `probability` once the patient opened the area, unless a safety rule raised it.
+  urgency: Urgency;
+  why: string;
+  evidence: string[];
+  against: string[];
+  early: boolean;
+  confident: boolean;
+  asked?: number;
+};
 
 export type Resource = {
   item: string;

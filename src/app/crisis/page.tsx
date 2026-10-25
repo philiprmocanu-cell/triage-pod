@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { DbConnection } from "@/module_bindings";
+import { GROUND } from "@/lib/map/pin";
 
 // Crisis drill: mission control for "the rainy-season week from hell". One button starts the
 // situation inside SpacetimeDB (start_crisis) and runs the real dispatch planner and route planner
@@ -40,7 +41,7 @@ type PathRow = { id: string; points: [number, number][]; color: string; stroke: 
 
 const KIND_COLOR: Record<string, string> = { truck: "#f59e0b", pickup: "#fb923c", motorbike: "#38bdf8", bicycle: "#34d399", boat: "#22d3ee", drone: "#a78bfa" };
 const GREEN = "#22c55e", RED = "#ef4444";
-const GROUND_ALT = 0.004;
+const GROUND_ALT = GROUND;
 const RUN_RE = /run ([A-Z0-9]+) stop (\d+) of (\d+) \(([^)]+)\)/;
 const short = (name: string) => name.replace(/ \(.*\)$/, "");
 const us = (t?: Ts | null) => (t ? Number(t.microsSinceUnixEpoch) : 0);
@@ -337,7 +338,7 @@ export default function CrisisPage() {
   void tick;
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-[#02050c] text-slate-100">
+    <div className="fixed bottom-0 left-0 right-0 top-11 overflow-hidden bg-black text-slate-100">
       <style>{CSS}</style>
       <div className="grid h-full w-full grid-cols-[360px_1fr_380px] grid-rows-[auto_1fr] gap-2 p-2 pt-10">
         {/* ---- header row ---- */}

@@ -45,6 +45,7 @@ export const SUPPLIES_FOR: Record<string, Supply[]> = {
   "Malaria": [
     { item: "Malaria rapid test", qty: 1 },
     { item: "Antimalarial (ACT)", qty: 1, note: "3-day course, give if the test is positive" },
+    { item: "Malaria vaccine (R21)", qty: 1, note: "for this village" },
   ],
   "Severe malaria": [
     { item: "Malaria rapid test", qty: 1 },

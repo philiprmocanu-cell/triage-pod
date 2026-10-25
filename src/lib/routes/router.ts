@@ -134,6 +134,45 @@ async function google(a: LatLng, b: LatLng, alternatives: boolean): Promise<{ ma
   return { main: routes[0], alternatives: routes.slice(1) };
 }
 
+function joinRoads(legs: RoadPath[]): RoadPath {
+  const points: LatLng[] = [];
+  let km = 0;
+  let minutes = 0;
+  for (const leg of legs) {
+    km += leg.km;
+    minutes += leg.drivingMinutes;
+    for (const p of leg.points) {
+      const prev = points[points.length - 1];
+      if (prev && Math.abs(prev[0] - p[0]) < 1e-5 && Math.abs(prev[1] - p[1]) < 1e-5) continue;
+      points.push(p);
+    }
+  }
+  return { points, km: round1(km), drivingMinutes: minutes, source: legs[0]?.source ?? "osrm", summary: legs.map((l) => l.summary).filter(Boolean)[0] ?? "" };
+}
+
+async function osrmStops(stops: LatLng[], alternatives: boolean): Promise<{ main: RoadPath; alternatives: RoadPath[] } | null> {
+  const run = async () => {
+    const coords = stops.map((p) => `${p[1]},${p[0]}`).join(";");
+    const url = `${OSRM}/route/v1/driving/${coords}?overview=full&geometries=geojson${alternatives ? "&alternatives=true" : ""}`;
+    const res = await fetch(url, { headers: { "User-Agent": "triage-pod route planner (demo)" }, signal: AbortSignal.timeout(12000) });
+    await new Promise((r) => setTimeout(r, OSRM_GAP_MS));
+    if (!res.ok) throw new Error(`OSRM ${res.status}`);
+    const json = (await res.json()) as { code: string; routes?: { distance: number; duration: number; geometry: { coordinates: [number, number][] }; legs: { summary: string }[] }[] };
+    if (json.code !== "Ok" || !json.routes?.length) return null;
+    const routes = json.routes.map((r) => ({
+      points: r.geometry.coordinates.map(([lng, lat]) => [lat, lng] as LatLng),
+      km: round1(r.distance / 1000),
+      drivingMinutes: Math.round(r.duration / 60),
+      source: "osrm" as const,
+      summary: r.legs.map((l) => l.summary).filter(Boolean)[0] ?? "",
+    }));
+    return { main: routes[0], alternatives: routes.slice(1) };
+  };
+  const p = osrmQueue.then(run, run);
+  osrmQueue = p.catch(() => undefined);
+  return p;
+}
+
 async function osrm(a: LatLng, b: LatLng, alternatives: boolean): Promise<{ main: RoadPath; alternatives: RoadPath[] } | null> {
   const run = async () => {
     const url = `${OSRM}/route/v1/driving/${a[1]},${a[0]};${b[1]},${b[0]}?overview=full&geometries=geojson${alternatives ? "&alternatives=true" : ""}`;
@@ -185,6 +224,42 @@ export async function roadPath(a: LatLng, b: LatLng, opts: RoadOptions = {}): Pr
   c[k] = entry;
   void saveCache(); // coalesced write; the in-memory cache is already current
   return { main: entry.main, alternatives: entry.alternatives ?? [] };
+}
+
+// One driving path through several stops. Google (when a key exists) is chained leg by leg.
+// Otherwise this is a single OpenStreetMap request, never a straight chord.
+export async function roadTour(stops: LatLng[]): Promise<RoadPath | null> {
+  const compact: LatLng[] = [];
+  for (const s of stops) {
+    const prev = compact[compact.length - 1];
+    if (prev && haversineKm(prev, s) < 0.8) continue;
+    compact.push(s);
+  }
+  if (compact.length < 2) return null;
+  if (process.env.GOOGLE_MAPS_API_KEY) {
+    const legs: RoadPath[] = [];
+    for (let i = 1; i < compact.length; i++) {
+      const r = await roadPath(compact[i - 1], compact[i]);
+      if (r.main.source === "straight" || r.main.points.length < 4) return null;
+      legs.push(r.main);
+    }
+    return joinRoads(legs);
+  }
+  const c = await loadCache();
+  const k = "tour|" + compact.map((p) => `${p[0].toFixed(3)},${p[1].toFixed(3)}`).join(">");
+  const hit = c[k];
+  if (hit && hit.main.source !== "straight" && hit.main.points.length >= 4) return hit.main;
+  let got: { main: RoadPath; alternatives: RoadPath[] } | null = null;
+  try {
+    got = await osrmStops(compact, false);
+  } catch (e) {
+    console.warn("[routes] OSRM tour failed:", (e as Error).message);
+  }
+  if (!got || got.main.source === "straight" || got.main.points.length < 4) return null;
+  const main = { ...got.main, points: thin(got.main.points, 480) };
+  c[k] = { main, at: new Date().toISOString() };
+  void saveCache();
+  return main;
 }
 
 // Which source will answer today, for the page and the docs.

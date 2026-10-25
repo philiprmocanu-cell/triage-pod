@@ -15,6 +15,7 @@
 
 # next.js
 /.next/
+/.next-3417/
 /out/
 
 # production
@@ -51,9 +52,16 @@ hardware/pod-firmware/secrets.h
 node_modules
 spacetime/spacetimedb/dist
 /.next-prod/
+/dist-app/
+desktop/project-root.txt
 
 # mosquito classifier's Python environment (rebuilt from tools/mosquito/requirements.txt)
 tools/mosquito/.venv/
 
 # settlements raw downloads (regenerate with tools/settlements/fetch.py)
 tools/settlements/raw/
+.next-prod-prev/
+.next-staging/
+dist-app/
+.next-prod*/
+.next-*/

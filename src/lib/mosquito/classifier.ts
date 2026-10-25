@@ -24,6 +24,9 @@ export type Classification = {
   fundamentalDbAboveMedian: number;
   harmonics: Harmonic[];
   bandEnergyRatio: number;
+  // True when a wingbeat fundamental in 300–1000 Hz stands above the spectrum with its harmonics.
+  // Speaker playback has no recorder rumble, so this is what makes those clips count as a mosquito.
+  wingbeatGate?: boolean;
   durationS: number;
   sampleRate: number;
   mcSamples: number;

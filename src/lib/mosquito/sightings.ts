@@ -25,6 +25,7 @@ export type SightingCounts = {
   other: number; // mosquitoes that do not carry malaria
   lastHeard: string | null; // ISO time of the last vector heard
   species: Record<string, number>; // vector species -> count
+  mapped: string | null; // a specific species, only once the model is confident
 };
 
 const DAY_MS = 86_400_000;
@@ -63,6 +64,9 @@ export function countSightings(all: Sighting[], village: string, days = 7): Sigh
   const vectors = rows.filter((s) => s.mosquito && s.malariaVector);
   const species: Record<string, number> = {};
   for (const v of vectors) if (v.species) species[v.species] = (species[v.species] ?? 0) + 1;
+  const mapped = rows
+    .filter((s) => s.mosquito && s.species && s.probability >= 0.5)
+    .sort((a, b) => (a.at < b.at ? 1 : -1))[0]?.species ?? null;
   return {
     village,
     days,
@@ -71,6 +75,7 @@ export function countSightings(all: Sighting[], village: string, days = 7): Sigh
     other: rows.filter((s) => s.mosquito && !s.malariaVector).length,
     lastHeard: vectors.map((v) => v.at).sort().at(-1) ?? null,
     species,
+    mapped,
   };
 }
 

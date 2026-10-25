@@ -2,18 +2,61 @@
   "name": "triage-pod",
   "version": "0.1.0",
   "private": true,
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "build:demo": "NEXT_DIST=.next-prod next build",
-    "demo": "NEXT_DIST=.next-prod next start -p 3418"
+    "demo": "NEXT_DIST=.next-prod next start -p 3418",
+    "app": "electron .",
+    "app:pack": "node desktop/pack.cjs"
+  },
+  "build": {
+    "appId": "org.triagepod.app",
+    "productName": "Triage Pod",
+    "directories": {
+      "output": "dist-app"
+    },
+    "files": [
+      "desktop/main.cjs",
+      "desktop/preload.cjs",
+      "!node_modules/**"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "electronLanguages": [
+      "en"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop/project-root.txt",
+        "to": "project-root.txt"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.medical",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null,
+      "extendInfo": {
+        "NSCameraUsageDescription": "The pod uses the camera to look at the patient.",
+        "NSMicrophoneUsageDescription": "The pod uses the microphone so the patient can speak."
+      }
+    }
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
     "@cartesia/cartesia-js": "^4.2.0",
     "@mediapipe/tasks-vision": "^1.1.1",
+    "@tensorflow/tfjs": "^4.22.0",
     "globe.gl": "^2.46.2",
     "leaflet": "^1.9.4",
     "next": "15.5.28",
@@ -30,6 +73,8 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
     "eslint": "^9",
     "eslint-config-next": "15.5.28",
     "tailwindcss": "^4",

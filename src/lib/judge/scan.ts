@@ -54,7 +54,17 @@ export async function jevScan(frames: Frame[], opts: ScanOptions = {}): Promise<
   };
   for (const t of TRAITS) {
     const droop = t.id === "face_droop";
-    q[t.id] = { type: "noul", instructions: droop ? (opts.strictDroop ? `${CALIBRATE} ${t.look}${STRICT_DROOP_EXTRA}` : `${LOOK_ONLY} ${t.look}`) : `${CALIBRATE} ${t.look}` };
+    // Face droop always uses the strict wording. The score is shown to the operator and then
+    // discarded: a resting face does not open a question. opts.strictDroop remains for the harness.
+    q[t.id] = {
+      type: "noul",
+      instructions:
+        t.id === "sweaty"
+          ? `${LOOK_ONLY} ${t.look}`
+          : droop
+            ? `${CALIBRATE} ${t.look}${opts.strictDroop === false ? "" : STRICT_DROOP_EXTRA}`
+            : `${CALIBRATE} ${t.look}`,
+    };
   }
   const a = await jevWithin(`scan, ${seq.length} frames`, jev({ setting: "Patient sitting in front of a health pod camera.", frames: seq }, q, images), opts.timeoutMs ?? 20_000);
   return {

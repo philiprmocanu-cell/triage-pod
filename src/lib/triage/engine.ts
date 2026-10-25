@@ -8,9 +8,11 @@
 // Code then opens pathways, picks the next step, applies the safety rules and adds up supplies.
 
 import { jev, JevQuestion, noulOf, probsOf } from "../jev";
+import { armReadingDue, painScoreFromTurns, settleSeverity, stepsWithinCap } from "./questions";
+import { conditionProbability } from "./confidence";
 import { advisoriesFor } from "../agents";
 import { postFor } from "../network";
-import { closingAdvice, confirmComplaint, extractWords, followUpQuestion, phraseNext, replyToPatient, translateTo } from "./brain";
+import { closingAdvice, extractWords, followUpQuestion, phraseNext, replyToPatient, translateTo } from "./brain";
 import { communityLexicon, learnFrom, Lexicon, speakLike } from "./dialect";
 import { CHECK_FIRST, NOTICED, TRAITS, TraitScan } from "./traits";
 import { COVER_KIT, ordersFor, RULE_SUPPLIES } from "./supplies";
@@ -194,8 +196,6 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const tWords = Date.now();
   const wordsEarly: Promise<Record<string, string>> | null =
     patientText && patientText.split(/\s+/).length >= 4 ? extractWords({ conversation: conversation.slice(-6), language, timeoutMs: 4000 }).catch(() => ({})) : null;
-  const confirmEarly: Promise<Awaited<ReturnType<typeof confirmComplaint>> | "FAILED"> | null =
-    patientText && lastPod?.asks === "open" ? confirmComplaint({ said: patientText, language, locale: input.defaultLocale, timeoutMs: 6000 }).catch(() => "FAILED" as const) : null;
 
   // Pictures as a time sequence, so Jev sees where the patient was a second ago and where they are now.
   const frames = (input.frames ?? []).slice(-MAX_FRAMES);
@@ -235,6 +235,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   if (hasFrames && !scanning) {
     q.person_visible = { type: "noul", instructions: "In the `frames`, is a person's face clearly visible?" };
     for (const k of visible) {
+      // A resting face is not weakness and not "cannot be woken". Both were read off a healthy
+      // person sitting still. They count only when someone says so, or a requested test shows them.
+      if (k === "face_or_arm_weakness" || k === "very_sleepy") continue;
       q[`seen_${k}`] = {
         type: "noul",
         instructions: `Look at the \`frames\` (a few seconds of camera pictures, oldest first, taken while the patient was talking). ${(FINDINGS[k] as { seen: string }).seen}`,
@@ -271,9 +274,15 @@ export async function step(input: StepInput): Promise<TriageResult> {
       criteria: LOCALES,
     };
     for (const p of PATHWAYS) {
+      // Stroke is decided from what the person says. A resting face in the pictures is not a droop:
+      // that reading used to name stroke on a healthy person sitting still.
+      const pictures =
+        p.id === "stroke"
+          ? " Decide only from what the patient said. A resting face in the pictures is not droop, weakness, or stroke."
+          : " A resting face is not facial weakness. Use pictures only for colour, rash, posture, or breathing effort.";
       q[`sub_${p.id}`] = {
         type: "choice",
-        instructions: `Assume the patient's problem is in this area: ${p.label}. Given the \`conversation\`${hasFrames ? " and the `frames`" : ""}, which of these is most likely?`,
+        instructions: `Assume the patient's problem is in this area: ${p.label}. From the \`conversation\`, which of these is most likely?${pictures}`,
         criteria: {
           ...Object.fromEntries(subtypesOf(p).map((s) => [s.name, s.description])),
           [UNSURE]: "Not enough information yet to tell these apart",
@@ -336,28 +345,27 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const jevMs = Date.now() - tJev;
   const malariaPressure = await pressurePromise;
 
-  // What the camera sees: everything seen so far this visit, refreshed by the new pictures and by
-  // the on-device face-droop check.
+  // What the camera sees: everything seen so far this visit, refreshed by the new pictures.
+  // A resting face is not one of those things. Face droop and a drooping eyelid are ignored here
+  // even if a scan scored them: landmarks and a still photo both misread a normal face (a hand on
+  // the chin, a tilt, uneven light). One-sided weakness enters only if the patient says so, or
+  // if the smile test — asked only after they report it — comes back uneven.
   const seen: Seen = { ...input.seen };
-  if (hasFrames && !scanning && noulOf(a.person_visible) >= 0.5) for (const k of visible) seen[k] = Math.max(seen[k] ?? 0, noulOf(a[`seen_${k}`]));
-  // The live scan (already smoothed over several scans): traits tied to a finding count as seen.
-  // Everything the camera notices is also a hunch to ask about, never a conclusion on its own.
+  if (hasFrames && !scanning && noulOf(a.person_visible) >= 0.5)
+    for (const k of visible) {
+      if (k === "face_or_arm_weakness" || k === "very_sleepy") continue;
+      seen[k] = Math.max(seen[k] ?? 0, noulOf(a[`seen_${k}`]));
+    }
+  const FACE_NOT_A_SIGN = new Set(["face_droop", "eyelid_droop", "holding_head", "eyes_closing", "drowsy", "slumped"]);
   const hints: Record<string, { p: number; why: string }> = {};
   const hunches: { trait: string; pathway: string | null; finding: FindingKey | null; p: number }[] = [];
-  // The high-stakes signs (face droop, a hand on the chest, struggling to breathe) arrive here
-  // already filtered by /api/scan: three bursts in a row, a clear and evenly lit face, and a second
-  // opinion from Claude (src/lib/judge, docs/CAMERA.md). Face droop never counts as seen evidence
-  // of weakness on its own: only the smile test can turn it into one.
   for (const t of TRAITS) {
+    if (FACE_NOT_A_SIGN.has(t.id)) continue;
     const p = input.traits?.[t.id] ?? 0;
-    if (t.finding && t.id !== "face_droop") seen[t.finding] = Math.max(seen[t.finding] ?? 0, p);
-    if (t.hint && p >= 0.6 && p > (hints[t.hint]?.p ?? 0)) hints[t.hint] = { p, why: t.label.toLowerCase() };
-    if (p >= (t.id === "face_droop" ? 0.45 : 0.6) && NOTICED[t.id]) hunches.push({ trait: t.id, pathway: t.hint ?? null, finding: t.finding ?? null, p });
+    if (t.finding) seen[t.finding] = Math.max(seen[t.finding] ?? 0, p);
+    if (t.hint && p >= (t.id === "sweaty" ? 0.4 : 0.6) && p > (hints[t.hint]?.p ?? 0)) hints[t.hint] = { p, why: t.label.toLowerCase() };
+    if (p >= (t.id === "sweaty" ? 0.4 : 0.6) && NOTICED[t.id]) hunches.push({ trait: t.id, pathway: t.hint ?? null, finding: t.finding ?? null, p });
   }
-  // The on-device mouth-corner check (MediaPipe landmarks) is the weakest signal: a hand on the
-  // chin or glasses can shift the landmarks. It only speaks when there is no live Jev scan to
-  // check it against, and even then it leads to the smile test, never straight to a question.
-  if (input.camera.droop?.flagged && !scanning && !hunches.some((h) => h.trait === "face_droop")) hunches.push({ trait: "face_droop", pathway: "stroke", finding: "face_or_arm_weakness", p: 0.8 });
   if (input.camera.smileTest === "asymmetric") seen.face_or_arm_weakness = Math.max(seen.face_or_arm_weakness ?? 0, 0.95);
   hunches.sort((x, y) => y.p - x.p);
 
@@ -402,6 +410,26 @@ export async function step(input: StepInput): Promise<TriageResult> {
       findings.push({ key: k, label: FINDINGS[k].label, yes: y, known: known[k], source: fromSaid && fromSeen ? "both" : fromSeen ? "seen" : "said" });
     }
   }
+  // A 1–10 score already says how bad the pain is. Do not ask "is it the worst you have ever felt?"
+  // A high score is severe. It is a worst-ever headache only when it also started suddenly.
+  const painScore = painScoreFromTurns(input.turns);
+  const severity = painScore == null ? null : settleSeverity(painScore, yes.sudden_onset >= YES);
+  if (severity) {
+    asked.add("history:severity");
+    if (severity.severeYes) yes.severe_headache = Math.max(yes.severe_headache, 0.9);
+    else if (painScore != null && painScore <= 4) yes.severe_headache = 0;
+    if (severity.worstYes) yes.worst_headache = Math.max(yes.worst_headache, 0.9);
+    else yes.worst_headache = Math.min(yes.worst_headache, 0.15);
+    for (const k of severity.known) {
+      known[k] = true;
+      saidKnown[k] = true;
+      const row = findings.find((f) => f.key === k);
+      if (row) {
+        row.yes = yes[k];
+        row.known = true;
+      } else if (yes[k] >= 0.3) findings.push({ key: k, label: FINDINGS[k].label, yes: yes[k], known: true, source: "said" });
+    }
+  }
 
   const agePs = probsOf(a.age);
   const age = ((Object.entries(agePs).sort((x, y) => y[1] - x[1])[0]?.[0] as AgeGroup) ?? "adult") as AgeGroup;
@@ -426,7 +454,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
     return {
       id: p.id,
       label: p.label,
-      probability: complaintKnown ? Math.max(complaint[p.id] ?? 0, ...p.triggers.map((k) => yes[k])) : 0,
+      // Opened by what they said, or by Jev's reading of the complaint. A camera sign alone does not open an area.
+      probability: complaintKnown ? Math.max(complaint[p.id] ?? 0, ...p.triggers.map((k) => saidYes[k])) : 0,
       subtypes: (p.id === "fever" ? withMalariaPrior(subtypes, malariaPressure) : subtypes).sort((x, y) => y.probability - x.probability),
     };
   }).sort((x, y) => y.probability - x.probability);
@@ -443,6 +472,10 @@ export async function step(input: StepInput): Promise<TriageResult> {
     const confirmed = def.triggers.some((k) => saidYes[k] >= YES);
     const probes = probesFor(id).map((p) => `probe:${p.id}` as Step);
     const steps = confirmed || def.questions.includes(def.triggers[0]) ? [...probes, ...def.questions] : [def.triggers[0], ...probes, ...def.questions];
+    if (id === "headache" && severity?.askSudden && !steps.includes("sudden_onset")) {
+      const at = steps.indexOf("worst_headache");
+      steps.splice(at >= 0 ? at : steps.length, 0, "sudden_onset");
+    }
     if (!epi.malaria) return steps.filter((st) => st !== "mosquito_bites"); // no bed-net question where there is no malaria
     return id === "fever" ? feverOrder(steps, malariaPressure) : steps;
   };
@@ -456,12 +489,13 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const need = new Map<string, number>();
   for (const p of complaintKnown ? open : []) {
     const def = PATHWAYS.find((d) => d.id === p.id)!;
-    // Confidence grows with every answered question or finished test in this pathway. A finding
-    // the patient settled in their own words (yes or no, after an open probe) counts as answered.
+    // How many questions in this area are already settled. That count decides whether the pod
+    // may NAME the condition. It does not change the percent: the percent is Jev's.
     const answered = stepsFor(p.id).filter((st) => (st.startsWith("test:") ? st.slice(5) in input.tests : isFinding(st) ? asked.has(st) || saidKnown[st] : asked.has(st))).length;
-    const confidence = Math.min(1, 0.35 + 0.15 * answered);
+    const saidTrigger = saidOpen.has(p.id);
     for (const s of p.subtypes) {
-      const prob = p.probability * s.probability * confidence;
+      const jevP = s.probability;
+      const prob = conditionProbability(jevP, p.probability, saidTrigger);
       if (prob < 0.05) continue;
       const sdef = def.subtypes.find((d) => d.name === s.name)!;
       const keys = [...new Set([...def.triggers, ...def.questions.filter(isFinding)])];
@@ -470,7 +504,7 @@ export async function step(input: StepInput): Promise<TriageResult> {
       if (hints[p.id]) evidence.push(`camera: ${hints[p.id].why}`);
       // "No" in the patient's own words counts against a condition as much as a "no" to a question.
       const against = keys.filter((k) => known[k] && yes[k] < 0.3 && saidKnown[k]).map((k) => `no ${FINDINGS[k].label.toLowerCase()}`);
-      causes.push({ name: s.name, pathway: p.label, probability: prob, urgency: s.urgency, why: sdef.description, evidence, against, early: confidence < 0.8, confident: false, asked: answered });
+      causes.push({ name: s.name, pathway: p.label, probability: prob, jev: jevP, urgency: s.urgency, why: sdef.description, evidence, against, early: answered < 3, confident: false, asked: answered });
       for (const item of sdef.resources) need.set(item, 1 - (1 - (need.get(item) ?? 0)) * (1 - prob));
     }
   }
@@ -513,7 +547,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
     } else {
       const path = PATHWAYS.find((d) => d.subtypes.some((x) => x.name === name))!;
       const sub = path.subtypes.find((x) => x.name === name)!;
-      causes.push({ name, pathway: path.label, probability: p, urgency: sub.urgency, why: sub.description, evidence: [`safety rule: ${hit.evidence}`], against: [], early: false, confident: true });
+      const jevP = pathways.find((x) => x.id === path.id)?.subtypes.find((x) => x.name === name)?.probability ?? p;
+      causes.push({ name, pathway: path.label, probability: p, jev: jevP, urgency: sub.urgency, why: sub.description, evidence: [`safety rule: ${hit.evidence}`], against: [], early: false, confident: true });
     }
   }
   // The same condition can live in two pathways (meningitis: fever and headache): keep one line.
@@ -565,11 +600,6 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // threshold must not reopen the visit after "before we finish, what's your name?".
   const closingStarted = input.turns.some((t) => t.role === "pod" && /^intake:(name|community|consent)$/.test(t.asks ?? ""));
   const medicalSteps = outOfTime || closingStarted ? MAX_STEPS : input.turns.filter((t) => t.role === "pod" && t.asks && !t.asks.startsWith("intake:") && !t.asks.startsWith("history:") && t.asks !== "open").length;
-  // Confirmation: after each telling of the complaint, say it back once; a "no" means tell it again.
-  const lastOpen = input.turns.map((t) => t.asks).lastIndexOf("open");
-  const answeredOpenNow = Boolean(patientText) && lastPod?.asks === "open";
-  const confirmAfterOpen = lastOpen >= 0 && input.turns.slice(lastOpen + 1).some((t) => t.asks === "history:confirm");
-  const needConfirm = complaintKnown && answeredOpenNow && !confirmAfterOpen;
   const confirmedWrong = lastPod?.asks === "history:confirm" && noulOf(a.confirm_wrong) >= 0.6;
   const retells = input.turns.filter((t) => t.role === "pod" && t.asks === "open").length - 1;
   for (const f of ["onset", "impact"] as HistoryField[]) if (noulOf(a[`already_h_${f}`]) >= 0.8) asked.add(`history:${f}`);
@@ -583,6 +613,17 @@ export async function step(input: StepInput): Promise<TriageResult> {
   // a 1-10 score only where pain is the story (diarrhea without belly pain has nothing to score).
   const painStory = open.some((p) => PAIN_PATHWAYS.has(p.id) && (p.id !== "stomach" || yes.belly_pain >= YES));
   const historyWanted: HistoryField[] = ["onset", ...(open.length ? [] : ["impact" as const]), ...(painStory ? ["severity" as const] : [])];
+  // A malaria mosquito the listener was sure about: ask about bites before the rest of the visit.
+  const vectorSpecies = Object.entries(malariaPressure?.parts.vector.species ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const malariaMosquito = Boolean(epi.malaria && (malariaPressure?.parts.vector.anopheles ?? 0) > 0);
+  const mosquitoHeardAsk = {
+    en: vectorSpecies
+      ? `We just heard a malaria mosquito here, ${vectorSpecies}. Have you had many mosquito bites lately, or do you sleep without a mosquito net?`
+      : "We just heard a malaria mosquito here. Have you had many mosquito bites lately, or do you sleep without a mosquito net?",
+    es: vectorSpecies
+      ? `Acabamos de oír un zancudo de malaria aquí, ${vectorSpecies}. ¿Le han picado muchos zancudos últimamente, o duerme sin mosquitero?`
+      : "Acabamos de oír un zancudo de malaria aquí. ¿Le han picado muchos zancudos últimamente, o duerme sin mosquitero?",
+  };
   let next: TriageResult["next"] = null;
   // Explore what the camera noticed, at most two hunches: "I see you holding your chest. Do you
   // have pain or pressure in your chest?"
@@ -636,8 +677,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   };
   const seenOpener = () => {
     // Once only: never re-ask an opener, and drop it once the patient has said no to that sign.
+    const seenBar = (f: FindingKey) => (f === "sweating" ? 0.4 : YES);
     const k = (Object.keys(SEEN_OPENERS) as FindingKey[])
-      .filter((f) => (seen[f] ?? 0) >= YES)
+      .filter((f) => (seen[f] ?? 0) >= seenBar(f))
       .filter((f) => !asked.has(SEEN_OPENER_ASKS[f] ?? f) && !(saidKnown[f] && yes[f] < YES))
       .sort((x, y) => (seen[y] ?? 0) - (seen[x] ?? 0))[0];
     return k ? say(SEEN_OPENER_ASKS[k] ?? k, SEEN_OPENERS[k]!) : null;
@@ -683,22 +725,16 @@ export async function step(input: StepInput): Promise<TriageResult> {
       const helpSaid = input.turns.some((t) => t.role === "pod" && (t.text.startsWith(HELP_NOW.en) || t.text.startsWith(HELP_NOW.es)));
       next = { asks: pick, text: `${helpSaid ? "" : HELP_NOW[language] + " "}${q[language]}`, english: `${helpSaid ? "" : HELP_NOW.en + " "}${q.en}` };
     }
-  } else if (!redRule && needConfirm) {
-    // Say back what we heard before reasoning on it.
-    const said = patientText ?? [...input.turns].reverse().find((t) => t.role === "patient")?.text ?? "";
-    let c: Awaited<ReturnType<typeof confirmComplaint>> | "FAILED" = "FAILED";
-    try {
-      c = confirmEarly ? await confirmEarly : await confirmComplaint({ said, language, locale: topKey(probsOf(a.locale)) ?? input.defaultLocale, timeoutMs: 6000 });
-    } catch {
-      c = "FAILED";
-    }
-    if (c === "FAILED") c = { text: `${language === "es" ? "Entendí" : "I heard"}: "${said}". ${HISTORY.confirm[language]}`, english: `I heard: "${said}". Is that right?` };
-    next = c === "UNCLEAR" ? say("open", RETELL) : { asks: "history:confirm", text: c.text, english: c.english };
   } else if (!redRule && confirmedWrong && retells < 2) {
     next = say("open", RETELL);
   } else if (whoUnclear) {
     // Who is this about? Needed now, not at the end: it decides the child questions.
     next = say("intake:who", INTAKE.who);
+  } else if (!redRule && complaintKnown && malariaMosquito && !asked.has("mosquito_bites") && !(saidKnown.mosquito_bites && yes.mosquito_bites < YES)) {
+    next = say("mosquito_bites", mosquitoHeardAsk);
+  } else if (!redRule && (seen.sweating ?? 0) >= 0.4 && !asked.has("sweating") && !(saidKnown.sweating && yes.sweating < YES)) {
+    // The face is wet now. Ask before the rest of the history, so a sweaty patient is not talked past.
+    next = say("sweating", SEEN_OPENERS.sweating!);
   } else if (!redRule && historyWanted.some((f) => !asked.has(`history:${f}`))) {
     const f = historyWanted.find((x) => !asked.has(`history:${x}`))!;
     next = say(`history:${f}`, HISTORY[f]);
@@ -710,11 +746,17 @@ export async function step(input: StepInput): Promise<TriageResult> {
     for (const adv of advisories) if (complaintKnown && !known[ADVISORY_FIRST[adv.kind]]) order.push(ADVISORY_FIRST[adv.kind]);
     // A child: the WHO danger signs first, in one open question, then one by one for whatever is still unclear.
     if (isChild && open.length) order.push("probe:child_danger", "unable_to_drink", "vomits_everything", "seizure", "very_sleepy");
-    // The pod head's finger sensor: measure oxygen early whenever breathing, chest, fever or a
-    // stroke is being considered and no reading exists yet.
-    if (vitals.podConnected && vitals.spo2 == null && open.some((p) => ["breathing", "cardiac", "fever", "stroke"].includes(p.id))) order.push("test:finger");
-    const askedIn = (id: string) => stepsFor(id).filter((st) => (st.startsWith("test:") ? testDone(st.slice(5)) : asked.has(st))).length;
-    for (const p of open) if (askedIn(p.id) < PER_PATHWAY) order.push(...stepsFor(p.id));
+    // Arm on the sensor: once, and only when breathing, chest, fever, or stroke is open and no
+    // pulse has been read yet. The number is shown on the video. A watch that is merely connected
+    // does not make this question appear.
+    const havePulse = vitals.hr != null && vitals.hr > 0;
+    if (armReadingDue(open.map((p) => p.id), havePulse) && !testDone("finger")) order.push("test:finger");
+    // The camera pulse is not one of the four clinical questions. It is asked once, after them,
+    // and only when chest or heart symptoms opened that area.
+    const clinical = (st: Step) => !st.startsWith("test:");
+    const askedIn = (id: string) => stepsFor(id).filter((st) => clinical(st) && asked.has(st)).length;
+    for (const p of open) order.push(...(stepsWithinCap(stepsFor(p.id), askedIn(p.id), PER_PATHWAY) as Step[]));
+    if (open.some((p) => p.id === "cardiac") && !testDone("pulse") && !havePulse) order.push("test:pulse");
     // Nothing in the tree fits (toothache, ear pain...): ask Claude for one sensible nurse
     // follow-up question, up to two times, before the single mood question. Not for someone who
     // feels well: there is no complaint to follow up on.
@@ -776,22 +818,13 @@ export async function step(input: StepInput): Promise<TriageResult> {
   if (done) next = say(null, ruleHits.some((h) => h.id === "suicide_risk") ? CLOSING_SUICIDE_RISK : verdict === "uncertain" ? CLOSING_UNSURE : nothingNeeded ? CLOSING_WELL : CLOSING[urgency]);
 
   const lastAsked = lastPod?.asks;
-  const reAsked = (lastPod?.text ?? "").startsWith(SORRY[language]);
   if (patientText && lastPod && !done && !redRule) {
     const repeatedAlready = (["en", "es"] as Lang[]).some((l) => (lastPod.text ?? "").startsWith(CLARO[l]));
     if (noulOf(a.repeat_request) >= 0.6 && !repeatedAlready) {
-      // Say it again once, in whatever language the patient is speaking now (they may have
-      // just told us they don't understand the other one).
-      const canon = lastAsked && lastAsked !== "history:confirm" ? textFor(lastAsked) : null; // the restatement is specific to this patient: say it again as it was
+      // They asked to hear it again. The pod does not decide on its own that an answer was
+      // too short and make them repeat it.
+      const canon = lastAsked && lastAsked !== "history:confirm" ? textFor(lastAsked) : null;
       next = { asks: lastAsked ?? null, text: `${CLARO[language]} ${canon ? canon[language] : stripPrefix(lastPod.text, language)}`, english: canon ? canon.en : (lastPod.english ?? lastPod.text) };
-    } else if (speechTest && noulOf(a.speech_attempted) < 0.7 && !reAsked) {
-      next = {
-        asks: "confused_speech",
-        text: `${SORRY[language]} ${SPEECH_AGAIN[language]} ${stripPrefix(lastPod!.text, language).replace(/^.*?:\s*/, "")}`,
-        english: `Sorry, I didn't quite understand. ${SPEECH_AGAIN.en}`,
-      };
-    } else if (noulOf(a.patient_asked) < 0.6 && noulOf(a.answered_last) < 0.3 && lastAsked && !reAsked && !lastAsked.startsWith("test:")) {
-      next = { asks: lastAsked, text: `${SORRY[language]} ${stripPrefix(lastPod.text, language)}`, english: `Sorry, I didn't quite understand. ${lastPod.english ?? ""}` };
     }
   }
   if (patientText && noulOf(a.patient_asked) >= 0.6 && noulOf(a.repeat_request) < 0.6 && next) {
@@ -809,11 +842,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
     } catch {
       reply = HELP_COMING[language];
     }
-    // Answer, then come back to the question they side-stepped (a danger-sign question must not
-    // silently count as "no"). If they answered it too, carry on with the next one.
-    const deflected = noulOf(a.answered_last) < 0.3 && lastAsked && !lastAsked.startsWith("test:") ? textFor(lastAsked) : null;
-    if (deflected && lastAsked) next = { asks: lastAsked, text: `${reply} ${deflected[language]}`, english: `[answering the patient] ${deflected.en}` };
-    else next = { ...next, text: `${reply} ${next.text}`, english: `[answering the patient] ${next.english}` };
+    // Answer them, then ask the next question. Do not ask the one they just heard a second time.
+    next = { ...next, text: `${reply} ${next.text}`, english: `[answering the patient] ${next.english}` };
   }
 
   // Talk back with the patient's own words: what this patient said, on top of what their
@@ -821,24 +851,9 @@ export async function step(input: StepInput): Promise<TriageResult> {
   const patientWords = [...input.turns.filter((t) => t.role === "patient").map((t) => t.text), ...(patientText ? [patientText] : [])];
   const lexicon: Lexicon = { ...(await communityLexicon(intake.community)), ...learnFrom(patientWords) };
 
-  // Say it like a nurse who has been listening: only for the open prompts ("tell me more about
-  // the pain: where, what it feels like..."), where dropping the parts already answered and using
-  // the patient's words changes what is asked. Every closed question goes out in its canonical
-  // wording (with the patient's own words swapped in below): Claude would only restyle it, and the
-  // patient waited 2-5 s for that. Safety wording stays exactly as written: tests, the speech
-  // check, the suicide question, re-asks, answers to the patient's own questions and every
-  // closing message. Started here so it runs while the word extraction below is still finishing.
+  // The written question is what gets said.
   let phrasedOk = false;
-  const fixedWording =
-    !next ||
-    done ||
-    redRule ||
-    next.asks === null ||
-    !next.asks.startsWith("probe:") ||
-    next.english.startsWith("[answering") ||
-    next.text.startsWith(SORRY[language]) ||
-    next.text.startsWith(CLARO[language]) ||
-    (input.stage === "look");
+  const fixedWording = true;
   const phrasing =
     !fixedWording && next && patientText
       ? Promise.race([
@@ -899,9 +914,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
     // what is being sent, from fixed wording.
     const likelyName = causes.find((c) => c.confident)?.name;
     const sending = orders.map((o) => `${o.qty} ${o.item}`).join(", ");
+    const called = spokenName(intake.name);
+    const place = (input.village ?? intake.community ?? "").trim();
+    const lead = (sentence: string) => (called ? `${called}, ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}` : sentence);
     const plain = {
-      en: `${likelyName ? `It is most likely ${likelyName.toLowerCase()}. ` : ""}${sending ? `We are sending ${sending} to your home. ` : ""}${SAFETY_NET.en}`,
-      es: `${likelyName ? `Lo más probable es ${likelyName.toLowerCase()}. ` : ""}${sending ? `Estamos enviando ${sending} a su casa. ` : ""}${SAFETY_NET.es}`,
+      en: lead(`${likelyName ? `It is most likely ${likelyName.toLowerCase()}. ` : ""}${sending ? `We are sending ${sending} to ${place || "your home"}. ` : ""}${SAFETY_NET.en}`),
+      es: lead(`${likelyName ? `Lo más probable es ${likelyName.toLowerCase()}. ` : ""}${sending ? `Estamos enviando ${sending} a ${place || "su casa"}. ` : ""}${SAFETY_NET.es}`),
     };
     const tip = advice ?? { text: plain[language], english: plain.en };
     next = { ...next, text: `${next.text} ${tip.text}`, english: `${next.english} ${tip.english}` };
@@ -936,8 +954,12 @@ export async function step(input: StepInput): Promise<TriageResult> {
         let status: "yes" | "no" | "unclear" | "next" | "waiting" = "waiting";
         if (next?.asks === st) status = "next";
         else if (st.startsWith("test:")) {
-          const r = input.tests[st.slice(5)];
-          if (r) status = Object.values(r).some((v) => (v ?? 0) >= YES) ? "yes" : "no";
+          const id = st.slice(5);
+          const r = input.tests[id];
+          if (r) {
+            const sensor = (TESTS.find((t) => t.id === id)?.checks.length ?? 1) === 0;
+            status = sensor || Object.values(r).some((v) => (v ?? 0) >= YES) ? "yes" : "no";
+          }
         } else if (st.startsWith("probe:")) {
           // An open probe is "yes" once the answer settled at least one of the findings it covers, and
           // skipped (no) once they were all settled some other way.
@@ -964,6 +986,8 @@ export async function step(input: StepInput): Promise<TriageResult> {
         ? "Getting to know the patient first: no assumptions yet"
         : next.asks === "free"
           ? "Following up on what the patient described"
+        : next.asks === "test:pulse"
+          ? "Chest or heart symptoms are open, so the camera reads the pulse from the skin. This is not asked for other problems. A resting face is never called a droop."
         : next.asks === "history:confirm"
           ? "Checking it heard the patient right before reasoning on it"
         : next.asks?.startsWith("history:")
@@ -1120,7 +1144,6 @@ const ADVISORY_FIRST: Record<"malaria" | "diarrhea" | "respiratory", FindingKey>
 const CONFIDENT = 0.7;
 
 const HELP_NOW = { en: "We are calling for help now. While it comes, let's do a few quick checks.", es: "Ya estamos pidiendo ayuda. Mientras llega, hagamos unas pruebas rápidas." };
-const SPEECH_AGAIN = { en: "This is just a quick speech check: please say these exact words back to me:", es: "Es solo una prueba rápida del habla: por favor repita exactamente estas palabras:" };
 const RETELL = { en: "Sorry, I didn't catch that well. Could you tell me again, in other words, what is bothering you?", es: "Perdón, no le entendí bien. ¿Me puede contar otra vez, con otras palabras, qué es lo que más le molesta?" };
 const SAFETY_NET = {
   en: "Rest, drink water, and come back right away if it gets much worse, or if you get a high fever, trouble breathing, or weakness on one side.",
@@ -1156,6 +1179,13 @@ export async function judgeTest(testId: string, frames: Frame[], region: string)
   const results: Partial<Record<FindingKey, number>> = {};
   if (attempted) t.checks.forEach((c, i) => (results[c.finding] = Math.max(results[c.finding] ?? 0, noulOf(a[`check_${i}`]))));
   return { attempted, results };
+}
+
+function spokenName(raw?: string | null): string {
+  const t = (raw ?? "").replace(/^(my name is|i am|i'm|me llamo|mi nombre es|soy)\s+/i, "").replace(/[.!?]+$/g, "").trim();
+  const word = t.split(/\s+/)[0] ?? "";
+  if (!word || word.length > 24) return "";
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
 function topKey(p: Record<string, number>): string | undefined {

@@ -55,6 +55,20 @@ export async function scanBurst(frames: Frame[], sid = "pod", opts: ScanOptions 
   const evidence: Evidence[] = [];
   for (const t of Object.keys(HIGH_STAKES)) {
     const ev = assess(sid, t);
+    // A resting face is not a droop. The raw score can still be logged for the operator.
+    // It is never passed to the engine, and it never starts a smile test on its own.
+    if (t === "face_droop" || t === "holding_head") {
+      traits[t] = 0;
+      const raw = viewed[t] ?? 0;
+      const line =
+        raw < 0.3
+          ? ""
+          : t === "face_droop"
+            ? `one side of face drooping ${raw.toFixed(2)} — not used. A resting face is not a droop. Weakness is asked only if the patient says so.`
+            : `holding the head ${raw.toFixed(2)} — not used. A hand on the chin is not a headache. Asked only if they say the head hurts.`;
+      if (line) evidence.push({ ...ev, passed: false, line });
+      continue;
+    }
       // Unanswered: Claude is unavailable, or was too slow on two bursts in a row (one slow answer just
     // waits a burst). Then the sign has to be strong on every burst (the old single-burst bar), not
     // merely present: without a second opinion the camera alone sets the bar higher.

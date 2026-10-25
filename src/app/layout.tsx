@@ -26,9 +26,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${spaceGrotesk.variable} ${geistMono.variable} antialiased`}
-      >
+      <body className={`${spaceGrotesk.variable} ${geistMono.variable} bg-black pt-11 font-sans antialiased`}>
         <Nav />
         {children}
       </body>

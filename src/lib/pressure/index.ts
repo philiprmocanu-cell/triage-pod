@@ -138,7 +138,7 @@ export async function pressure(village: string, opts: { malariaRegion?: boolean 
 }
 
 function emptyCounts(village: string): SightingCounts {
-  return { village, days: SIGHTING_DAYS, clips: 0, anopheles: 0, other: 0, lastHeard: null, species: {} };
+  return { village, days: SIGHTING_DAYS, clips: 0, anopheles: 0, other: 0, lastHeard: null, species: {}, mapped: null };
 }
 
 // One line for a screen: "HIGH — Anopheles heard 14× in 7 days, 120 mm rain in 30 days, 26 °C (satellite risk high), 3 malaria cases in 14 days".

@@ -1,20 +1,38 @@
 // Triage Pod, finger unit: XIAO nRF52840 Sense + SparkFun MAX30101 (I2C on D4 = SDA, D5 = SCL).
+// The same board sits in the Seeed Round Display. The screen names this post (Katete, pod 2)
+// and tells the person what to do with the finger sensor.
 //
 // Built at the venue on a breadboard, no soldering. The laptop is the camera, the voice and the brain;
-// this board only measures pulse + oxygen and reports them over the USB cable, one JSON line per second:
-//   {"finger":true,"hr":72,"spo2":98,"presses":0,"sensor":true}
-// hr / spo2 are 0 until a steady reading exists (contract with hardware/pod-serial-bridge.py). "presses" counts the XIAO's on-board button? The nRF52840
-// XIAO has no user button on the top face, so a jumper from D0 to GND (momentary touch) counts as "talk".
+// this board measures pulse + oxygen and reports them over the USB cable, one JSON line per second:
+//   {"finger":true,"hr":72,"spo2":98,"presses":0,"sensor":true,"display":true}
+// hr / spo2 are 0 until a steady reading exists (contract with hardware/pod-serial-bridge.py).
+// The nRF52840 XIAO has no user button on the top face, so a jumper from D0 to GND (momentary touch) counts as "talk".
 //
 // Board: Seeed XIAO nRF52840 Sense (arduino-cli FQBN Seeeduino:nrf52:xiaonRF52840Sense).
-// Libraries: SparkFun MAX3010x (MAX30105.h + spo2_algorithm.h), ArduinoJson.
+// Libraries: SparkFun MAX3010x (MAX30105.h + spo2_algorithm.h), ArduinoJson, Seeed_GFX.
+// Display: Seeed Round Display (GC9A01). driver.h selects that panel. Pins are CS D1, DC D3,
+// backlight D6, SPI D8/D10. The heart sensor stays on I2C D4/D5. SD card CS D2 is held high.
+// Text is drawn by Seeed_GFX itself. A stored picture came out with the colours swapped on this panel.
 // NOT a medical device: the oxygen number is an estimate from a hobby sensor.
 
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include <TFT_eSPI.h>
+#include <SPI.h>
 #include "MAX30105.h"
 #include "spo2_algorithm.h"
 #include "heartRate.h"
+
+#define SD_CS D2
+
+// Katete is village 2 in the pod's own post list.
+static const char *POD_PLACE = "Katete";
+static const char *POD_NUMBER = "Pod 2";
+
+TFT_eSPI tft;
+bool displayOk = false;
+bool sensorTried = false;
+char faceShown[28] = "";
 
 static const int TALK_PIN = D0;   // optional: a wire from D0 to GND = "talk" press
 static const uint32_t FINGER_IR = 10000;  // infrared level that means a fingertip is on the window (measured at range 16384: air ~400, finger ~60,000)
@@ -42,6 +60,52 @@ static int medianOf(int *a, int n) {
   int b[8]; for (int i = 0; i < n; i++) b[i] = a[i];
   for (int i = 1; i < n; i++) { int v = b[i], j = i - 1; while (j >= 0 && b[j] > v) { b[j + 1] = b[j]; j--; } b[j + 1] = v; }
   return b[n / 2];
+}
+
+void instruction(char *out, size_t n) {
+  if (sensorTried && !sensorOk) snprintf(out, n, "Check sensor");
+  else if (!fingerOn) snprintf(out, n, "Finger on sensor");
+  else if (heartRate <= 0) snprintf(out, n, "Hold still");
+  else if (nSpo2 >= 3) snprintf(out, n, "%d bpm    %d%%", heartRate, medianOf(spo2Hist, nSpo2));
+  else snprintf(out, n, "%d bpm", heartRate);
+}
+
+void drawFace() {
+  if (!displayOk) return;
+  char line[28];
+  instruction(line, sizeof(line));
+  if (strcmp(line, faceShown) == 0) return;
+  strncpy(faceShown, line, sizeof(faceShown) - 1);
+  faceShown[sizeof(faceShown) - 1] = 0;
+
+  uint16_t bg = tft.color565(12, 24, 42);
+  uint16_t ink = tft.color565(236, 242, 246);
+  uint16_t muted = tft.color565(154, 178, 196);
+  uint16_t teal = tft.color565(64, 196, 178);
+  bool reading = fingerOn && heartRate > 0;
+
+  tft.fillScreen(bg);
+  tft.drawCircle(120, 120, 114, teal);
+  tft.drawCircle(120, 120, 112, tft.color565(28, 72, 84));
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(muted, bg);
+  tft.drawString("LOCAL POD", 120, 64, 2);
+  tft.setTextColor(ink, bg);
+  tft.drawString(POD_PLACE, 120, 106, 4);
+  tft.setTextColor(teal, bg);
+  tft.drawString(POD_NUMBER, 120, 144, 2);
+  tft.setTextColor(reading ? ink : teal, bg);
+  tft.drawString(line, 120, 184, 2);
+}
+
+void startDisplay() {
+  pinMode(SD_CS, OUTPUT);       // keep the SD card slot quiet so it can't disturb the shared SPI lines
+  digitalWrite(SD_CS, HIGH);
+  tft.init();
+  tft.setRotation(0);
+  displayOk = true;
+  faceShown[0] = 0;
+  drawFace();
 }
 
 uint32_t lastRetry = 0, lastGood = 0;
@@ -104,6 +168,8 @@ void readFinger() {
 
 void setup() {
   Serial.begin(115200);
+  startDisplay();
+  Serial.println(displayOk ? "display on" : "display FAILED");
   for (int i = 0; i < 8; i++) { delay(500); Serial.println("boot"); }   // 4 s of hellos so the laptop catches one
   pinMode(TALK_PIN, INPUT_PULLUP);
   // Unstick the I2C bus if a sensor is holding the data line low: clock SCL 9 times, then a STOP.
@@ -115,12 +181,16 @@ void setup() {
   Wire.begin();                              // SDA D4, SCL D5
   Serial.println("i2c up");
   startSensor();
+  sensorTried = true;
+  faceShown[0] = 0;            // sensor result is known now, so paint the real instruction
+  drawFace();
   Serial.println(sensorOk ? "sensor found" : "sensor MISSING (will keep looking)");
 }
 
 void loop() {
   loops++;
   readFinger();
+  drawFace();
   bool talk = digitalRead(TALK_PIN) == LOW;
   if (talk && !talkWas && millis() - lastPress > 300) { presses++; lastPress = millis(); }
   talkWas = talk;
@@ -133,6 +203,7 @@ void loop() {
     d["spo2"] = (fingerOn && nSpo2 >= 3) ? medianOf(spo2Hist, nSpo2) : 0;
     d["presses"] = presses;
     d["sensor"] = sensorOk;
+    d["display"] = displayOk;
     d["ir"] = lastIR;
     d["loops"] = loops; d["samples"] = samples; d["hr_maxim"] = (fingerOn && hrOk) ? hrMaxim : 0;
     loops = samples = 0;

@@ -29,7 +29,7 @@ export const TRAITS: Trait[] = [
   // Skin
   { id: "pale", group: "Skin", label: "Very pale", look: "Are the lips and inner eyelids almost white, much paler than this person's natural skin tone (not just bright or cold lighting)?", finding: "pale" },
   { id: "flushed", group: "Skin", label: "Flushed, red face", look: "Is the face clearly flushed bright red, as with a high fever (not ordinary skin tone or warm lighting)?", hint: "fever", ask: "fever" },
-  { id: "sweaty", group: "Skin", label: "Sweaty or clammy", look: "Are there visible beads or drips of sweat on the face (not ordinary skin shine under lights)?", finding: "sweating" },
+  { id: "sweaty", group: "Skin", label: "Sweaty or clammy", look: "Is this person's hair wet right now? Yes if the hair looks damp, soaked, or stuck to the skin. No if the hair looks dry.", finding: "sweating" },
   { id: "blue_lips", group: "Skin", label: "Blue or grey lips", look: "Are the lips clearly blue or grey (not their normal pink or brown colour, not a shadow)?", finding: "blue_lips" },
   { id: "yellow_skin", group: "Skin", label: "Yellow skin", look: "Is the skin clearly yellow, like jaundice (not warm or yellow lighting)?", finding: "yellow_eyes" },
   { id: "rash", group: "Skin", label: "Rash or red spots", look: "Is there a visible rash or many red spots on the skin?", finding: "rash" },

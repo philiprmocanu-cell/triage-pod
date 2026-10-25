@@ -32,6 +32,7 @@ export async function POST(req: Request) {
     if (type.includes("application/json")) {
       const body = await req.json();
       if (body.action === "order") return order(body);
+      if (body.action === "heard") return heard(body);
       if (!body.audioBase64) return NextResponse.json({ error: "audioBase64 or multipart `audio` required" }, { status: 400 });
       return NextResponse.json(await classify(Buffer.from(body.audioBase64, "base64"), body.village, typeof body.tag === "string" ? body.tag : undefined));
     }
@@ -61,6 +62,26 @@ async function classify(wav: Buffer, village?: string, tag?: string): Promise<Mo
     ...(tag && { tag }),
   }).catch((e) => console.error("[mosquito] sighting not saved", e));
   return result;
+}
+
+// The phone already classified the clip. A specific species (half or better) is remembered
+// for that village and drawn on the map. A weak guess is not.
+async function heard(body: { village?: string; mosquito?: boolean; species?: string; probability?: number }) {
+  const village = body.village || "Katete";
+  const species = typeof body.species === "string" ? body.species.trim() : "";
+  const probability = Number(body.probability);
+  if (!body.mosquito || !species || !(probability >= 0.5)) {
+    return NextResponse.json({ mapped: false, village, reason: "Not a specific species yet." });
+  }
+  const verdict = vectorVerdict(species, true);
+  await recordSighting({
+    village,
+    mosquito: true,
+    species,
+    probability,
+    malariaVector: verdict.malariaVector,
+  });
+  return NextResponse.json({ mapped: true, village, species, malariaVector: verdict.malariaVector });
 }
 
 async function order(body: { village?: string; species?: string; summary?: string; orders?: { item: string; qty: number }[]; urgency?: string }) {
