@@ -1,5 +1,7 @@
 # Triage Pod — the finger unit, built from the watch, no soldering
 
+> HOTSPOT NOTE (Cal Hacks rule): personal hotspots are banned during judging and checked with spectrum analysers. Use the two-USB-cable link described at the top; ignore every hotspot step below (they are for a Wi-Fi pod outside the venue).
+
 What the pod is now (Philip, 2026-10-24, 12:30): **the spare vision board with the watch's XIAO in its back, built at the venue from stock boards.** The spare Grove Vision AI V2 with its ribbon camera gives the pictures over its own USB cable; the watch's XIAO nRF52840 Sense sits in the vision board's back sockets, reads the red MAX30101 sensor, and sends the numbers over its own USB cable. The old Zoron camera pod stays whole and in its case; the small OV3660 camera board stays in the drawer (it does not fit the vision board).
 
 Rule check (Cal Hacks 13.0 Hacker Guide): "All projects must be started during the event." No soldering inside the venue. So: scissors at home, plugs at the table.

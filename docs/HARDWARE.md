@@ -12,7 +12,7 @@
 | — | XIAO expansion board (small screen) | Not needed (its XIAO socket would need the pod's XIAO) |
 
 Still to get: a USB-C **data** cable, 4 female-to-female jumper wires (or solder + your silicone wire),
-a box with the camera at eye level, a phone hotspot. Optional: drugstore oximeter, ring light.
+a box with the camera at eye level. No hotspot at Cal Hacks (disqualifying): the demo pod uses two USB cables instead of Wi-Fi. Optional: drugstore oximeter, ring light.
 
 ## The wireless pod (freestanding, battery, no cable to the laptop)
 
@@ -29,7 +29,7 @@ it speaks the questions, listens, and runs the triage. They talk over Wi-Fi.
 | Buy | ~Price | Why |
 |---|---|---|
 | Small USB power bank (5,000 mAh) + short USB-C cable | $15–25 | Powers everything for hours; no soldering, safer than wiring the bare LiPo tonight |
-| Phone hotspot (you have) | $0 | Venue Wi-Fi often blocks devices from talking to each other |
+| Two USB cables (you have) | $0 | No hotspot at the venue (Cal Hacks bans them during judging); the pod talks over USB |
 
 **Wiring**
 1. XIAO on the Vision AI V2 board, like before (the camera talks to the XIAO on pins D6/D7).
@@ -120,5 +120,5 @@ Anyone with the link can use the app (and your API credits) — stop it with Ctr
 ## Known demo risks
 
 - Loud room → use the clicker to start talking; the speakerphone helps most.
-- Venue Wi-Fi → bring a phone hotspot; Jev, Cartesia and Claude all need internet.
+- Venue Wi-Fi only (hotspots are banned during judging); Jev, Cartesia and Claude need it, everything else is cached locally.
 - Lighting → ring light on; avoid a bright window behind the patient.
