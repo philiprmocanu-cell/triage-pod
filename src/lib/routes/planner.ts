@@ -58,14 +58,19 @@ export type PlanResult = {
   flood: FloodCheck;
   weightKg: number;
   surface: RoadSurface | null;
+  blocked?: { from: string; to: string; risk: FloodRisk; reason: string } | null; // the road_block row on the direct road, if any
 };
 
-export async function loadWorld() {
+// `waypoints: false` leaves the road geometry out of the plans (several MB once hundreds of
+// routes are live); the planners only need each plan's carrier, the page and the watcher need the roads.
+export async function loadWorld(opts: { waypoints?: boolean } = {}) {
   const [villages, carriers, orders, plans] = await Promise.all([
     sqlRows<Village>("SELECT * FROM village"),
     sqlRows<Carrier>("SELECT * FROM carrier"),
     sqlRows<Order>("SELECT id, kind, patient_name, to_village_id, from_village_id, item, qty, mode, status FROM delivery_order"),
-    sqlRows<Plan>("SELECT id, order_id, carrier_id, waypoints, km, minutes, flood_risk, status, reason FROM route_plan"),
+    opts.waypoints === false
+      ? sqlRows<Omit<Plan, "waypoints">>("SELECT id, order_id, carrier_id, km, minutes, flood_risk, status, reason FROM route_plan").then((rows) => rows.map((p) => ({ ...p, waypoints: "" }) as Plan))
+      : sqlRows<Plan>("SELECT id, order_id, carrier_id, waypoints, km, minutes, flood_risk, status, reason FROM route_plan"),
   ]);
   return { villages, carriers, orders: orders.map((o) => ({ ...o, id: Number(o.id) })), plans: plans.map((p) => ({ ...p, id: Number(p.id), order_id: Number(p.order_id) })) };
 }
@@ -87,6 +92,13 @@ function pickCarrier(carriers: Carrier[], villages: Map<number, Village>, from: 
   return scored[0] ?? null;
 }
 
+// A boat serves the valley posts around its landing, not only the post it is moored at.
+const BOAT_REACH_KM = 20;
+function boatNear(c: Carrier, villages: Map<number, Village>, from: Village, to: Village) {
+  const base = villages.get(c.base_village_id);
+  return !!base && (haversineKm(at(base), at(from)) <= BOAT_REACH_KM || haversineKm(at(base), at(to)) <= BOAT_REACH_KM);
+}
+
 // The surface of a road pair if it has been measured; otherwise start measuring for next time.
 async function surfaceFor(a: LatLng, b: LatLng) {
   const s = await cachedSurface(a, b);
@@ -97,7 +109,7 @@ async function surfaceFor(a: LatLng, b: LatLng) {
 export type PlanOptions = { quiet?: boolean; agent?: string; carrierId?: number };
 
 export async function planOrder(orderId: number, origin: string, opts: PlanOptions = {}): Promise<PlanResult> {
-  const { villages, carriers, orders, plans } = await loadWorld();
+  const { villages, carriers, orders, plans } = await loadWorld({ waypoints: false });
   const order = orders.find((o) => o.id === orderId);
   if (!order) throw new Error(`No order ${orderId}`);
   const own = plans.find((p) => p.order_id === orderId)?.carrier_id ?? 0; // re-planning: its own carrier is not "busy"
@@ -129,7 +141,7 @@ export async function planOrder(orderId: number, origin: string, opts: PlanOptio
   const kinds = heavy ? ["truck", "pickup"] : ["pickup", "motorbike", "truck", "bicycle"];
   let pick = pickCarrier(carriers, vmap, from, to, kg, kinds, road.main.km, own);
   if (opts.carrierId) {
-    const forced = carriers.find((c) => c.id === opts.carrierId && c.capacity_kg >= kg);
+    const forced = carriers.find((c) => c.id === opts.carrierId && c.capacity_kg >= kg && c.status !== "down");
     if (forced) pick = { c: forced, deadheadKm: Math.round(haversineKm(at(vmap.get(forced.base_village_id) ?? from), at(from)) * 1.5), minutes: minutesFor(road.main.km, forced.speed_kmh), cost: 0 };
   }
   let path: RoadPath = road.main;
@@ -161,7 +173,7 @@ export async function planOrder(orderId: number, origin: string, opts: PlanOptio
     if (!altOk) {
       const ground = [
         ...(kg <= 25 && !heavy ? ["motorbike"] : []),
-        ...(carriers.some((c) => c.kind === "boat" && (c.base_village_id === from.id || c.base_village_id === to.id)) ? ["boat"] : []),
+        ...(carriers.some((c) => c.kind === "boat" && c.status !== "down" && boatNear(c, vmap, from, to)) ? ["boat"] : []),
       ];
       const alt2 = (ground.length ? pickCarrier(carriers, vmap, from, to, kg, ground, road.main.km, own) : null) ?? (kg <= 1.8 ? pickCarrier(carriers, vmap, from, to, kg, ["drone"], road.main.km, own) : null);
       if (alt2) {
@@ -176,7 +188,7 @@ export async function planOrder(orderId: number, origin: string, opts: PlanOptio
     }
   }
   if (!pick) {
-    const any = carriers.filter((c) => c.capacity_kg >= kg).sort((a, b) => b.capacity_kg - a.capacity_kg)[0] ?? carriers[0];
+    const any = carriers.filter((c) => c.capacity_kg >= kg && c.status !== "down").sort((a, b) => b.capacity_kg - a.capacity_kg)[0] ?? carriers.find((c) => c.status !== "down") ?? carriers[0];
     pick = { c: any, deadheadKm: 0, minutes: minutesFor(path.km, any.speed_kmh), cost: 0 };
   }
   const chosen = pick.c;
@@ -195,7 +207,7 @@ export async function planOrder(orderId: number, origin: string, opts: PlanOptio
       `${watcher ? "Re-check: " : ""}${short(from.name)} → ${short(to.name)}: ${what} for ${order.kind === "restock" ? `${short(to.name)} post` : order.patient_name} by ${chosen.name}, ${km} km on ${chosen.kind === "drone" ? "a straight flight" : sourceNote}${surface ? ` (${surface.worstSurface} at worst)` : ""}, ~${minutes} min, flood risk ${risk}${status === "rerouted" ? " → RE-ROUTED" : ""}.`
     );
   }
-  return { orderId, carrier: pickFields(chosen), km, minutes, floodRisk: risk, status, reason, source: path.source, flood, weightKg: kg, surface };
+  return { orderId, carrier: pickFields(chosen), km, minutes, floodRisk: risk, status, reason, source: path.source, flood, weightKg: kg, surface, blocked: flood.blocked ?? null };
 }
 
 const pickFields = (c: Carrier) => ({ id: c.id, name: c.name, kind: c.kind, operator: c.operator });
@@ -203,7 +215,7 @@ const hhmm = () => new Date().toISOString().slice(11, 16) + "Z";
 
 // Every open order that has no plan yet (or whose plan is older than a re-flood), one by one.
 export async function planAllOpen(origin: string, opts: { replan?: boolean } = {}) {
-  const { orders, plans } = await loadWorld();
+  const { orders, plans } = await loadWorld({ waypoints: false });
   const planned = new Set(plans.map((p) => p.order_id));
   const todo = orders.filter((o) => o.status !== "delivered" && (opts.replan || !planned.has(o.id)));
   const results: (PlanResult | { orderId: number; error: string })[] = [];
@@ -256,7 +268,8 @@ export function orderStops<T extends { lat: number; lng: number }>(base: T, stop
 }
 
 export type RunRequest = { id: string; orderIds: number[]; carrierId?: number };
-export type RunLeg = { from: string; to: string; km: number; risk: FloodRisk; rerouted: boolean; surface: RoadSurface | null; reasons: string[] };
+export type RunLeg = { from: string; to: string; km: number; risk: FloodRisk; rerouted: boolean; surface: RoadSurface | null; reasons: string[]; blocked: boolean };
+export type DroppedStop = { villageId: number; name: string; orderIds: number[]; why: string; singles: PlanResult[] };
 export type RunPlanResult = {
   runId: string;
   label: string;
@@ -270,13 +283,18 @@ export type RunPlanResult = {
   legs: RunLeg[];
   surface: RoadSurface | null;
   reason: string;
+  // Stops the road could not reach (a leg still high after the alternative road): their orders were
+  // planned one by one instead (motorbike on the tracks, boat on the Luangwa, drone, or "waits").
+  dropped: DroppedStop[];
   fellBackToSingles?: PlanResult[];
 };
 
 export const runLabel = (id: string) => id.replace(/^run[-\s]?/i, "").toUpperCase();
 
+// A multi-stop run. One stop is still a run (one leg, one plan per order, drawn once); zero stops
+// (every order addressed to the base itself) falls back to single plans.
 export async function planRun(run: RunRequest, origin: string, opts: { agent?: string } = {}): Promise<RunPlanResult> {
-  const { villages, carriers, orders } = await loadWorld();
+  const { villages, carriers, orders } = await loadWorld({ waypoints: false });
   const vmap = new Map(villages.map((v) => [v.id, v]));
   const mine = run.orderIds.map((id) => orders.find((o) => o.id === Number(id))).filter((o): o is Order => !!o);
   if (!mine.length) throw new Error(`Run ${run.id}: none of the orders exist`);
@@ -289,54 +307,86 @@ export async function planRun(run: RunRequest, origin: string, opts: { agent?: s
   const base = vmap.get(baseId);
   if (!base) throw new Error(`Run ${run.id}: unknown base village ${baseId}`);
   const stopIds = [...new Set(mine.map((o) => o.to_village_id).filter((id) => id !== base.id))];
-  const stopVillages = stopIds.map((id) => vmap.get(id)).filter((v): v is Village => !!v);
-  if (stopVillages.length < 2) {
-    // One stop is not a run: plan the orders one by one with the run's carrier.
-    const singles: PlanResult[] = [];
-    for (const o of mine) singles.push(await planOrder(o.id, origin, { quiet: true, carrierId: run.carrierId, agent }));
+  let stopVillages = stopIds.map((id) => vmap.get(id)).filter((v): v is Village => !!v);
+  const inBase = mine.filter((o) => o.to_village_id === base.id);
+  const singles: PlanResult[] = [];
+  for (const o of inBase) singles.push(await planOrder(o.id, origin, { quiet: true, agent })); // a walk across the base village
+  if (!stopVillages.length) {
     const s = singles[0];
-    return { runId: run.id, label, orderIds: mine.map((o) => o.id), stops: stopVillages.map((v, i) => ({ villageId: v.id, name: short(v.name), stop: i + 1, orderIds: mine.filter((o) => o.to_village_id === v.id).map((o) => o.id) })), carrier: s.carrier, km: s.km, minutes: s.minutes, floodRisk: s.floodRisk, status: s.status, legs: [], surface: s.surface, reason: s.reason, fellBackToSingles: singles };
+    return { runId: run.id, label, orderIds: mine.map((o) => o.id), stops: [], carrier: s.carrier, km: s.km, minutes: s.minutes, floodRisk: s.floodRisk, status: s.status, legs: [], surface: s.surface, reason: s.reason, dropped: [], fellBackToSingles: singles };
   }
 
-  const tour = orderStops(base, stopVillages);
-  const kg = Math.round(mine.reduce((s, o) => s + weightKg(o.item, o.qty), 0) * 100) / 100;
-  let carrier = run.carrierId ? carriers.find((c) => c.id === run.carrierId) : undefined;
-  if (!carrier || carrier.capacity_kg < kg) {
-    const pick = pickCarrier(carriers, vmap, base, tour[0], kg, ["truck", "pickup"], tour.reduce((s, v, i) => s + haversineKm(at(i ? tour[i - 1] : base), at(v)) * 1.5, 0));
-    carrier = pick?.c ?? carriers.filter((c) => (c.kind === "truck" || c.kind === "pickup") && c.capacity_kg >= kg).sort((a, b) => b.capacity_kg - a.capacity_kg)[0] ?? carriers.find((c) => c.kind === "truck") ?? carriers[0];
-  }
-
-  // One road per leg, each checked for flood and surface; a high leg tries the router's alternative.
-  const legs: RunLeg[] = [];
-  const points: LatLng[] = [];
-  const surfaces: (RoadSurface | null)[] = [];
-  let km = 0, prev = base, anyRerouted = false;
-  for (const stop of tour) {
-    const road = await roadPath(at(prev), at(stop));
-    const surface = await surfaceFor(at(prev), at(stop));
-    const flood = await floodRisk(at(prev), at(stop), origin, surface);
-    let path = road.main, risk = flood.risk, rerouted = false, reasons = flood.reasons.slice(0, 2);
-    if (flood.risk === "high") {
-      const alt = (await roadPath(at(prev), at(stop), { alternatives: true })).alternatives[0];
-      if (alt) {
-        const mid = alt.points[Math.floor(alt.points.length / 2)];
-        const [h1, h2] = await Promise.all([floodRisk(at(prev), mid, origin), floodRisk(mid, at(stop), origin)]);
-        if (h1.risk !== "high" && h2.risk !== "high") {
-          path = alt;
-          risk = h1.risk === "medium" || h2.risk === "medium" ? "medium" : "low";
-          rerouted = true;
-          anyRerouted = true;
-          reasons = [`direct road flooded (${flood.reasons[0]?.slice(0, 90) ?? "flood check high"}); alternative road${alt.summary ? ` via ${alt.summary}` : ""}, ${alt.km} km instead of ${road.main.km}`];
-        }
-      }
+  const dropped: DroppedStop[] = [];
+  const kgOf = (list: Order[]) => Math.round(list.reduce((s, o) => s + weightKg(o.item, o.qty), 0) * 100) / 100;
+  let kg = kgOf(mine.filter((o) => o.to_village_id !== base.id));
+  const pickRunCarrier = (tour: Village[]) => {
+    let carrier = run.carrierId ? carriers.find((c) => c.id === run.carrierId && c.status !== "down") : undefined;
+    if (!carrier || carrier.capacity_kg < kg) {
+      const pick = pickCarrier(carriers, vmap, base, tour[0], kg, ["truck", "pickup"], tour.reduce((s, v, i) => s + haversineKm(at(i ? tour[i - 1] : base), at(v)) * 1.5, 0));
+      carrier = pick?.c ?? carriers.filter((c) => (c.kind === "truck" || c.kind === "pickup") && c.status !== "down" && c.capacity_kg >= kg).sort((a, b) => b.capacity_kg - a.capacity_kg)[0] ?? carriers.find((c) => c.kind === "truck" && c.status !== "down") ?? carriers.find((c) => c.status !== "down") ?? carriers[0];
     }
-    legs.push({ from: short(prev.name), to: short(stop.name), km: path.km, risk, rerouted, surface, reasons });
-    surfaces.push(surface);
-    const pts = path.points;
-    points.push(...(points.length ? pts.slice(1) : pts));
-    km = Math.round((km + path.km) * 10) / 10;
-    prev = stop;
+    return carrier;
+  };
+
+  // One road per leg, each checked for flood (weather + road_block) and surface; a high leg tries
+  // the router's alternative road. A leg still high after that makes its stop unreachable by this
+  // run: the stop is dropped, its orders go one by one (planOrder switches to a motorbike, a boat, a
+  // drone, or lets a heavy load wait), and the tour is built again without it.
+  let tour: Village[] = [];
+  let legs: RunLeg[] = [];
+  let points: LatLng[] = [];
+  let surfaces: (RoadSurface | null)[] = [];
+  let km = 0, anyRerouted = false;
+  for (let attempt = 0; attempt <= stopIds.length && stopVillages.length; attempt++) {
+    tour = orderStops(base, stopVillages);
+    legs = []; points = []; surfaces = []; km = 0; anyRerouted = false;
+    let prev = base, unreachable: Village | null = null, unreachableWhy = "";
+    for (const stop of tour) {
+      const road = await roadPath(at(prev), at(stop));
+      const surface = await surfaceFor(at(prev), at(stop));
+      const flood = await floodRisk(at(prev), at(stop), origin, surface);
+      let path = road.main, risk = flood.risk, rerouted = false, reasons = flood.reasons.slice(0, 2);
+      if (flood.risk === "high") {
+        const alt = (await roadPath(at(prev), at(stop), { alternatives: true })).alternatives[0];
+        if (alt) {
+          const mid = alt.points[Math.floor(alt.points.length / 2)];
+          const [h1, h2] = await Promise.all([floodRisk(at(prev), mid, origin), floodRisk(mid, at(stop), origin)]);
+          if (h1.risk !== "high" && h2.risk !== "high") {
+            path = alt;
+            risk = h1.risk === "medium" || h2.risk === "medium" ? "medium" : "low";
+            rerouted = true;
+            anyRerouted = true;
+            reasons = [`direct road flooded (${flood.reasons[0]?.slice(0, 90) ?? "flood check high"}); alternative road${alt.summary ? ` via ${alt.summary}` : ""}, ${alt.km} km instead of ${road.main.km}`];
+          }
+        }
+        if (risk === "high") { unreachable = stop; unreachableWhy = flood.reasons[0] ?? "flood check high"; break; }
+      }
+      legs.push({ from: short(prev.name), to: short(stop.name), km: path.km, risk, rerouted, surface, reasons, blocked: !!flood.blocked });
+      surfaces.push(surface);
+      const pts = path.points;
+      points.push(...(points.length ? pts.slice(1) : pts));
+      km = Math.round((km + path.km) * 10) / 10;
+      prev = stop;
+    }
+    if (!unreachable) break;
+    const dropIds = mine.filter((o) => o.to_village_id === unreachable!.id).map((o) => o.id);
+    const got: PlanResult[] = [];
+    for (const oid of dropIds) got.push(await planOrder(oid, origin, { quiet: true, agent }));
+    dropped.push({ villageId: unreachable.id, name: short(unreachable.name), orderIds: dropIds, why: unreachableWhy, singles: got });
+    stopVillages = stopVillages.filter((v) => v.id !== unreachable!.id);
+    kg = kgOf(mine.filter((o) => o.to_village_id !== base.id && stopVillages.some((v) => v.id === o.to_village_id)));
+    await logAgent(agent, unreachable.name, `${agent !== "Route planner" ? "Re-check: " : ""}Run ${label} cannot reach ${short(unreachable.name)} by road (${unreachableWhy.slice(0, 120)}): its ${dropIds.length} order${dropIds.length === 1 ? "" : "s"} go ${describeSingles(got)}.`).catch(() => undefined);
   }
+  const droppedText = dropped.length ? ` Skipped by road: ${dropped.map((d) => `${d.name} (${d.why.slice(0, 70)}; ${d.orderIds.length} order${d.orderIds.length === 1 ? "" : "s"} ${describeSingles(d.singles)})`).join("; ")}.` : "";
+  if (!tour.length || !stopVillages.length) {
+    // Every stop was unreachable by road: the run dissolved into single plans.
+    const all = [...singles, ...dropped.flatMap((d) => d.singles)];
+    const s = all[0];
+    const worst = all.reduce<FloodRisk>((w, r) => (RANK[r.floodRisk] > RANK[w] ? r.floodRisk : w), "low");
+    await logAgent(agent, base.name, `Run ${label} from ${short(base.name)}: no stop reachable by road.${droppedText}`).catch(() => undefined);
+    return { runId: run.id, label, orderIds: mine.map((o) => o.id), stops: [], carrier: s.carrier, km: Math.round(all.reduce((t, r) => t + r.km, 0) * 10) / 10, minutes: Math.max(...all.map((r) => r.minutes)), floodRisk: worst, status: all.some((r) => r.status === "rerouted") ? "rerouted" : "planned", legs: [], surface: null, reason: `run ${label}: every stop unreachable by road from ${short(base.name)}; ${all.length} orders planned one by one.${droppedText}`, dropped, fellBackToSingles: all };
+  }
+  const carrier = pickRunCarrier(tour);
   const risk = legs.reduce<FloodRisk>((w, l) => (RANK[l.risk] > RANK[w] ? l.risk : w), "low");
   const minutes = minutesFor(km, carrier.speed_kmh) + STOP_MINUTES * tour.length;
   const surface = sumSurfaces(surfaces);
@@ -350,13 +400,23 @@ export async function planRun(run: RunRequest, origin: string, opts: { agent?: s
   for (const s of stops) {
     for (const oid of s.orderIds) {
       const o = mine.find((x) => x.id === oid)!;
-      const reason = `${anyRerouted ? "Rerouted: " : ""}run ${label} stop ${s.stop} of ${stops.length} (${tourText}): ${carrier.name} (${carrier.operator}) carries ${kg} kg for ${stops.length} posts, ${km} km on OpenStreetMap roads${surface ? ` (${describeSurface(surface)})` : ""}, ~${minutes} min with ${STOP_MINUTES} min a stop. Legs: ${legsText}.${weatherText}${anyRerouted ? ` Re-routed legs: ${legs.filter((l) => l.rerouted).map((l) => `${l.from} → ${l.to}: ${l.reasons[0]}`).join("; ")}.` : ""}${agent !== "Route planner" ? ` Re-checked ${hhmm()}.` : ""} This order: ${o.qty} ${o.item} for ${short(s.name)}.`;
+      const reason = `${anyRerouted ? "Rerouted: " : ""}run ${label} stop ${s.stop} of ${stops.length} (${tourText}): ${carrier.name} (${carrier.operator}) carries ${kg} kg for ${stops.length} post${stops.length === 1 ? "" : "s"}, ${km} km on OpenStreetMap roads${surface ? ` (${describeSurface(surface)})` : ""}, ~${minutes} min with ${STOP_MINUTES} min a stop. Legs: ${legsText}.${weatherText}${anyRerouted ? ` Re-routed legs: ${legs.filter((l) => l.rerouted).map((l) => `${l.from} → ${l.to}: ${l.reasons[0]}`).join("; ")}.` : ""}${droppedText}${agent !== "Route planner" ? ` Re-checked ${hhmm()}.` : ""} This order: ${o.qty} ${o.item} for ${short(s.name)}.`;
       await planRoute({ orderId: oid, carrierId: carrier.id, waypoints, km, minutes, floodRisk: risk, reason });
     }
   }
-  const reason = `run ${label}: ${tourText} by ${carrier.name}, ${km} km, ~${minutes} min, ${mine.length} orders, flood risk ${risk}${anyRerouted ? " (a leg re-routed)" : ""}`;
-  await logAgent(agent, base.name, `${agent !== "Route planner" ? "Re-check: " : ""}Run ${label}: ${tourText} by ${carrier.name} (${carrier.kind}), ${mine.length} orders, ${kg} kg, ${km} km on OpenStreetMap roads${surface ? ` (${describeSurface(surface)})` : ""}, ~${minutes} min, flood risk ${risk}${anyRerouted ? " → a leg RE-ROUTED" : ""}. Stops ordered nearest-neighbour then 2-opt.`);
-  return { runId: run.id, label, orderIds: mine.map((o) => o.id), stops, carrier: pickFields(carrier), km, minutes, floodRisk: risk, status, legs, surface, reason };
+  const reason = `run ${label}: ${tourText} by ${carrier.name}, ${km} km, ~${minutes} min, ${stops.reduce((n, s) => n + s.orderIds.length, 0)} orders, flood risk ${risk}${anyRerouted ? " (a leg re-routed)" : ""}${dropped.length ? ` (${dropped.length} stop${dropped.length === 1 ? "" : "s"} unreachable by road, planned one by one)` : ""}`;
+  await logAgent(agent, base.name, `${agent !== "Route planner" ? "Re-check: " : ""}Run ${label}: ${tourText} by ${carrier.name} (${carrier.kind}), ${mine.length} orders, ${kg} kg, ${km} km on OpenStreetMap roads${surface ? ` (${describeSurface(surface)})` : ""}, ~${minutes} min, flood risk ${risk}${anyRerouted ? " → a leg RE-ROUTED" : ""}. Stops ordered nearest-neighbour then 2-opt.${droppedText}`);
+  return { runId: run.id, label, orderIds: mine.map((o) => o.id), stops, carrier: pickFields(carrier), km, minutes, floodRisk: risk, status, legs, surface, reason, dropped, fellBackToSingles: singles.length ? singles : undefined };
+}
+
+// "by boat (2), by motorbike (1)" / "wait for the water to drop (truck)".
+export function describeSingles(list: PlanResult[]) {
+  const by = new Map<string, number>();
+  for (const r of list) {
+    const key = r.floodRisk === "high" && r.status !== "rerouted" ? `wait for the water to drop (${r.carrier.kind})` : `by ${r.carrier.kind}${r.status === "rerouted" ? "" : " on the direct road"}`;
+    by.set(key, (by.get(key) ?? 0) + 1);
+  }
+  return [...by].map(([k, n]) => `${k} (${n})`).join(", ") || "nowhere";
 }
 
 // ---- Re-checking live plans against the latest weather ----
@@ -402,15 +462,18 @@ export async function recheckAll(origin: string): Promise<RecheckResult> {
         const tour = names.map((n) => byShort.get(n)).filter((v): v is Village => !!v);
         const runOrders = live.filter((q) => RUN_RE.exec(q.reason)?.[1] === m[1] && RUN_RE.exec(q.reason)?.[4] === m[4]).map((q) => q.order_id);
         out.checked += runOrders.length;
-        let worst: FloodRisk = "low";
+        let worst: FloodRisk = "low", worstBlocked = false;
         for (let i = 1; i < tour.length; i++) {
           const f = await floodRisk(at(tour[i - 1]), at(tour[i]), origin, await cachedSurface(at(tour[i - 1]), at(tour[i])));
-          if (RANK[f.risk] > RANK[worst]) worst = f.risk;
+          if (RANK[f.risk] > RANK[worst]) { worst = f.risk; worstBlocked = !!f.blocked; }
         }
-        if (worst === "high" && before !== "high") {
+        // A run already re-routed around a standing road block (alternative road) stays as it is:
+        // the direct road is still blocked, which is exactly why it was re-routed.
+        const alreadyAround = (p.status === "rerouted" || /^rerouted/i.test(p.reason)) && worstBlocked && before !== "high";
+        if (worst === "high" && before !== "high" && !alreadyAround) {
           const r = await planRun({ id: m[1], orderIds: runOrders, carrierId: p.carrier_id }, origin, { agent: "Route watcher" });
           for (const oid of runOrders) out.rerouted.push({ orderId: oid, run: m[1], from: short(from.name), to: short(vmap.get(omap.get(oid)!.to_village_id)?.name ?? ""), before, after: r.floodRisk, reason: r.reason });
-        } else if (worst !== before && p.status !== "moving") {
+        } else if (worst !== before && p.status !== "moving" && !alreadyAround) {
           for (const oid of runOrders) {
             const q = plans.find((x) => x.order_id === oid)!;
             await planRoute({ orderId: oid, carrierId: q.carrier_id, waypoints: JSON.parse(q.waypoints || "[]"), km: q.km, minutes: q.minutes, floodRisk: worst, reason: `${q.reason.replace(/ Re-checked [^.]*\.$/, "")} Re-checked ${hhmm()}: flood risk now ${worst}.` });
@@ -421,10 +484,12 @@ export async function recheckAll(origin: string): Promise<RecheckResult> {
       }
       out.checked++;
       const f = await floodRisk(at(from), at(to), origin, await cachedSurface(at(from), at(to)));
-      if (f.risk === "high" && before !== "high") {
+      // Already re-routed around a standing block (another carrier or another road): leave it.
+      const alreadyAround = (p.status === "rerouted" || /^rerouted/i.test(p.reason)) && !!f.blocked && before !== "high";
+      if (f.risk === "high" && before !== "high" && !alreadyAround) {
         const r = await planOrder(o.id, origin, { agent: "Route watcher" });
         out.rerouted.push({ orderId: o.id, run: null, from: short(from.name), to: short(to.name), before, after: r.floodRisk, reason: r.reason });
-      } else if (f.risk !== before && p.status !== "moving") {
+      } else if (f.risk !== before && p.status !== "moving" && !alreadyAround) {
         await planRoute({ orderId: o.id, carrierId: p.carrier_id, waypoints: JSON.parse(p.waypoints || "[]"), km: p.km, minutes: p.minutes, floodRisk: f.risk, reason: `${p.reason.replace(/ Re-checked [^.]*\.$/, "")} Re-checked ${hhmm()}: flood risk now ${f.risk}${f.reasons[0] ? ` (${f.reasons[0].slice(0, 90)})` : ""}.` });
         out.changed.push({ orderId: o.id, from: short(from.name), to: short(to.name), before, after: f.risk });
       }

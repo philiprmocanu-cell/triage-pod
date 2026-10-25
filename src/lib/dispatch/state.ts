@@ -233,6 +233,9 @@ export async function loadState(origin: string | null): Promise<NetworkState> {
     const mine = (rows: Row[], col: string) => rows.filter((r) => Number(r[col]) === id);
     const stockMap: Record<string, number> = {};
     for (const s of mine(stock, "village_id")) stockMap[String(s.item)] = Number(s.qty);
+    // Stock already promised to an order that has not left the shelf yet (the module takes it off
+    // at departure, a couple of seconds after the order): not available to this plan.
+    for (const o of orders) if (o.status === "ordered" && Number(o.from_village_id) === id && Number(o.to_village_id) !== id) stockMap[String(o.item)] = Math.max(0, (stockMap[String(o.item)] ?? 0) - Number(o.qty));
     const incoming: Record<string, number> = {};
     for (const o of orders) if (o.kind === "restock" && Number(o.to_village_id) === id && o.status !== "delivered") incoming[String(o.item)] = (incoming[String(o.item)] ?? 0) + Number(o.qty);
     const redVisitsOpen = mine(visits, "village_id").filter((x) => x.urgency === "red" && (now.getTime() - ms(x.created_at) <= RED_OPEN_MS || movingByVisit.has(Number(x.id)))).length;

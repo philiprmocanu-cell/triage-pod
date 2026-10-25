@@ -49,12 +49,29 @@ async function loadCache() {
   return cache;
 }
 
-function saveCache() {
-  cacheWrite = cacheWrite.then(async () => {
-    await fs.mkdir(path.dirname(CACHE_FILE()), { recursive: true });
-    await fs.writeFile(CACHE_FILE(), JSON.stringify(cache, null, 0));
-  }).catch(() => undefined);
-  return cacheWrite;
+// The cache is a few MB once every post-to-post pair is in it, so writes are coalesced: one file
+// write at most every SAVE_EVERY_MS, however many pairs landed in between (a planning run can add
+// dozens of alternative roads in a few seconds).
+const SAVE_EVERY_MS = 2000;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let saveWaiters: (() => void)[] = [];
+function saveCache(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    saveWaiters.push(resolve);
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      const waiters = saveWaiters;
+      saveWaiters = [];
+      cacheWrite = cacheWrite
+        .then(async () => {
+          await fs.mkdir(path.dirname(CACHE_FILE()), { recursive: true });
+          await fs.writeFile(CACHE_FILE(), JSON.stringify(cache, null, 0));
+        })
+        .catch(() => undefined)
+        .then(() => { for (const w of waiters) w(); });
+    }, SAVE_EVERY_MS);
+  });
 }
 
 export function haversineKm(a: LatLng, b: LatLng) {
@@ -166,7 +183,7 @@ export async function roadPath(a: LatLng, b: LatLng, opts: RoadOptions = {}): Pr
   if (opts.alternatives) entry.alternatives = got.alternatives.map((r) => ({ ...r, points: thin(r.points) }));
   else if (hit?.alternatives) entry.alternatives = hit.alternatives;
   c[k] = entry;
-  await saveCache();
+  void saveCache(); // coalesced write; the in-memory cache is already current
   return { main: entry.main, alternatives: entry.alternatives ?? [] };
 }
 

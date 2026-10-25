@@ -35,6 +35,7 @@ import {
 
 // Import all reducer arg schemas
 import AllocateReducer from "./allocate_reducer";
+import ClearCrisisReducer from "./clear_crisis_reducer";
 import JoinCommunityReducer from "./join_community_reducer";
 import LogAgentReducer from "./log_agent_reducer";
 import OrderVaccinesReducer from "./order_vaccines_reducer";
@@ -48,6 +49,7 @@ import RestockReducer from "./restock_reducer";
 import SaveVisitRecordReducer from "./save_visit_record_reducer";
 import SetAgentsReducer from "./set_agents_reducer";
 import SetSimulationReducer from "./set_simulation_reducer";
+import StartCrisisReducer from "./start_crisis_reducer";
 
 // Import all procedure arg schemas
 
@@ -55,11 +57,13 @@ import SetSimulationReducer from "./set_simulation_reducer";
 import AgentLogRow from "./agent_log_table";
 import CarrierRow from "./carrier_table";
 import CommunityMemberRow from "./community_member_table";
+import CrisisRow from "./crisis_table";
 import DeliveryOrderRow from "./delivery_order_table";
 import DialectWordRow from "./dialect_word_table";
 import PatientRow from "./patient_table";
 import PodRow from "./pod_table";
 import PopRow from "./pop_table";
+import RoadBlockRow from "./road_block_table";
 import RoutePlanRow from "./route_plan_table";
 import SettingsRow from "./settings_table";
 import StockRow from "./stock_table";
@@ -107,6 +111,17 @@ const tablesSchema = __schema({
       { name: 'community_member_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, CommunityMemberRow),
+  crisis: __table({
+    name: 'crisis',
+    indexes: [
+      { accessor: 'id', name: 'crisis_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'crisis_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, CrisisRow),
   deliveryOrder: __table({
     name: 'delivery_order',
     indexes: [
@@ -165,6 +180,17 @@ const tablesSchema = __schema({
     ],
     event: true,
   }, PopRow),
+  roadBlock: __table({
+    name: 'road_block',
+    indexes: [
+      { accessor: 'id', name: 'road_block_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'road_block_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, RoadBlockRow),
   routePlan: __table({
     name: 'route_plan',
     indexes: [
@@ -245,6 +271,7 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("allocate", AllocateReducer),
+  __reducerSchema("clear_crisis", ClearCrisisReducer),
   __reducerSchema("join_community", JoinCommunityReducer),
   __reducerSchema("log_agent", LogAgentReducer),
   __reducerSchema("order_vaccines", OrderVaccinesReducer),
@@ -258,6 +285,7 @@ const reducersSchema = __reducers(
   __reducerSchema("save_visit_record", SaveVisitRecordReducer),
   __reducerSchema("set_agents", SetAgentsReducer),
   __reducerSchema("set_simulation", SetSimulationReducer),
+  __reducerSchema("start_crisis", StartCrisisReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

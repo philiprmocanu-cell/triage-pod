@@ -12,7 +12,17 @@ const RUN_RE = /run ([A-Z0-9]+) stop (\d+) of (\d+) \(([^)]+)\)/;
 // Every planned route with its carrier and order, plus what the planner is running on
 // (Google Maps or OSRM, how many road pairs are cached, which roads are flooded by the test
 // switch), the road surface of each plan from OpenStreetMap, and the watcher's last re-check.
+// The Routes page asks again whenever a plan lands; while the planner is placing hundreds of
+// them the answer is built once every MEMO_MS and shared (it carries every road's geometry).
+const MEMO_MS = 2000;
+let memo: { at: number; body: Promise<unknown> } | null = null;
+
 export async function GET() {
+  if (!memo || Date.now() - memo.at > MEMO_MS) memo = { at: Date.now(), body: build().catch((e) => { memo = null; throw e; }) };
+  return NextResponse.json(await memo.body);
+}
+
+async function build() {
   const [{ villages, carriers, orders, plans }, surfaces] = await Promise.all([loadWorld(), allSurfaces()]);
   const vmap = new Map(villages.map((v) => [v.id, v]));
   const cmap = new Map(carriers.map((c) => [c.id, c]));
@@ -33,7 +43,7 @@ export async function GET() {
     return pairSurface(at(o.from_village_id), at(o.to_village_id));
   };
   const withText = (s: RoadSurface | null) => (s ? { ...s, text: describeSurface(s) } : null);
-  return NextResponse.json({
+  return {
     router: routerSource(),
     googleKey: !!process.env.GOOGLE_MAPS_API_KEY,
     cachedPairs: await cachedRouteCount(),
@@ -54,5 +64,5 @@ export async function GET() {
       };
     }),
     unplanned: orders.filter((o) => o.status !== "delivered" && !plans.some((p) => p.order_id === o.id)).map((o) => ({ ...o, from: name(o.from_village_id), to: name(o.to_village_id) })),
-  });
+  };
 }

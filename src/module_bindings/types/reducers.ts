@@ -7,6 +7,7 @@ import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
 import AllocateReducer from "../allocate_reducer";
+import ClearCrisisReducer from "../clear_crisis_reducer";
 import JoinCommunityReducer from "../join_community_reducer";
 import LogAgentReducer from "../log_agent_reducer";
 import OrderVaccinesReducer from "../order_vaccines_reducer";
@@ -20,8 +21,10 @@ import RestockReducer from "../restock_reducer";
 import SaveVisitRecordReducer from "../save_visit_record_reducer";
 import SetAgentsReducer from "../set_agents_reducer";
 import SetSimulationReducer from "../set_simulation_reducer";
+import StartCrisisReducer from "../start_crisis_reducer";
 
 export type AllocateParams = __Infer<typeof AllocateReducer>;
+export type ClearCrisisParams = __Infer<typeof ClearCrisisReducer>;
 export type JoinCommunityParams = __Infer<typeof JoinCommunityReducer>;
 export type LogAgentParams = __Infer<typeof LogAgentReducer>;
 export type OrderVaccinesParams = __Infer<typeof OrderVaccinesReducer>;
@@ -35,4 +38,5 @@ export type RestockParams = __Infer<typeof RestockReducer>;
 export type SaveVisitRecordParams = __Infer<typeof SaveVisitRecordReducer>;
 export type SetAgentsParams = __Infer<typeof SetAgentsReducer>;
 export type SetSimulationParams = __Infer<typeof SetSimulationReducer>;
+export type StartCrisisParams = __Infer<typeof StartCrisisReducer>;
 

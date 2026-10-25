@@ -43,6 +43,22 @@ export const CommunityMember = __t.object("CommunityMember", {
 });
 export type CommunityMember = __Infer<typeof CommunityMember>;
 
+export const Crisis = __t.object("Crisis", {
+  id: __t.u32(),
+  level: __t.u8(),
+  status: __t.string(),
+  startedAt: __t.timestamp(),
+  clearedAt: __t.option(__t.timestamp()),
+  postsHit: __t.u32(),
+  redVisits: __t.u32(),
+  yellowVisits: __t.u32(),
+  stockOuts: __t.u32(),
+  blocks: __t.u32(),
+  carriersDown: __t.u32(),
+  note: __t.string(),
+});
+export type Crisis = __Infer<typeof Crisis>;
+
 export const DeliveryOrder = __t.object("DeliveryOrder", {
   id: __t.u64(),
   visitId: __t.u64(),
@@ -108,6 +124,16 @@ export const Pop = __t.object("Pop", {
   kind: __t.string(),
 });
 export type Pop = __Infer<typeof Pop>;
+
+export const RoadBlock = __t.object("RoadBlock", {
+  id: __t.u64(),
+  legFromVillageId: __t.u32(),
+  legToVillageId: __t.u32(),
+  risk: __t.string(),
+  reason: __t.string(),
+  until: __t.timestamp(),
+});
+export type RoadBlock = __Infer<typeof RoadBlock>;
 
 export const RoutePlan = __t.object("RoutePlan", {
   id: __t.u64(),

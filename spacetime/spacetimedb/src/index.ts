@@ -16,7 +16,7 @@
 // `dialect_word` (the words each community uses, from `rememberWords`, shared across pods).
 
 import { schema, table, t } from 'spacetimedb/server';
-import { ScheduleAt } from 'spacetimedb';
+import { ScheduleAt, Timestamp } from 'spacetimedb';
 
 const village = table(
   { name: 'village', public: true },
@@ -236,6 +236,44 @@ const routePlan = table(
   }
 );
 
+// A road the trucks cannot use right now: the leg between two posts, how bad (high = under
+// water, medium = passable with care), why, and until when. The route planner reads this table
+// on top of the weather check, so a block here is a real re-route, not a drawing. Written by
+// `startCrisis` (the crisis drill) and cleared by `clearCrisis` / `resetDemo`; a district officer
+// could write one by hand the same way.
+const roadBlock = table(
+  { name: 'road_block', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    legFromVillageId: t.u32(),
+    legToVillageId: t.u32(),
+    risk: t.string(), // high | medium
+    reason: t.string(), // "Luangwa crossing flooded"
+    until: t.timestamp(),
+  }
+);
+
+// The crisis drill's own state: one row (id 1). The Crisis page subscribes to it so the counters
+// know when the drill started (orders and visits from that moment are the drill's) and what it
+// put in place. `status` is active while the blocks stand, cleared afterwards.
+const crisis = table(
+  { name: 'crisis', public: true },
+  {
+    id: t.u32().primaryKey(),
+    level: t.u8(),
+    status: t.string(), // active | cleared
+    startedAt: t.timestamp(),
+    clearedAt: t.option(t.timestamp()),
+    postsHit: t.u32(),
+    redVisits: t.u32(),
+    yellowVisits: t.u32(),
+    stockOuts: t.u32(), // stock rows this drill set to zero
+    blocks: t.u32(),
+    carriersDown: t.u32(),
+    note: t.string(), // one plain sentence saying what the level is
+  }
+);
+
 const tickTimer = table(
   { name: 'tick_timer' },
   {
@@ -244,7 +282,7 @@ const tickTimer = table(
   }
 );
 
-const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, patient, communityMember, agentLog, settings, pod, visitRecord, dialectWord, carrier, routePlan, tickTimer });
+const spacetimedb = schema({ village, stock, visit, deliveryOrder, pop, patient, communityMember, agentLog, settings, pod, visitRecord, dialectWord, carrier, routePlan, roadBlock, crisis, tickTimer });
 export default spacetimedb;
 
 const Need = t.object('Need', { item: t.string(), qty: t.u32() });
@@ -839,7 +877,190 @@ export const allocate = spacetimedb.reducer((ctx) => {
   if (s) ctx.db.settings.id.update({ ...s, lastAgentsRun: ctx.timestamp });
 });
 
+// ---- The crisis drill ----
+//
+// "The rainy-season week from hell", built on the real tables so the planner has to solve it:
+// red and yellow visits with needs at ~25 of the 40 posts, the shelves for the items those
+// patients need emptied, three carriers in the workshop, and six roads under water. Levels:
+//   1  the Luangwa valley only: cholera-like diarrhoea at Mfuwe, Kakumbi, Jumbe; two Luangwa
+//      crossings flooded; the Mambwe pickup down.
+//   2  plus the malaria cluster around Lundazi and Chama, the Chama D103 dirt road washed out
+//      and the Chama motorbike down.
+//   3  plus a child-pneumonia run in Petauke district, two pregnancy bleeds that need blood by
+//      road (Katete, Vubwi), a snakebite at Kacholola, the Kafumbwe river over the ford on the
+//      Katete side, a hub truck down, and yellow fever visits across the middle of the province.
+// Lundazi's and Petauke's idle surplus is left intact so the planner can lend from them.
+// Visits are marked fromPod=false (a drill, not a pod) and their summary starts with "Drill:".
+type Story = 'malaria' | 'cholera' | 'pneumonia' | 'bleed' | 'snakebite';
+const CRISIS_HITS: { v: number; level: number; urgency: 'red' | 'yellow'; story: Story; name: string }[] = [
+  // Luangwa valley: cholera-like diarrhoea (level 1)
+  { v: 8, level: 1, urgency: 'red', story: 'cholera', name: 'Kondwani Mvula' },
+  { v: 28, level: 1, urgency: 'red', story: 'cholera', name: 'Loveness Mbewe' },
+  { v: 29, level: 1, urgency: 'red', story: 'cholera', name: 'Chisomo Banda' },
+  { v: 40, level: 1, urgency: 'yellow', story: 'cholera', name: 'Tamara Phiri' },
+  { v: 30, level: 1, urgency: 'yellow', story: 'cholera', name: 'Blessings Zulu' },
+  // Lundazi / Chama: malaria cluster (level 2)
+  { v: 23, level: 2, urgency: 'red', story: 'malaria', name: 'Isaac Mwale' },
+  { v: 24, level: 2, urgency: 'yellow', story: 'malaria', name: 'Chimwemwe Nyirenda' },
+  { v: 25, level: 2, urgency: 'yellow', story: 'malaria', name: 'Tiwonge Ngoma' },
+  { v: 35, level: 2, urgency: 'red', story: 'malaria', name: 'Mphatso Kunda' },
+  { v: 36, level: 2, urgency: 'yellow', story: 'malaria', name: 'Yamikani Soko' },
+  { v: 10, level: 2, urgency: 'red', story: 'malaria', name: 'Natasha Chirwa' },
+  { v: 37, level: 2, urgency: 'yellow', story: 'malaria', name: 'Limbani Lungu' },
+  { v: 11, level: 2, urgency: 'yellow', story: 'malaria', name: 'Emmanuel Tembo' },
+  { v: 38, level: 2, urgency: 'yellow', story: 'malaria', name: 'Pemphero Daka' },
+  // Petauke district: child pneumonia (level 3)
+  { v: 16, level: 3, urgency: 'yellow', story: 'pneumonia', name: 'Chanda Phiri' },
+  { v: 17, level: 3, urgency: 'red', story: 'pneumonia', name: 'Thokozani Mumba' },
+  { v: 18, level: 3, urgency: 'yellow', story: 'pneumonia', name: 'Wezi Sakala' },
+  { v: 19, level: 3, urgency: 'yellow', story: 'pneumonia', name: 'Dalitso Mvula' },
+  // Two pregnancy bleeds that need blood by road, a snakebite (level 3)
+  { v: 2, level: 3, urgency: 'red', story: 'bleed', name: 'Mercy Banda' },
+  { v: 9, level: 3, urgency: 'red', story: 'bleed', name: 'Violet Kunda' },
+  { v: 21, level: 3, urgency: 'red', story: 'snakebite', name: 'Gift Zimba' },
+  // Fever visits across the middle of the province (level 3)
+  { v: 7, level: 3, urgency: 'yellow', story: 'malaria', name: 'Peter Ngoma' },
+  { v: 4, level: 3, urgency: 'yellow', story: 'malaria', name: 'Beatrice Nkhoma' },
+  { v: 39, level: 3, urgency: 'yellow', story: 'malaria', name: 'Precious Mwanza' },
+  { v: 26, level: 3, urgency: 'yellow', story: 'cholera', name: 'Ruth Sakala' },
+  { v: 34, level: 3, urgency: 'yellow', story: 'pneumonia', name: 'Joseph Daka' },
+];
+const CRISIS_SUMMARY: Record<Story, Record<'red' | 'yellow', string>> = {
+  malaria: { red: 'fever, convulsions, cannot drink: severe malaria', yellow: 'fever and chills three days, malaria suspected' },
+  cholera: { red: 'profuse watery diarrhoea, severe dehydration, cholera suspected', yellow: 'watery diarrhoea since yesterday, some dehydration' },
+  pneumonia: { red: 'child with fast breathing and chest indrawing: severe pneumonia', yellow: 'child with cough and fast breathing: pneumonia' },
+  bleed: { red: 'heavy bleeding in late pregnancy: needs blood by road', yellow: 'spotting in pregnancy' },
+  snakebite: { red: 'snakebite, swelling spreading up the leg', yellow: 'snakebite, no spreading' },
+};
+const CRISIS_NEEDS: Record<Story, Record<'red' | 'yellow', { item: string; qty: number }[]>> = {
+  malaria: {
+    red: [{ item: 'Rectal artesunate', qty: 1 }, { item: 'Malaria rapid test', qty: 1 }, { item: 'Antimalarial (ACT)', qty: 1 }],
+    yellow: [{ item: 'Malaria rapid test', qty: 1 }, { item: 'Antimalarial (ACT)', qty: 1 }, { item: 'Paracetamol', qty: 1 }],
+  },
+  cholera: {
+    red: [{ item: 'Oral rehydration salts', qty: 4 }, { item: 'Zinc', qty: 1 }, { item: 'IV fluids', qty: 2 }],
+    yellow: [{ item: 'Oral rehydration salts', qty: 2 }, { item: 'Zinc', qty: 1 }],
+  },
+  pneumonia: {
+    red: [{ item: 'Ceftriaxone (pre-referral)', qty: 1 }, { item: 'Amoxicillin', qty: 1 }, { item: 'Oxygen cylinder', qty: 1 }],
+    yellow: [{ item: 'Amoxicillin', qty: 1 }, { item: 'Paracetamol', qty: 1 }],
+  },
+  bleed: { red: [{ item: 'Blood (O negative)', qty: 2 }, { item: 'IV fluids', qty: 2 }], yellow: [{ item: 'IV fluids', qty: 1 }] },
+  snakebite: { red: [{ item: 'Wound dressing kit', qty: 1 }, { item: 'IV fluids', qty: 1 }, { item: 'Paracetamol', qty: 1 }], yellow: [{ item: 'Wound dressing kit', qty: 1 }] },
+};
+// What the pods there have run out of (set to zero at every hit post of that story).
+const CRISIS_STOCK_OUT: Record<Story, string[]> = {
+  malaria: ['Malaria rapid test', 'Antimalarial (ACT)', 'Rectal artesunate'],
+  cholera: ['Oral rehydration salts', 'Zinc'],
+  pneumonia: ['Amoxicillin', 'Ceftriaxone (pre-referral)'],
+  bleed: [],
+  snakebite: ['Wound dressing kit'],
+};
+const CRISIS_BLOCKS: { from: number; to: number; level: number; risk: 'high' | 'medium'; reason: string }[] = [
+  { from: 1, to: 8, level: 1, risk: 'high', reason: 'Luangwa crossing flooded on the Chipata–Mfuwe road' },
+  { from: 29, to: 8, level: 1, risk: 'high', reason: 'Luangwa crossing flooded between Jumbe and Mfuwe' },
+  { from: 30, to: 29, level: 1, risk: 'medium', reason: 'Msoro stream over the road, passable with care' },
+  { from: 6, to: 10, level: 2, risk: 'high', reason: 'Chama D103 dirt road washed out south of Chama' },
+  { from: 1, to: 10, level: 2, risk: 'high', reason: 'Chama D103 dirt road washed out (the Chipata–Chama road runs through it)' },
+  { from: 10, to: 35, level: 2, risk: 'high', reason: 'D103 under water between Chama and Chikwa' },
+  { from: 2, to: 15, level: 3, risk: 'high', reason: 'Kafumbwe river over the ford on the Katete side' },
+];
+// Carriers in the workshop: the Mambwe pickup (level 1), the Chama motorbike (level 2), a hub truck (level 3).
+const CRISIS_DOWN: { id: number; level: number }[] = [{ id: 17, level: 1 }, { id: 35, level: 2 }, { id: 1, level: 3 }];
+const CRISIS_BLOCK_HOURS = 72n;
+const CRISIS_NOTE: Record<number, string> = {
+  1: 'Level 1: cholera-like diarrhoea in the Luangwa valley, two crossings flooded, the Mambwe pickup in the workshop.',
+  2: 'Level 2: plus a malaria cluster around Lundazi and Chama, the D103 dirt road washed out, the Chama motorbike down.',
+  3: 'Level 3, the rainy-season week from hell: plus child pneumonia in Petauke district, two pregnancy bleeds needing blood by road, a snakebite at Kacholola, the Kafumbwe ford under water and a hub truck down.',
+};
+
+// Takes the drill down: roads open, carriers back, the drill's visits gone, its undelivered orders
+// recalled (stock already loaded goes back on the shelf it left) and their route plans removed.
+// Delivered orders stay: that stock reached the post.
+function clearCrisisState(ctx: any) {
+  for (const b of [...ctx.db.roadBlock.iter()]) ctx.db.roadBlock.id.delete(b.id);
+  for (const c of [...ctx.db.carrier.iter()]) if (c.status === 'down') ctx.db.carrier.id.update({ ...c, status: 'idle' });
+  const row = ctx.db.crisis.id.find(1);
+  if (!row) return 0;
+  const since = row.startedAt.microsSinceUnixEpoch;
+  let recalled = 0;
+  for (const v of [...ctx.db.visit.iter()]) if (!v.fromPod && v.summary.startsWith('Drill:') && v.createdAt.microsSinceUnixEpoch >= since) ctx.db.visit.id.delete(v.id);
+  for (const o of [...ctx.db.deliveryOrder.iter()]) {
+    if (o.status === 'delivered' || o.createdAt.microsSinceUnixEpoch < since) continue;
+    if (o.status === 'on_the_way') {
+      const src = stockRow(ctx, o.fromVillageId, o.item);
+      if (src) ctx.db.stock.id.update({ ...src, qty: src.qty + o.qty });
+    }
+    for (const p of [...ctx.db.routePlan.orderId.filter(o.id)]) ctx.db.routePlan.id.delete(p.id);
+    ctx.db.deliveryOrder.id.delete(o.id);
+    recalled++;
+  }
+  for (const c of [...ctx.db.carrier.iter()]) {
+    const busy = [...ctx.db.routePlan.iter()].some((q: any) => q.carrierId === c.id && q.status === 'moving');
+    if (c.status === 'out' && !busy) ctx.db.carrier.id.update({ ...c, status: 'idle' });
+  }
+  if (row.status === 'active') ctx.db.crisis.id.update({ ...row, status: 'cleared', clearedAt: ctx.timestamp });
+  return recalled;
+}
+
+// The crisis drill, in one transaction, so the planner (outside the module) meets the whole
+// situation at once. Simulation and agents stay off: only the dispatch planner acts.
+export const startCrisis = spacetimedb.reducer({ level: t.u8() }, (ctx, { level }) => {
+  const lvl = Math.max(1, Math.min(3, Number(level) || 3));
+  clearCrisisState(ctx);
+  const s = ctx.db.settings.id.find(1);
+  if (s) ctx.db.settings.id.update({ ...s, simulate: false, agents: false });
+  // Lundazi's and Petauke's idle surplus is intact (last quarter's push), so the planner can lend from them.
+  for (const [vid, items] of Object.entries(IDLE_SURPLUS)) {
+    for (const [item, qty] of Object.entries(items)) {
+      const row = stockRow(ctx, Number(vid), item);
+      if (row && row.qty < qty) ctx.db.stock.id.update({ ...row, qty });
+    }
+  }
+  const hits = CRISIS_HITS.filter((h) => h.level <= lvl);
+  let stockOuts = 0;
+  const outDone = new Set<string>();
+  for (const h of hits) {
+    for (const item of CRISIS_STOCK_OUT[h.story]) {
+      const key = `${h.v}|${item}`;
+      if (outDone.has(key)) continue;
+      outDone.add(key);
+      const row = stockRow(ctx, h.v, item);
+      if (row && row.qty !== 0) { ctx.db.stock.id.update({ ...row, qty: 0 }); stockOuts++; }
+    }
+  }
+  // The visits come after the stock-outs, so each patient's order is sourced from the hub (the post has none).
+  let red = 0, yellow = 0;
+  for (const h of hits) {
+    recordVisit(ctx, h.v, h.name, h.urgency, `Drill: ${CRISIS_SUMMARY[h.story][h.urgency]}`, CRISIS_NEEDS[h.story][h.urgency], false);
+    if (h.urgency === 'red') red++; else yellow++;
+  }
+  let down = 0;
+  for (const d of CRISIS_DOWN.filter((x) => x.level <= lvl)) {
+    const c = ctx.db.carrier.id.find(d.id);
+    if (c) { ctx.db.carrier.id.update({ ...c, status: 'down' }); down++; }
+  }
+  const until = new Timestamp(ctx.timestamp.microsSinceUnixEpoch + CRISIS_BLOCK_HOURS * 3_600_000_000n);
+  const blocks = CRISIS_BLOCKS.filter((b) => b.level <= lvl);
+  for (const b of blocks) ctx.db.roadBlock.insert({ id: 0n, legFromVillageId: b.from, legToVillageId: b.to, risk: b.risk, reason: b.reason, until });
+  const row = { id: 1, level: lvl, status: 'active', startedAt: ctx.timestamp, clearedAt: undefined, postsHit: new Set(hits.map((h) => h.v)).size, redVisits: red, yellowVisits: yellow, stockOuts, blocks: blocks.length, carriersDown: down, note: CRISIS_NOTE[lvl] };
+  if (ctx.db.crisis.id.find(1)) ctx.db.crisis.id.update(row);
+  else ctx.db.crisis.insert(row);
+  log(ctx, 'Crisis drill', 0, `${CRISIS_NOTE[lvl]} ${row.postsHit} posts hit (${red} red, ${yellow} yellow visits), ${stockOuts} shelves emptied, ${blocks.length} roads blocked for ${CRISIS_BLOCK_HOURS} h, ${down} carriers down. Simulation and agents off: the dispatch planner has to find the way.`);
+  for (const b of blocks) {
+    const a = ctx.db.village.id.find(b.from), z = ctx.db.village.id.find(b.to);
+    if (a && z) ctx.db.pop.insert({ villageId: z.id, text: `⚠ road ${short(a.name)} → ${short(z.name)} ${b.risk === 'high' ? 'flooded' : 'at risk'}`, kind: 'alert' });
+  }
+});
+
+export const clearCrisis = spacetimedb.reducer((ctx) => {
+  const recalled = clearCrisisState(ctx);
+  log(ctx, 'Crisis drill', 0, `Drill cleared: roads open again, carriers back from the workshop, ${recalled} undelivered drill order${recalled === 1 ? '' : 's'} recalled to the shelf they left.`);
+});
+
 export const resetDemo = spacetimedb.reducer((ctx) => {
+  for (const b of [...ctx.db.roadBlock.iter()]) ctx.db.roadBlock.id.delete(b.id);
+  for (const c of [...ctx.db.crisis.iter()]) ctx.db.crisis.id.delete(c.id);
   for (const o of [...ctx.db.deliveryOrder.iter()]) ctx.db.deliveryOrder.id.delete(o.id);
   for (const v of [...ctx.db.visit.iter()]) ctx.db.visit.id.delete(v.id);
   for (const s of [...ctx.db.stock.iter()]) ctx.db.stock.id.delete(s.id);
